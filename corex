@@ -1613,17 +1613,38 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         log_success("All registered workstation actions have 100% of their dependencies satisfied!")
         return
 
-    print(f"\n{Style.YELLOW}{Style.BOLD}Missing Dependencies Detected:{Style.RESET}")
-    missing_pkgs = set()
-    for dep, affected_cmds in sorted(missing_deps_map.items()):
-        pkg = PKG_MAP.get(dep, dep)
-        missing_pkgs.add(pkg)
-        sample_cmds = ", ".join(affected_cmds[:3])
-        if len(affected_cmds) > 3:
-            sample_cmds += f" (+{len(affected_cmds) - 3} more)"
-        print(f"  • {Style.RED}{dep:<14}{Style.RESET} -> package: {Style.CYAN}{pkg:<16}{Style.RESET} (needed by: {Style.GRAY}{sample_cmds}{Style.RESET})")
+    SPECIAL_INSTALL = {
+        "demucs": "pipx install demucs (or uv tool install demucs)",
+    }
 
-    sorted_pkgs = sorted(missing_pkgs)
+    missing_system_pkgs = set()
+    standalone_tools = []
+
+    for dep, affected_cmds in sorted(missing_deps_map.items()):
+        if dep in SPECIAL_INSTALL:
+            standalone_tools.append((dep, SPECIAL_INSTALL[dep], affected_cmds))
+        else:
+            pkg = PKG_MAP.get(dep, dep)
+            missing_system_pkgs.add(pkg)
+            sample_cmds = ", ".join(affected_cmds[:3])
+            if len(affected_cmds) > 3:
+                sample_cmds += f" (+{len(affected_cmds) - 3} more)"
+            print(f"  • {Style.RED}{dep:<14}{Style.RESET} -> package: {Style.CYAN}{pkg:<16}{Style.RESET} (needed by: {Style.GRAY}{sample_cmds}{Style.RESET})")
+
+    if standalone_tools:
+        print(f"\n{Style.YELLOW}{Style.BOLD}Python / Standalone Tools (Install via pipx or uv):{Style.RESET}")
+        for dep, hint, affected_cmds in standalone_tools:
+            sample_cmds = ", ".join(affected_cmds[:3])
+            if len(affected_cmds) > 3:
+                sample_cmds += f" (+{len(affected_cmds) - 3} more)"
+            print(f"  • {Style.RED}{dep:<14}{Style.RESET} -> {Style.CYAN}{hint}{Style.RESET} (needed by: {Style.GRAY}{sample_cmds}{Style.RESET})")
+
+    sorted_pkgs = sorted(missing_system_pkgs)
+
+    if not sorted_pkgs:
+        if standalone_tools:
+            log_info("All missing dependencies are standalone / pipx tools. Install them using the commands above.")
+        return
 
     # Detect package manager
     pm = None
@@ -1639,7 +1660,9 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         print(f"  Packages: {' '.join(sorted_pkgs)}")
         return
 
-    install_cmd = f"{pm} -S --needed {' '.join(sorted_pkgs)}"
+    # Use -Sy on Arch/CachyOS to refresh mirror databases and avoid 404 errors on rolling release mirrors
+    sync_flag = "-Sy" if pm in ("paru", "yay", "sudo pacman") else "-S"
+    install_cmd = f"{pm} {sync_flag} --needed {' '.join(sorted_pkgs)}"
     print(f"\n{Style.BOLD}Proposed Install Command:{Style.RESET}")
     print(f"  {Style.CYAN}{install_cmd}{Style.RESET}")
 
@@ -1660,7 +1683,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
 
     if do_install:
         log_info(f"Executing: {install_cmd}")
-        cmd_list = pm.split() + ["-S", "--needed"] + sorted_pkgs
+        cmd_list = pm.split() + [sync_flag, "--needed"] + sorted_pkgs
         ret = subprocess.run(cmd_list)
         if ret.returncode == 0:
             log_success("Package installation completed successfully! Re-verifying...")
@@ -1674,6 +1697,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
                 log_success("All workstation dependencies are now 100% installed and operational!")
         else:
             log_error(f"Package installation returned exit code {ret.returncode}.")
+            log_warn("If mirrors returned 404 errors, your local databases or mirrors may need a full system sync:")
+            print(f"  {Style.BOLD}sudo pacman -Syu{Style.RESET}  or  {Style.BOLD}paru -Syu{Style.RESET}")
 
 
 # ---------------------------------------------------------------------------
