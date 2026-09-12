@@ -323,6 +323,19 @@ def run_fzf(
         stdout, _ = proc.communicate(input="\n".join(items))
         if proc.returncode != 0:
             return []
+
+        has_expect = extra_args and any(isinstance(a, str) and "--expect" in a for a in extra_args)
+        if has_expect:
+            lines = stdout.splitlines()
+            if not lines:
+                return []
+            # In --expect mode: line 0 is key (empty string for Enter), lines 1+ are selected items
+            key = lines[0].strip()
+            items_selected = [l.strip() for l in lines[1:] if l.strip()]
+            if not items_selected:
+                return []
+            return [key] + items_selected
+
         return [line.strip() for line in stdout.strip().split("\n") if line.strip()]
     except KeyboardInterrupt:
         return []
@@ -582,7 +595,7 @@ def ensure_ollama_ready(cfg: CoreXConfig) -> Tuple[bool, str]:
     target_model = cfg.ollama_model or "qwen2.5-coder:1.5b"
     found_model = None
     for m in models:
-        if m == target_model or m.startswith(target_model.split(":")[0]):
+        if m == target_model or (":" not in target_model and m == f"{target_model}:latest") or (target_model.endswith(":latest") and m == target_model[:-7]):
             found_model = m
             break
 
@@ -1082,6 +1095,19 @@ def rate_model_compatibility(vram_req_mb: int, hw: Dict[str, Any]) -> Dict[str, 
             }
 
 
+def is_model_installed(target_name: str, installed_models: Dict[str, Any]) -> bool:
+    """Checks if a target model is present in installed Ollama models, respecting tags."""
+    if not target_name or not installed_models:
+        return False
+    if target_name in installed_models:
+        return True
+    if ":" not in target_name and f"{target_name}:latest" in installed_models:
+        return True
+    if target_name.endswith(":latest") and target_name[:-7] in installed_models:
+        return True
+    return False
+
+
 def set_config_ai_model(model_name: str):
     """Persists chosen model to ~/.config/corex/config.toml under [ai]."""
     cfg_file = CONFIG_FILE
@@ -1127,7 +1153,8 @@ def render_model_preview(model_name: str, cfg: CoreXConfig):
         with urllib.request.urlopen(req, timeout=1.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             for m in data.get("models", []):
-                if m.get("name") == raw_name or m.get("name", "").startswith(raw_name.split(":")[0]):
+                m_name = m.get("name", "")
+                if m_name == raw_name or (":" not in raw_name and m_name == f"{raw_name}:latest") or (raw_name.endswith(":latest") and m_name == raw_name[:-7]):
                     installed = True
                     sz_bytes = m.get("size", 0)
                     if sz_bytes:
@@ -1142,7 +1169,8 @@ def render_model_preview(model_name: str, cfg: CoreXConfig):
         with urllib.request.urlopen(req, timeout=1.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             for m in data.get("models", []):
-                if m.get("name") == raw_name:
+                m_name = m.get("name", "")
+                if m_name == raw_name or (":" not in raw_name and m_name == f"{raw_name}:latest") or (raw_name.endswith(":latest") and m_name == raw_name[:-7]):
                     in_vram = True
                     break
     except Exception:
@@ -1211,7 +1239,7 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
         for cat in MODEL_CATALOG:
             name = cat["name"]
             rating = rate_model_compatibility(cat["vram_mb"], hw)
-            is_inst = name in installed_models or any(name.split(":")[0] == k.split(":")[0] for k in installed_models)
+            is_inst = is_model_installed(name, installed_models)
             status = "Installed" if is_inst else "Available"
             is_act = (name == cfg.ollama_model)
             act_mark = " ★" if is_act else ""
@@ -1223,7 +1251,7 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
     all_models = list(MODEL_CATALOG)
 
     for name, m in installed_models.items():
-        if name not in catalog_names and not any(name.split(":")[0] == c["name"].split(":")[0] for c in MODEL_CATALOG):
+        if name not in catalog_names:
             sz_gb = m.get("size", 0) / (1024**3)
             all_models.insert(0, {
                 "name": name,
@@ -1236,7 +1264,7 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
 
     def sort_key(item):
         name = item["name"]
-        is_inst = name in installed_models or any(name.split(":")[0] == k.split(":")[0] for k in installed_models)
+        is_inst = is_model_installed(name, installed_models)
         is_act = (name == cfg.ollama_model)
         if is_act:
             return (0, name)
@@ -1251,7 +1279,7 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
     for m in all_models:
         name = m["name"]
         rating = rate_model_compatibility(m["vram_mb"], hw)
-        is_inst = name in installed_models or any(name.split(":")[0] == k.split(":")[0] for k in installed_models)
+        is_inst = is_model_installed(name, installed_models)
         tag = "[INSTALLED]" if is_inst else "[AVAILABLE]"
         act_star = "★ ACTIVE" if name == cfg.ollama_model else "        "
         line = f"{name:<24} {rating['badge']:<15} {tag:<12} {act_star} {m['disk_gb']:>4.1f} GB  {m['category']:<16} {m['desc']}"
@@ -1273,14 +1301,18 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
         extra_args=["--expect=ctrl-d,ctrl-t", "--delimiter= "]
     )
 
-    if not selected or len(selected) < 2:
+    if not selected:
         return
 
-    key = selected[0].strip()
-    chosen_line = selected[1].strip()
-    chosen_name = chosen_line.split()[0].strip()
+    if len(selected) >= 2:
+        key = selected[0].strip()
+        chosen_line = selected[1].strip()
+    else:
+        key = ""
+        chosen_line = selected[0].strip()
 
-    is_installed = chosen_name in installed_models or any(chosen_name.split(":")[0] == k.split(":")[0] for k in installed_models)
+    chosen_name = chosen_line.split()[0].strip()
+    is_installed = is_model_installed(chosen_name, installed_models)
 
     if key == "ctrl-d":
         if not is_installed:
@@ -1311,7 +1343,13 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
     if is_installed:
         set_config_ai_model(chosen_name)
         cfg.ollama_model = chosen_name
+        print(f"\n{box_header('ACTIVE AI MODEL UPDATED', color=Style.GREEN)}")
+        print(f" Model:          {Style.BOLD}{chosen_name}{Style.RESET}")
+        print(f" Status:         {Style.GREEN}Ready to use{Style.RESET}")
+        print(f" Configuration:  Updated ~/.config/corex/config.toml")
+        print(box_footer(color=Style.GREEN))
         log_success(f"Active AI model set to '{chosen_name}' for cx ask / cx ai.")
+        print(f" {Style.GRAY}Tip: Run {Style.BOLD}cx ask \"your prompt\"{Style.RESET}{Style.GRAY} or {Style.BOLD}cx ai{Style.RESET}{Style.GRAY} to chat with this model.{Style.RESET}\n")
     else:
         cat_spec = next((m for m in MODEL_CATALOG if m["name"] == chosen_name), None)
         sz_str = f"~{cat_spec['disk_gb']} GB" if cat_spec else ""
@@ -1323,16 +1361,23 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
         print(box_footer(color=Style.CYAN))
 
         try:
-            ans = input(f" {Style.BOLD}Download '{chosen_name}' and set as active default? [Y/n]: {Style.RESET}").strip().lower()
+            print(f" {Style.BOLD}Download '{chosen_name}' and set as active default? [Y/n]: {Style.RESET}", end="", flush=True)
+            ans = input().strip().lower()
             if ans in ("", "y", "yes"):
                 log_info(f"Downloading '{chosen_name}' via Ollama...")
                 res = subprocess.run(["ollama", "pull", chosen_name])
                 if res.returncode == 0:
                     set_config_ai_model(chosen_name)
                     cfg.ollama_model = chosen_name
+                    print(f"\n{box_header('ACTIVE AI MODEL UPDATED', color=Style.GREEN)}")
+                    print(f" Model:          {Style.BOLD}{chosen_name}{Style.RESET}")
+                    print(f" Status:         {Style.GREEN}Downloaded & Active{Style.RESET}")
+                    print(f" Configuration:  Updated ~/.config/corex/config.toml")
+                    print(box_footer(color=Style.GREEN))
                     log_success(f"Model '{chosen_name}' installed and activated as default!")
+                    print(f" {Style.GRAY}Tip: Run {Style.BOLD}cx ask \"your prompt\"{Style.RESET}{Style.GRAY} or {Style.BOLD}cx ai{Style.RESET}{Style.GRAY} to chat with this model.{Style.RESET}\n")
                 else:
-                    log_error(f"Failed pulling '{chosen_name}'.")
+                    log_error(f"Failed pulling '{chosen_name}'. Check network connection.")
         except (KeyboardInterrupt, EOFError):
             print()
 
