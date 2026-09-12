@@ -71,6 +71,7 @@ cx fkill                  # Interactive process killer
 cx snap-now               # Instant BTRFS root snapshot
 cx my-ip                  # Local IPs + Public IP + Geo card
 cx notes "cool-idea"      # Quick markdown note in $EDITOR
+cx doctor                 # Test all 150+ commands & auto-install missing packages
 ```
 
 ### 4. Background Runner (`--bg`)

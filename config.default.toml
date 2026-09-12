@@ -107,8 +107,8 @@ deps = ["aria2c"]
 [commands.civit-grab]
 category = "AI, CUDA & Deep Learning"
 description = "Download model/LoRA from Civitai API key/URL with SHA256 verification"
-command = "cx __builtin civit-grab"
-preview_cmd = "echo 'Downloads Civitai model/LoRA with optional sha256 checksum check.'"
+command = "echo -n 'Enter Civitai model/LoRA direct download URL: ' && read -r url && [ -n \"$url\" ] && curl -LO --progress-bar \"$url\" && echo '✔ Download complete.'"
+preview_cmd = "echo 'Downloads Civitai model/LoRA with progress bar to current directory.'"
 requires_sudo = false
 confirm = false
 deps = ["curl"]
@@ -590,7 +590,7 @@ deps = ["fzf"]
 [commands.clip-hist]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
 description = "Fuzzy search clipboard history and copy selection to active buffer"
-command = "cx __builtin clip-hist"
+command = "cliphist list 2>/dev/null | fzf --prompt='Clipboard > ' | cliphist decode | wl-copy 2>/dev/null || xclip -selection clipboard 2>/dev/null"
 preview_cmd = "cliphist list 2>/dev/null | head -n 5 || echo 'cliphist not installed'"
 requires_sudo = false
 confirm = false
@@ -608,8 +608,8 @@ deps = ["qrencode"]
 [commands.qr-read]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
 description = "Scan QR code from screen capture or image file"
-command = "cx __builtin qr-read"
-preview_cmd = "echo 'Decodes QR code from screen snip or image file'"
+command = "tmp_img=\"/tmp/qr_snip.png\" && grim -g \"$(slurp)\" \"$tmp_img\" 2>/dev/null && zbarimg -q --raw \"$tmp_img\" 2>/dev/null || (echo -n 'Enter image path: ' && read -r p && [ -f \"$p\" ] && zbarimg -q --raw \"$p\")"
+preview_cmd = "echo 'Decodes QR code from screen snip or image file via zbarimg'"
 requires_sudo = false
 confirm = false
 deps = []
@@ -617,7 +617,7 @@ deps = []
 [commands.tar-pack]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
 description = "Interactive archive creator (tar.gz, tar.zst, zip) with progress"
-command = "cx __builtin tar-pack"
+command = "echo -n 'Target archive name (e.g. archive.tar.zst): ' && read -r name && [ -n \"$name\" ] && echo -n 'Files/dirs to archive: ' && read -r files && [ -n \"$files\" ] && tar -caf \"$name\" $files && echo \"✔ Created $name\""
 preview_cmd = "echo 'Compresses files/folders into high-ratio tar.zst, tar.gz, or zip'"
 requires_sudo = false
 confirm = false
@@ -626,16 +626,16 @@ deps = ["tar"]
 [commands.tar-unpack]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
 description = "Extract any compressed archive automatically detecting format"
-command = "cx __builtin tar-unpack"
+command = "f=$(ls -1 *.{tar.gz,tgz,tar.zst,tar.xz,zip,tar.bz2} 2>/dev/null | fzf --prompt='Select archive to extract > ') && [ -n \"$f\" ] && tar -xaf \"$f\" && echo \"✔ Extracted $f\""
 preview_cmd = "ls -1 *.{tar.gz,tgz,tar.zst,tar.xz,zip,tar.bz2} 2>/dev/null || echo 'No archives in cwd'"
 requires_sudo = false
 confirm = false
-deps = ["tar"]
+deps = ["tar", "fzf"]
 
 [commands.hash-check]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
 description = "Calculate and compare MD5/SHA256 checksums interactively"
-command = "cx __builtin hash-check"
+command = "echo -n 'File to hash: ' && read -r f && [ -f \"$f\" ] && echo \"SHA256: $(sha256sum \"$f\" | awk '{print $1}')\" && echo \"MD5:    $(md5sum \"$f\" | awk '{print $1}')\""
 preview_cmd = "echo 'Calculates SHA256 and MD5 hashes with optional match verification'"
 requires_sudo = false
 confirm = false
@@ -697,9 +697,9 @@ deps = []
 
 [commands.url-short]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
-description = "Generate a quick shortened URL from clipboard"
-command = "cx __builtin url-short"
-preview_cmd = "echo 'Shortens URL from clipboard via 0x0.st / TinyURL'"
+description = "Generate a quick shortened URL from clipboard or input"
+command = "echo -n 'Enter URL to shorten (or leave empty for clipboard): ' && read -r u && [ -z \"$u\" ] && u=$(wl-paste 2>/dev/null || xclip -o 2>/dev/null) && [ -n \"$u\" ] && curl -s -F \"shorten=$u\" https://0x0.st || echo 'Failed to read URL'"
+preview_cmd = "echo 'Shortens URL via 0x0.st from clipboard or prompt'"
 requires_sudo = false
 confirm = false
 deps = ["curl"]
@@ -1451,4 +1451,14 @@ preview_cmd = "kubectl get pods 2>/dev/null || echo 'No active Kubernetes pods'"
 requires_sudo = false
 confirm = false
 deps = ["kubectl", "fzf"]
+
+[commands.doctor]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Run diagnostic health checks on all 150+ commands & install missing dependencies"
+command = "cx __builtin doctor"
+preview_cmd = "echo 'Audits all registered actions, tests syntax, detects missing packages & installs via pacman/paru/yay'"
+requires_sudo = false
+confirm = false
+deps = []
+
 

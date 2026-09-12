@@ -74,7 +74,7 @@ _cx() {
         'stopwatch:Precision terminal stopwatch with split times'
         'notes:Instant markdown scratchpad opened in $EDITOR saved with timestamp to ~/.local/share/corex/notes/'
         'todo:Minimalist CLI task tracker with fuzzy completion checklist'
-        'url-short:Generate a quick shortened URL from clipboard'
+        'url-short:Generate a quick shortened URL from clipboard or input'
         'trash-empty:Display size of trash directory and perform safe wipe'
         'sys-info:Pristine, customized minimalist hardware/OS summary card without bloated screenfetch ASCII'
         'irq-top:Real-time terminal dashboard of hardware & software interrupts per CPU core to track latency spikes'
@@ -155,6 +155,7 @@ _cx() {
         'git-rebase-i:Interactive rebase helper for the last N commits'
         'semver-bump:Interactive Semantic Version bumper (patch, minor, major) for project configs'
         'k8s-pods-fzf:Interactive fuzzy selector to view logs or exec into Kubernetes cluster pods'
+        'doctor:Run diagnostic health checks on all 150+ commands & install missing dependencies'
     )
     _arguments -C \
         '(-h --help)'{-h,--help}'[Show help]' \

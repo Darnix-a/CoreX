@@ -202,11 +202,14 @@ def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
         cfg.ollama_url = ai.get("ollama_url", "http://127.0.0.1:11434")
 
         raw_cmds = data.get("commands", {})
-        if not raw_cmds and DEFAULT_CONFIG_TEMPLATE.exists() and path != DEFAULT_CONFIG_TEMPLATE:
+        if DEFAULT_CONFIG_TEMPLATE.exists() and path != DEFAULT_CONFIG_TEMPLATE:
             try:
                 with open(DEFAULT_CONFIG_TEMPLATE, "rb") as df:
                     default_data = tomllib.load(df)
-                    raw_cmds = default_data.get("commands", {})
+                    default_cmds = default_data.get("commands", {})
+                    for dcid, dcdef in default_cmds.items():
+                        if dcid not in raw_cmds:
+                            raw_cmds[dcid] = dcdef
             except Exception:
                 pass
 
@@ -1297,6 +1300,193 @@ def builtin_port_forward():
     subprocess.run(cmd)
 
 
+def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool = False):
+    print(box_header("COREX SYSTEM DOCTOR & DEPENDENCY AUDITOR"))
+    log_info("Auditing command matrix, testing syntax and scanning dependencies...")
+
+    total_commands = len(cfg.commands)
+    ready_count = 0
+    missing_deps_map: Dict[str, List[str]] = {}
+    syntax_errs: List[Tuple[str, str]] = []
+
+    # Comprehensive binary -> package map for Arch / CachyOS
+    PKG_MAP = {
+        "aria2c": "aria2",
+        "arp-scan": "arp-scan",
+        "btrfs": "btrfs-progs",
+        "curl": "curl",
+        "demucs": "demucs",
+        "dive": "dive",
+        "cava": "cava",
+        "conntrack": "conntrack-tools",
+        "docker": "docker",
+        "docker-compose": "docker-compose",
+        "duperemove": "duperemove",
+        "dust": "dust",
+        "easyeffects": "easyeffects",
+        "ffmpeg": "ffmpeg",
+        "fzf": "fzf",
+        "gamescope": "gamescope",
+        "git": "git",
+        "glmark2": "glmark2",
+        "htop": "htop",
+        "iotop": "iotop",
+        "ip": "iproute2",
+        "jq": "jq",
+        "kubectl": "kubectl",
+        "mpv": "mpv",
+        "mtr": "mtr",
+        "ncdu": "ncdu",
+        "nethogs": "nethogs",
+        "nmap": "nmap",
+        "nvidia-smi": "nvidia-utils",
+        "ollama": "ollama",
+        "paplay": "libpulse",
+        "perf": "perf",
+        "pipewire": "pipewire",
+        "podman": "podman",
+        "pw-link": "pipewire",
+        "python3": "python",
+        "qrencode": "qrencode",
+        "sensors": "lm_sensors",
+        "skopeo": "skopeo",
+        "smartctl": "smartmontools",
+        "snapper": "snapper",
+        "speedtest-cli": "speedtest-cli",
+        "sqlite3": "sqlite",
+        "ss": "iproute2",
+        "sysctl": "procps-ng",
+        "tcpdump": "tcpdump",
+        "tokei": "tokei",
+        "vulkaninfo": "vulkan-tools",
+        "wireguard-tools": "wireguard-tools",
+        "wireplumber": "wireplumber",
+        "wl-copy": "wl-clipboard",
+        "wpctl": "wireplumber",
+        "xclip": "xclip",
+        "xxd": "xxd",
+        "yt-dlp": "yt-dlp",
+        "zbarimg": "zbar",
+    }
+
+    known_builtins = {
+        "comfy-boot", "ollama-ps", "ollama-drop", "model-symlink", "stream-yt",
+        "stream-video", "stream-radio", "rip-audio", "trim-video", "make-gif",
+        "pw-devices", "pw-volume", "fkill", "snap-fzf", "my-ip", "port-audit",
+        "serve-dir", "docker-fzf", "calc", "timer", "stopwatch", "notes", "todo",
+        "sys-info", "irq-top", "oom-score", "ram-breakdown", "hugepages-toggle",
+        "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
+        "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
+        "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode"
+    }
+
+    for cid, spec in cfg.commands.items():
+        if cid == "doctor":
+            ready_count += 1
+            continue
+
+        cmd_str = spec.command.strip()
+        cmd_missing_deps = []
+
+        # 1. Check declared dependencies
+        for dep in spec.deps:
+            if not shutil.which(dep):
+                cmd_missing_deps.append(dep)
+                missing_deps_map.setdefault(dep, []).append(cid)
+
+        # 2. Check bash syntax for shell commands or built-in registry
+        if not cmd_str.startswith("cx __builtin"):
+            res = subprocess.run(["bash", "-n", "-c", cmd_str], capture_output=True, text=True)
+            if res.returncode != 0:
+                syntax_errs.append((cid, res.stderr.strip()))
+        else:
+            b_name = cmd_str.replace("cx __builtin ", "").strip().split()[0]
+            if b_name not in known_builtins:
+                syntax_errs.append((cid, f"Built-in '{b_name}' not implemented in dispatcher"))
+
+        if not cmd_missing_deps:
+            ready_count += 1
+
+    pct = (ready_count / total_commands * 100) if total_commands else 0
+    print(f" {Style.BOLD}Total Actions In Matrix:{Style.RESET}   {total_commands}")
+    print(f" {Style.BOLD}Actions 100% Operational:{Style.RESET} {Style.GREEN}{Style.BOLD}{ready_count}{Style.RESET} / {total_commands} ({pct:.1f}%)")
+
+    if syntax_errs:
+        print(f" {Style.BOLD}Shell Syntax Errors:{Style.RESET}      {Style.RED}{len(syntax_errs)} detected{Style.RESET}")
+        for cid, err in syntax_errs:
+            print(f"   • {Style.RED}{cid}{Style.RESET}: {err}")
+    else:
+        print(f" {Style.BOLD}Shell Command Syntax:{Style.RESET}     {Style.GREEN}✔ 100% Clean & Valid{Style.RESET}")
+
+    print(box_footer())
+
+    if not missing_deps_map:
+        log_success("All registered workstation actions have 100% of their dependencies satisfied!")
+        return
+
+    print(f"\n{Style.YELLOW}{Style.BOLD}Missing Dependencies Detected:{Style.RESET}")
+    missing_pkgs = set()
+    for dep, affected_cmds in sorted(missing_deps_map.items()):
+        pkg = PKG_MAP.get(dep, dep)
+        missing_pkgs.add(pkg)
+        sample_cmds = ", ".join(affected_cmds[:3])
+        if len(affected_cmds) > 3:
+            sample_cmds += f" (+{len(affected_cmds) - 3} more)"
+        print(f"  • {Style.RED}{dep:<14}{Style.RESET} -> package: {Style.CYAN}{pkg:<16}{Style.RESET} (needed by: {Style.GRAY}{sample_cmds}{Style.RESET})")
+
+    sorted_pkgs = sorted(missing_pkgs)
+
+    # Detect package manager
+    pm = None
+    if shutil.which("paru"):
+        pm = "paru"
+    elif shutil.which("yay"):
+        pm = "yay"
+    elif shutil.which("pacman"):
+        pm = "sudo pacman"
+
+    if not pm:
+        log_warn("No supported Arch package manager (paru, yay, pacman) found. Please install packages manually:")
+        print(f"  Packages: {' '.join(sorted_pkgs)}")
+        return
+
+    install_cmd = f"{pm} -S --needed {' '.join(sorted_pkgs)}"
+    print(f"\n{Style.BOLD}Proposed Install Command:{Style.RESET}")
+    print(f"  {Style.CYAN}{install_cmd}{Style.RESET}")
+
+    if dry_run:
+        print(f"\n{Style.YELLOW}[DRY-RUN]{Style.RESET} Skipped package installation.")
+        return
+
+    do_install = auto_install
+    if not do_install:
+        try:
+            print(f"\n{Style.BOLD}Would you like to install {len(sorted_pkgs)} missing packages now? [Y/n]: {Style.RESET}", end="", flush=True)
+            ans = input().strip().lower()
+            if ans in ("", "y", "yes"):
+                do_install = True
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return
+
+    if do_install:
+        log_info(f"Executing: {install_cmd}")
+        cmd_list = pm.split() + ["-S", "--needed"] + sorted_pkgs
+        ret = subprocess.run(cmd_list)
+        if ret.returncode == 0:
+            log_success("Package installation completed successfully! Re-verifying...")
+            resolved = [d for d in missing_deps_map if shutil.which(d)]
+            still_missing = [d for d in missing_deps_map if not shutil.which(d)]
+            if resolved:
+                print(f"  {Style.GREEN}✔ Installed tools now active: {', '.join(resolved)}{Style.RESET}")
+            if still_missing:
+                print(f"  {Style.YELLOW}▲ Still missing (may need manual setup or reboot): {', '.join(still_missing)}{Style.RESET}")
+            else:
+                log_success("All workstation dependencies are now 100% installed and operational!")
+        else:
+            log_error(f"Package installation returned exit code {ret.returncode}.")
+
+
 # ---------------------------------------------------------------------------
 # DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
@@ -1413,6 +1603,9 @@ def execute_command(
         "scratch": "notes",
         "ai": "ollama-ps",
         "docker": "docker-fzf",
+        "doctor": "doctor",
+        "test-all": "doctor",
+        "health-check": "doctor",
     }
     actual_id = alias_map.get(cmd_id, cmd_id)
     spec = cfg.commands.get(actual_id)
@@ -1506,6 +1699,12 @@ def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
 
 def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
     args = extra_args or []
+
+    if name in ("doctor", "test-all", "health-check"):
+        auto_install = ("-y" in args or "--yes" in args)
+        builtin_doctor(cfg, dry_run=dry_run, auto_install=auto_install)
+        return
+
     if dry_run:
         print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx __builtin {name} {' '.join(args)}".strip())
         return
@@ -1860,6 +2059,8 @@ FLAGS:
 
     # Direct subshell execution
     extra = (parsed.args or []) + unknown
+    if parsed.yes and "-y" not in extra:
+        extra.append("-y")
     execute_command(parsed.command, cfg, dry_run=parsed.dry_run, bg_run=parsed.bg, extra_args=extra)
 
 
