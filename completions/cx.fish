@@ -1,55 +1,85 @@
-# Fish shell completions for CoreX (cx)
-# Installed to ~/.config/fish/completions/cx.fish
-
-function __fish_cx_needs_command
-    set -l cmd (commandline -opc)
-    if test (count $cmd) -eq 1
-        return 0
-    end
-    return 1
-end
-
-function __fish_cx_using_command
-    set -l cmd (commandline -opc)
-    if test (count $cmd) -gt 1
-        if test "$argv[1]" = "$cmd[2]"
-            return 0
-        end
-    end
-    return 1
-end
-
+# Fish completions for CoreX (cx) - Auto-generated
 complete -c cx -f
-
-# Global flags
-complete -c cx -s h -l help -d "Show CoreX help message"
-complete -c cx -s v -l version -d "Show CoreX version"
-complete -c cx -l dry-run -d "Preview commands without executing them"
-complete -c cx -l no-color -d "Disable ANSI terminal styling"
-complete -c cx -l config -r -F -d "Custom TOML configuration path"
-
-# Core subcommands
-complete -c cx -n "__fish_cx_needs_command" -a comfy -d "One-click ComfyUI launcher with smart VRAM detection"
-complete -c cx -n "__fish_cx_needs_command" -a comfyui -d "One-click ComfyUI launcher with smart VRAM detection"
-complete -c cx -n "__fish_cx_needs_command" -a ai -d "Inspect & manage local LLMs, Ollama daemon"
-complete -c cx -n "__fish_cx_needs_command" -a ollama -d "Inspect & manage local LLMs, Ollama daemon"
-complete -c cx -n "__fish_cx_needs_command" -a docker -d "Interactive container manager (logs, restart, kill)"
-complete -c cx -n "__fish_cx_needs_command" -a stream -d "Fuzzy-search YouTube/SoundCloud & stream via mpv"
-complete -c cx -n "__fish_cx_needs_command" -a rip -d "Extract audio from video files to 24-bit FLAC / Opus"
-complete -c cx -n "__fish_cx_needs_command" -a play -d "Instant fuzzy local music player with tag preview"
-complete -c cx -n "__fish_cx_needs_command" -a kill -d "Interactive process manager and multi-killer"
-complete -c cx -n "__fish_cx_needs_command" -a fkill -d "Interactive process manager and multi-killer"
-complete -c cx -n "__fish_cx_needs_command" -a vram -d "Nvidia VRAM usage breakdown & zombie killer"
-complete -c cx -n "__fish_cx_needs_command" -a snap -d "BTRFS / Snapper system snapshot helper"
-complete -c cx -n "__fish_cx_needs_command" -a snapshot -d "BTRFS / Snapper system snapshot helper"
-complete -c cx -n "__fish_cx_needs_command" -a scratch -d "Instant markdown scratchpad notes"
-complete -c cx -n "__fish_cx_needs_command" -a completions -a "fish bash zsh" -d "Generate shell completion scripts"
-
-# Subcommand-specific arguments
-complete -c cx -n "__fish_cx_using_command rip" -F -d "Video file to extract audio from"
-complete -c cx -n "__fish_cx_using_command play" -F -d "Music directory or audio track"
-complete -c cx -n "__fish_cx_using_command kill" -a "(__fish_complete_proc)" -d "Process name filter"
-complete -c cx -n "__fish_cx_using_command fkill" -a "(__fish_complete_proc)" -d "Process name filter"
-
-# Mirror completions for 'corex' binary
+complete -c cx -s h -l help -d 'Show CoreX help message'
+complete -c cx -s v -l version -d 'Show CoreX version'
+complete -c cx -l list -d 'Output tab-delimited command list'
+complete -c cx -l dry-run -d 'Preview commands without executing them'
+complete -c cx -l no-color -d 'Disable ANSI terminal styling'
+complete -c cx -l config -r -F -d 'Custom TOML configuration path'
+complete -c cx -s y -l yes -d 'Bypass confirmation prompts'
+complete -c cx -n '__fish_use_subcommand' -a 'comfy-boot' -d 'Detect venv, check port 8188, apply CUDA alloc flags, launch ComfyUI & notify'
+complete -c cx -n '__fish_use_subcommand' -a 'comfy-nuke' -d 'Force kill any zombie ComfyUI server and associated Python/Torch memory holders'
+complete -c cx -n '__fish_use_subcommand' -a 'comfy-sync' -d 'Parallel git-pull across ComfyUI core and all cloned custom_nodes directories'
+complete -c cx -n '__fish_use_subcommand' -a 'model-symlink' -d 'Interactive fzf picker to symlink any .safetensors file into target ComfyUI model folder'
+complete -c cx -n '__fish_use_subcommand' -a 'ollama-up' -d 'Start the Ollama background inference daemon if stopped'
+complete -c cx -n '__fish_use_subcommand' -a 'ollama-ps' -d 'Display currently loaded models in GPU memory with context memory footprint'
+complete -c cx -n '__fish_use_subcommand' -a 'ollama-drop' -d 'Unload all active LLMs from VRAM immediately'
+complete -c cx -n '__fish_use_subcommand' -a 'ollama-fzf' -d 'Interactive fzf selector to run or chat with any locally pulled model'
+complete -c cx -n '__fish_use_subcommand' -a 'hf-download' -d 'Fast model puller from HuggingFace via aria2c multithreaded resume'
+complete -c cx -n '__fish_use_subcommand' -a 'civit-grab' -d 'Download model/LoRA from Civitai API key/URL with SHA256 verification'
+complete -c cx -n '__fish_use_subcommand' -a 'vram-watch' -d 'Loop nvidia-smi showing per-process memory, power draw, and temperature at 1000ms'
+complete -c cx -n '__fish_use_subcommand' -a 'cuda-purge' -d 'Scan specifically for orphaned Python processes holding /dev/nvidia* file handles and terminate them'
+complete -c cx -n '__fish_use_subcommand' -a 'stream-yt' -d 'Interactive YouTube fuzzy search via yt-dlp metadata streaming directly into mpv --no-video'
+complete -c cx -n '__fish_use_subcommand' -a 'stream-video' -d 'Search YouTube and stream hardware-accelerated 1440p/4K video directly into borderless mpv'
+complete -c cx -n '__fish_use_subcommand' -a 'stream-radio' -d 'Background endless ambient/lo-fi/synthwave stream player with minimal CPU footprint'
+complete -c cx -n '__fish_use_subcommand' -a 'rip-flac' -d 'Batch-convert video or audio files in current directory to uncompressed 24-bit FLAC'
+complete -c cx -n '__fish_use_subcommand' -a 'rip-opus' -d 'Fast high-efficiency audio compression to Opus at 160kbps'
+complete -c cx -n '__fish_use_subcommand' -a 'trim-video' -d 'Interactive lossless video cutter via ffmpeg stream copy (start, end timestamps without re-encoding)'
+complete -c cx -n '__fish_use_subcommand' -a 'make-gif' -d 'High-fidelity palettegen GIF converter from any video segment'
+complete -c cx -n '__fish_use_subcommand' -a 'demucs-stems' -d 'Demix any audio track in cwd into 4 isolated stems (vocals, drums, bass, other) via local Demucs CLI'
+complete -c cx -n '__fish_use_subcommand' -a 'pw-restart' -d 'One-key reboot of PipeWire, WirePlumber, and pipewire-pulse daemons'
+complete -c cx -n '__fish_use_subcommand' -a 'pw-devices' -d 'Interactive fzf picker to switch default audio output sink on the fly'
+complete -c cx -n '__fish_use_subcommand' -a 'pw-volume' -d 'Interactive CLI volume fader for master audio channel'
+complete -c cx -n '__fish_use_subcommand' -a 'tag-editor' -d 'Fast CLI audio metadata editor/inspector via ffprobe'
+complete -c cx -n '__fish_use_subcommand' -a 'cover-extract' -d 'Extract embedded album art from FLAC/MP3 files into cover.jpg'
+complete -c cx -n '__fish_use_subcommand' -a 'gpu-clock' -d 'Toggle GPU power limit or persistence mode for maximum sustained clocks'
+complete -c cx -n '__fish_use_subcommand' -a 'cpu-gov' -d 'Interactive picker for CPU governors (performance, powersave, schedutil)'
+complete -c cx -n '__fish_use_subcommand' -a 'cpu-turboboost' -d 'Toggle Intel/AMD Turbo Boost state on/off'
+complete -c cx -n '__fish_use_subcommand' -a 'mon-res' -d 'Toggle primary monitor refresh rates (e.g., 360Hz / 240Hz / 144Hz) via compositor'
+complete -c cx -n '__fish_use_subcommand' -a 'mon-dual' -d 'Set dual-monitor arrangement preset'
+complete -c cx -n '__fish_use_subcommand' -a 'mon-single' -d 'Disable secondary monitor and enforce max refresh rate on primary display'
+complete -c cx -n '__fish_use_subcommand' -a 'sens-watch' -d 'Clean ANSI visual dashboard for NVMe, GPU hotspot, and CPU per-core temperatures'
+complete -c cx -n '__fish_use_subcommand' -a 'game-mode' -d 'Kill non-essential background daemons, switch CPU to performance, and enable GameMode'
+complete -c cx -n '__fish_use_subcommand' -a 'snap-now' -d 'Prompt for a quick snapshot comment and trigger an instant Snapper/BTRFS root snapshot'
+complete -c cx -n '__fish_use_subcommand' -a 'snap-fzf' -d 'Interactive browser of past snapshots with rollback commands and file diff preview'
+complete -c cx -n '__fish_use_subcommand' -a 'snap-clean' -d 'Prune old or orphaned system snapshots'
+complete -c cx -n '__fish_use_subcommand' -a 'fkill' -d 'Interactive multi-select process terminator with live CPU/RAM previews'
+complete -c cx -n '__fish_use_subcommand' -a 'disk-space' -d 'Interactive visual disk usage explorer via ncdu or dust'
+complete -c cx -n '__fish_use_subcommand' -a 'pkg-orphans' -d 'Scan and remove unneeded package dependencies and clean package cache'
+complete -c cx -n '__fish_use_subcommand' -a 'service-fail' -d 'List all failed systemd system and user services (systemctl --failed)'
+complete -c cx -n '__fish_use_subcommand' -a 'journal-vacuum' -d 'Trim systemd logs to under 200MB'
+complete -c cx -n '__fish_use_subcommand' -a 'boot-analyze' -d 'Profile kernel and userspace boot duration via systemd-analyze blame'
+complete -c cx -n '__fish_use_subcommand' -a 'my-ip' -d 'Detailed ANSI card showing Public IP, Local IP, Gateway, ISP, and Geo-coordinates'
+complete -c cx -n '__fish_use_subcommand' -a 'vpn-up' -d 'Interactive fzf selector for WireGuard/OpenVPN/Proton configuration profiles'
+complete -c cx -n '__fish_use_subcommand' -a 'vpn-down' -d 'Clean disconnect and DNS leak prevention restore'
+complete -c cx -n '__fish_use_subcommand' -a 'port-audit' -d 'Interactive open-port inspector (ss -tulpn) showing PID/service and one-key process kill'
+complete -c cx -n '__fish_use_subcommand' -a 'speed-check' -d 'Fast network speed and latency test'
+complete -c cx -n '__fish_use_subcommand' -a 'lan-scan' -d 'ARP scan local subnet to list active devices, IP addresses, and MAC vendors'
+complete -c cx -n '__fish_use_subcommand' -a 'ssh-fzf' -d 'Interactive fuzzy selector pulling hosts from ~/.ssh/config for one-key remote connection'
+complete -c cx -n '__fish_use_subcommand' -a 'serve-dir' -d 'Spin up an instant ad-hoc Python HTTP file server in cwd and show a scannable QR code'
+complete -c cx -n '__fish_use_subcommand' -a 'dns-flush' -d 'Flush local systemd-resolved DNS cache'
+complete -c cx -n '__fish_use_subcommand' -a 'git-branch-fzf' -d 'Interactive fuzzy Git branch switcher with preview of latest commit log'
+complete -c cx -n '__fish_use_subcommand' -a 'git-squash' -d 'Interactive commit squasher combining last N commits into one'
+complete -c cx -n '__fish_use_subcommand' -a 'git-stash-pop' -d 'Fuzzy browse stashes with diff preview and apply'
+complete -c cx -n '__fish_use_subcommand' -a 'git-clean-branches' -d 'Prune local branches already merged into default branch'
+complete -c cx -n '__fish_use_subcommand' -a 'docker-fzf' -d 'Multi-select Docker container manager (start, stop, logs, restart)'
+complete -c cx -n '__fish_use_subcommand' -a 'docker-prune' -d 'Clean all dangling Docker images, volumes, and networks'
+complete -c cx -n '__fish_use_subcommand' -a 'venv-init' -d 'One-key .venv creation, activation, and pip update in cwd'
+complete -c cx -n '__fish_use_subcommand' -a 'cheat' -d 'Interactive programming cheatsheet lookup via cht.sh/<lang>/<query>'
+complete -c cx -n '__fish_use_subcommand' -a 'hex-view' -d 'Quick terminal hex dump inspection of any binary file'
+complete -c cx -n '__fish_use_subcommand' -a 'clip-hist' -d 'Fuzzy search clipboard history and copy selection to active buffer'
+complete -c cx -n '__fish_use_subcommand' -a 'qr-gen' -d 'Generate terminal ANSI QR code from any string or file path'
+complete -c cx -n '__fish_use_subcommand' -a 'qr-read' -d 'Scan QR code from screen capture or image file'
+complete -c cx -n '__fish_use_subcommand' -a 'tar-pack' -d 'Interactive archive creator (tar.gz, tar.zst, zip) with progress'
+complete -c cx -n '__fish_use_subcommand' -a 'tar-unpack' -d 'Extract any compressed archive automatically detecting format'
+complete -c cx -n '__fish_use_subcommand' -a 'hash-check' -d 'Calculate and compare MD5/SHA256 checksums interactively'
+complete -c cx -n '__fish_use_subcommand' -a 'weather' -d 'Minimalist ANSI terminal weather forecast for current location (wttr.in/?0)'
+complete -c cx -n '__fish_use_subcommand' -a 'calc' -d 'Fast mathematical evaluator supporting basic arithmetic, roots, and trigonometry'
+complete -c cx -n '__fish_use_subcommand' -a 'timer' -d 'Countdown timer with terminal progress bar and desktop audio chime on completion'
+complete -c cx -n '__fish_use_subcommand' -a 'stopwatch' -d 'Precision terminal stopwatch with split times'
+complete -c cx -n '__fish_use_subcommand' -a 'notes' -d 'Instant markdown scratchpad opened in $EDITOR saved with timestamp to ~/.local/share/corex/notes/'
+complete -c cx -n '__fish_use_subcommand' -a 'todo' -d 'Minimalist CLI task tracker with fuzzy completion checklist'
+complete -c cx -n '__fish_use_subcommand' -a 'url-short' -d 'Generate a quick shortened URL from clipboard'
+complete -c cx -n '__fish_use_subcommand' -a 'trash-empty' -d 'Display size of trash directory and perform safe wipe'
+complete -c cx -n '__fish_use_subcommand' -a 'sys-info' -d 'Pristine, customized minimalist hardware/OS summary card without bloated screenfetch ASCII'
 complete -c corex -w cx

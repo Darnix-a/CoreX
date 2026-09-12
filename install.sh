@@ -19,8 +19,8 @@ echo "   ______                     _  __"
 echo "  / ____/____   _____ ___     | |/ /"
 echo " / /    / __ \ / ___// _ \    |   / "
 echo "/ /___ / /_/ // /   /  __/   /   |  "
-echo "\____/ \____//_/    \___/   /_/|_|  INSTALLER"
-echo -e "${RESET}${GRAY}─────────────────────────────────────────────────────${RESET}"
+echo "\____/ \____//_/    \___/   /_/|_|  WORKSTATION INSTALLER"
+echo -e "${RESET}${GRAY}──────────────────────────────────────────────────────────────────${RESET}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
@@ -84,16 +84,16 @@ if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
 fi
 
 # 3. Setup Configuration
-echo -e "\n${CYAN}λ${RESET} ${BOLD}Configuring CoreX...${RESET}"
+echo -e "\n${CYAN}λ${RESET} ${BOLD}Configuring CoreX Workstation Engine...${RESET}"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$NOTES_DIR"
 
-if [ ! -f "${CONFIG_DIR}/config.toml" ]; then
-    cp "${SCRIPT_DIR}/config.default.toml" "${CONFIG_DIR}/config.toml"
-    echo -e "  [${GREEN}✔${RESET}] Initialized default config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
-else
-    echo -e "  [${GREEN}✔${RESET}] Existing config preserved at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
+if [ -f "${CONFIG_DIR}/config.toml" ]; then
+    cp "${CONFIG_DIR}/config.toml" "${CONFIG_DIR}/config.toml.bak"
+    echo -e "  [${GRAY}i${RESET}] Backed up existing config to ${CONFIG_DIR}/config.toml.bak"
 fi
+cp "${SCRIPT_DIR}/config.default.toml" "${CONFIG_DIR}/config.toml"
+echo -e "  [${GREEN}✔${RESET}] Updated 75+ command workstation config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
 
 # 4. Setup Fish Shell Integrations
 if command -v fish >/dev/null 2>&1; then
@@ -113,7 +113,7 @@ BASH_COMP_DIR="${HOME}/.local/share/bash-completion/completions"
 ZSH_COMP_DIR="${HOME}/.zsh/completions"
 
 mkdir -p "$BASH_COMP_DIR"
-"${BIN_DIR}/cx" completions bash > "${BASH_COMP_DIR}/cx"
+cp "${SCRIPT_DIR}/completions/cx.bash" "${BASH_COMP_DIR}/cx"
 echo -e "  [${GREEN}✔${RESET}] Bash completions written to ${CYAN}${BASH_COMP_DIR}/cx${RESET}"
 
 if [ -d "$HOME/.zsh" ] || command -v zsh >/dev/null 2>&1; then
@@ -125,15 +125,16 @@ fi
 # 6. Verification Self-Test
 echo -e "\n${CYAN}λ${RESET} ${BOLD}Verifying Installation...${RESET}"
 INSTALLED_VER=$("${BIN_DIR}/cx" --version)
-echo -e "  [${GREEN}✔${RESET}] CoreX execution verified: ${GREEN}${INSTALLED_VER}${RESET}"
+CMD_COUNT=$("${BIN_DIR}/cx" --list | wc -l)
+echo -e "  [${GREEN}✔${RESET}] CoreX execution: ${GREEN}${INSTALLED_VER}${RESET}"
+echo -e "  [${GREEN}✔${RESET}] Registered Commands: ${GREEN}${CMD_COUNT} actions loaded${RESET}"
 
-echo -e "\n${GREEN}${BOLD}═════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}${BOLD}✔ CoreX (cx) successfully installed and configured!${RESET}"
-echo -e "${GREEN}${BOLD}═════════════════════════════════════════════════════${RESET}"
+echo -e "\n${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
+echo -e "${GREEN}${BOLD}✔ CoreX (cx) 75+ Workstation Cockpit successfully deployed!${RESET}"
+echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
 echo -e "\nQuick Start:"
-echo -e "  • Run ${CYAN}${BOLD}cx${RESET} to open the interactive launcher menu"
-echo -e "  • Run ${CYAN}${BOLD}cx comfy${RESET} to auto-detect VRAM and launch ComfyUI"
-echo -e "  • Run ${CYAN}${BOLD}cx vram${RESET} to monitor GPU memory & kill zombie processes"
-echo -e "  • Run ${CYAN}${BOLD}cx stream <query>${RESET} to search & stream music/video"
-echo -e "  • Run ${CYAN}${BOLD}cx scratch${RESET} for timestamped notes in your editor"
-echo -e "  • Run ${CYAN}${BOLD}cx --help${RESET} for all commands and options\n"
+echo -e "  • Run ${CYAN}${BOLD}cx${RESET} to open the 2-Tier interactive Mission Control TUI"
+echo -e "  • Run ${CYAN}${BOLD}cx <command>${RESET} for zero-latency direct execution (e.g. ${CYAN}cx comfy-boot${RESET}, ${CYAN}cx vram-watch${RESET})"
+echo -e "  • Run ${CYAN}${BOLD}cx --dry-run <command>${RESET} to preview actions safely"
+echo -e "  • Run ${CYAN}${BOLD}cx --list${RESET} to inspect all registered actions"
+echo -e "  • Run ${CYAN}${BOLD}cx --help${RESET} for full documentation\n"

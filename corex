@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-CoreX (cx) - Elite Linux Systems Multitool & Interactive Launcher CLI
+CoreX (cx) - 75+ Command Mission-Control Workstation Engine & Terminal Launcher
 Engineered for modern Linux power users (CachyOS/Arch, Hyprland, Fish/Bash/Zsh,
-Nvidia GPU, BTRFS/Snapper, Dev/AI local workflows).
+Nvidia GPU, BTRFS/Snapper, Dev & AI workflows).
 """
 
 import argparse
 import dataclasses
 import datetime
 import json
+import math
 import os
 import re
 import shutil
@@ -16,18 +17,21 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 import tomllib
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "1.0.0"
-DEFAULT_CONFIG_PATH = Path.home() / ".config" / "corex" / "config.toml"
-DEFAULT_NOTES_DIR = Path.home() / ".local" / "share" / "corex" / "notes"
+VERSION = "2.0.0"
+CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
+DEFAULT_CONFIG_TEMPLATE = Path(__file__).resolve().parent / "config.default.toml"
+NOTES_DIR = Path.home() / ".local" / "share" / "corex" / "notes"
+TODO_FILE = Path.home() / ".local" / "share" / "corex" / "todo.json"
 
 # ---------------------------------------------------------------------------
-# ANSI Terminal Styling & Rendering Engine
+# ANSI Terminal Styling & Engine
 # ---------------------------------------------------------------------------
 class Style:
     RESET = "\033[0m"
@@ -36,7 +40,6 @@ class Style:
     ITALIC = "\033[3m"
     UNDERLINE = "\033[4m"
 
-    # Foreground colors (24-bit / 256 / 16 color compatible)
     RED = "\033[38;5;196m"
     GREEN = "\033[38;5;46m"
     YELLOW = "\033[38;5;220m"
@@ -50,7 +53,6 @@ class Style:
     PURPLE = "\033[38;5;141m"
     TEAL = "\033[38;5;44m"
 
-    # Background colors
     BG_DARK = "\033[48;5;235m"
     BG_BLUE = "\033[48;5;24m"
     BG_RED = "\033[48;5;52m"
@@ -58,7 +60,6 @@ class Style:
 
     @classmethod
     def strip(cls, text: str) -> str:
-        """Remove ANSI escape sequences."""
         return re.sub(r"\033\[[0-9;]*m", "", text)
 
 
@@ -69,8 +70,8 @@ def print_banner(dry_run: bool = False):
   / ____/____   _____ ___     | |/ /
  / /    / __ \\ / ___// _ \\    |   / 
 / /___ / /_/ // /   /  __/   /   |  
-\\____/ \\____//_/    \\___/   /_/|_|  {Style.GRAY}v{VERSION}{dry_badge}
-{Style.DARK_GRAY}─────────────────────────────────────────────────────{Style.RESET}"""
+\\____/ \\____//_/    \\___/   /_/|_|  {Style.GRAY}v{VERSION} WORKSTATION COCKPIT{dry_badge}
+{Style.DARK_GRAY}──────────────────────────────────────────────────────────────────{Style.RESET}"""
     print(banner)
 
 
@@ -94,22 +95,35 @@ def log_step(step: str, detail: str):
     print(f"{Style.CYAN}{Style.BOLD}λ{Style.RESET} {Style.BOLD}{step}:{Style.RESET} {Style.GRAY}{detail}{Style.RESET}")
 
 
-def box_header(title: str, width: int = 68) -> str:
+def box_header(title: str, width: int = 70) -> str:
     line = "═" * max(0, width - len(title) - 4)
     return f"{Style.CYAN}╔═ {Style.BOLD}{Style.WHITE}{title}{Style.RESET}{Style.CYAN} {line}╗{Style.RESET}"
 
 
-def box_footer(width: int = 68) -> str:
+def box_footer(width: int = 70) -> str:
     return f"{Style.CYAN}╚{'═' * max(0, width - 2)}╝{Style.RESET}"
 
 
 # ---------------------------------------------------------------------------
-# Configuration Engine
+# Declarative Command Model & TOML Config Loader
 # ---------------------------------------------------------------------------
+@dataclasses.dataclass
+class CommandSpec:
+    id: str
+    category: str
+    description: str
+    command: str
+    preview_cmd: str = ""
+    requires_sudo: bool = False
+    confirm: bool = False
+    deps: List[str] = dataclasses.field(default_factory=list)
+
+
 @dataclasses.dataclass
 class CoreXConfig:
     editor: str = ""
-    notes_dir: Path = DEFAULT_NOTES_DIR
+    notes_dir: Path = NOTES_DIR
+    todo_file: Path = TODO_FILE
     color: bool = True
     comfyui_path: Path = Path.home() / "ComfyUI"
     comfyui_venv: str = "venv"
@@ -121,32 +135,27 @@ class CoreXConfig:
     comfyui_auto_browser: bool = True
     comfyui_notify: bool = True
     ollama_url: str = "http://127.0.0.1:11434"
-    music_dir: Path = Path.home() / "Music"
-    stream_provider: str = "ytsearch"
-    stream_results_count: int = 25
-    mpv_hwdec: str = "auto"
-    rip_format: str = "flac"
-    rip_flac_bits: str = "24"
-    rip_opus_bitrate: str = "256k"
-    snapshot_backend: str = "auto"
-    snapper_config: str = "root"
-    btrfs_mount: str = "/"
-    custom_commands: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
+    commands: Dict[str, CommandSpec] = dataclasses.field(default_factory=dict)
 
 
-def load_config(config_path: Optional[Path] = None) -> CoreXConfig:
-    path = config_path or DEFAULT_CONFIG_PATH
-    cfg = CoreXConfig()
+def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
+    path = custom_path or CONFIG_FILE
     if not path.exists():
-        return cfg
+        if DEFAULT_CONFIG_TEMPLATE.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
+        else:
+            return CoreXConfig()
 
+    cfg = CoreXConfig()
     try:
         with open(path, "rb") as f:
             data = tomllib.load(f)
 
         gen = data.get("general", {})
         cfg.editor = gen.get("editor", "")
-        cfg.notes_dir = Path(os.path.expanduser(gen.get("notes_dir", str(DEFAULT_NOTES_DIR))))
+        cfg.notes_dir = Path(os.path.expanduser(gen.get("notes_dir", str(NOTES_DIR))))
+        cfg.todo_file = Path(os.path.expanduser(gen.get("todo_file", str(TODO_FILE))))
         cfg.color = gen.get("color", True)
 
         ai = data.get("ai", {})
@@ -161,23 +170,28 @@ def load_config(config_path: Optional[Path] = None) -> CoreXConfig:
         cfg.comfyui_notify = ai.get("comfyui_notify", True)
         cfg.ollama_url = ai.get("ollama_url", "http://127.0.0.1:11434")
 
-        med = data.get("media", {})
-        cfg.music_dir = Path(os.path.expanduser(med.get("music_dir", "~/Music")))
-        cfg.stream_provider = med.get("stream_provider", "ytsearch")
-        cfg.stream_results_count = int(med.get("stream_results_count", 25))
-        cfg.mpv_hwdec = med.get("mpv_hwdec", "auto")
-        cfg.rip_format = med.get("rip_format", "flac")
-        cfg.rip_flac_bits = str(med.get("rip_flac_bits", "24"))
-        cfg.rip_opus_bitrate = str(med.get("rip_opus_bitrate", "256k"))
+        raw_cmds = data.get("commands", {})
+        if not raw_cmds and DEFAULT_CONFIG_TEMPLATE.exists() and path != DEFAULT_CONFIG_TEMPLATE:
+            try:
+                with open(DEFAULT_CONFIG_TEMPLATE, "rb") as df:
+                    default_data = tomllib.load(df)
+                    raw_cmds = default_data.get("commands", {})
+            except Exception:
+                pass
 
-        sys_sec = data.get("system", {})
-        cfg.snapshot_backend = sys_sec.get("snapshot_backend", "auto")
-        cfg.snapper_config = sys_sec.get("snapper_config", "root")
-        cfg.btrfs_mount = sys_sec.get("btrfs_mount", "/")
-
-        cfg.custom_commands = data.get("custom_commands", {})
+        for cid, cdef in raw_cmds.items():
+            cfg.commands[cid] = CommandSpec(
+                id=cid,
+                category=cdef.get("category", "General"),
+                description=cdef.get("description", ""),
+                command=cdef.get("command", ""),
+                preview_cmd=cdef.get("preview_cmd", ""),
+                requires_sudo=bool(cdef.get("requires_sudo", False)),
+                confirm=bool(cdef.get("confirm", False)),
+                deps=list(cdef.get("deps", [])),
+            )
     except Exception as e:
-        log_warn(f"Failed to load config {path}: {e}. Using defaults.")
+        log_warn(f"Config parse warning ({path}): {e}")
 
     return cfg
 
@@ -185,81 +199,17 @@ def load_config(config_path: Optional[Path] = None) -> CoreXConfig:
 def get_default_editor(cfg: CoreXConfig) -> str:
     if cfg.editor and shutil.which(cfg.editor):
         return cfg.editor
-    env_editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
-    if env_editor and shutil.which(env_editor):
-        return env_editor
-    for cand in ["nvim", "micro", "helix", "nano", "vi"]:
-        if shutil.which(cand):
-            return cand
+    env_ed = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if env_ed and shutil.which(env_ed):
+        return env_ed
+    for c in ["nvim", "micro", "helix", "nano", "vi"]:
+        if shutil.which(c):
+            return c
     return "nano"
 
 
 # ---------------------------------------------------------------------------
-# Process Execution & Signal Management
-# ---------------------------------------------------------------------------
-def run_cmd(
-    cmd: List[str] | str,
-    shell: bool = False,
-    dry_run: bool = False,
-    cwd: Optional[Path | str] = None,
-    capture_output: bool = False,
-    env: Optional[Dict[str, str]] = None,
-) -> Tuple[int, str, str]:
-    """Execute command with clean signal handling and dry-run support."""
-    cmd_str = cmd if isinstance(cmd, str) else " ".join(cmd)
-    if dry_run:
-        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {Style.BOLD}{cmd_str}{Style.RESET}" + (f" (cwd: {cwd})" if cwd else ""))
-        return 0, "", ""
-
-    effective_env = os.environ.copy()
-    if env:
-        effective_env.update(env)
-
-    try:
-        if capture_output:
-            res = subprocess.run(
-                cmd,
-                shell=shell,
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                env=effective_env,
-            )
-            return res.returncode, res.stdout, res.stderr
-        else:
-            res = subprocess.run(
-                cmd,
-                shell=shell,
-                cwd=cwd,
-                env=effective_env,
-            )
-            return res.returncode, "", ""
-    except KeyboardInterrupt:
-        return 130, "", ""
-    except Exception as e:
-        return 1, "", str(e)
-
-
-def check_tool(tool_name: str) -> bool:
-    return shutil.which(tool_name) is not None
-
-
-def is_port_in_use(host: str, port: int) -> Tuple[bool, Optional[int]]:
-    """Check if TCP port is active and attempt to discover the listening PID."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.2)
-        try:
-            s.connect((host, port))
-            ret, out, _ = run_cmd(["ss", "-tulpn", f"sport = :{port}"], capture_output=True)
-            match = re.search(r"pid=(\d+)", out)
-            pid = int(match.group(1)) if match else None
-            return True, pid
-        except (ConnectionRefusedError, TimeoutError, OSError):
-            return False, None
-
-
-# ---------------------------------------------------------------------------
-# FZF Integration Helper
+# FZF Helper
 # ---------------------------------------------------------------------------
 def run_fzf(
     items: List[str],
@@ -270,17 +220,12 @@ def run_fzf(
     preview_window: str = "right:55%:border-left:wrap",
     extra_args: Optional[List[str]] = None,
 ) -> List[str]:
-    """Invoke fzf with customized styling, previews, and keybindings."""
-    if not check_tool("fzf"):
-        log_error("'fzf' is not installed! CoreX interactive interface requires fzf.")
-        log_info("Install fzf via your package manager: sudo pacman -S fzf")
-        sys.exit(1)
-
-    # If stdin/stdout is not a tty, don't hang
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        if items:
-            return [items[0]]
+    if not shutil.which("fzf"):
+        log_error("'fzf' is required for interactive navigation. Run: sudo pacman -S fzf")
         return []
+
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return [items[0]] if items else []
 
     fzf_args = [
         "fzf",
@@ -314,1148 +259,1187 @@ def run_fzf(
         stdout, _ = proc.communicate(input="\n".join(items))
         if proc.returncode != 0:
             return []
-        selected = [line.strip() for line in stdout.strip().split("\n") if line.strip()]
-        return selected
+        return [line.strip() for line in stdout.strip().split("\n") if line.strip()]
     except KeyboardInterrupt:
         return []
 
 
 # ---------------------------------------------------------------------------
-# MODULE A: DEV & AI STACK AUTOMATION
+# BUILT-IN POWER UTILITIES IMPLEMENTATION
 # ---------------------------------------------------------------------------
 def get_nvidia_vram() -> Tuple[Optional[int], Optional[int]]:
-    """Returns (total_mib, free_mib) or (None, None)."""
-    if not check_tool("nvidia-smi"):
-        return None, None
-    ret, out, _ = run_cmd(
-        ["nvidia-smi", "--query-gpu=memory.total,memory.free", "--format=csv,noheader,nounits"],
-        capture_output=True,
-    )
-    if ret != 0 or not out.strip():
+    if not shutil.which("nvidia-smi"):
         return None, None
     try:
-        first_line = out.strip().splitlines()[0]
-        total_str, free_str = [x.strip() for x in first_line.split(",")]
-        return int(total_str), int(free_str)
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total,memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        line = res.stdout.strip().splitlines()[0]
+        tot, free = [int(x.strip()) for x in line.split(",")]
+        return tot, free
     except Exception:
         return None, None
 
 
-def cmd_comfyui(cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
-    """One-click launcher for ComfyUI with smart VRAM detection, venv boot, and collision check."""
+def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
     log_info("Inspecting ComfyUI workspace environment...")
-
-    # Check if ComfyUI is already running on the configured port
-    in_use, existing_pid = is_port_in_use(cfg.comfyui_host, cfg.comfyui_port)
-    url = f"http://{cfg.comfyui_host}:{cfg.comfyui_port}"
-    if in_use:
-        log_success(f"ComfyUI is ALREADY RUNNING on {url} (PID: {existing_pid or 'active'})!")
-        if dry_run:
-            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} ComfyUI active instance detected on port {cfg.comfyui_port}")
+    # Port check
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        try:
+            s.connect((cfg.comfyui_host, cfg.comfyui_port))
+            url = f"http://{cfg.comfyui_host}:{cfg.comfyui_port}"
+            log_success(f"ComfyUI is ALREADY ACTIVE on {url}!")
+            if not dry_run and cfg.comfyui_auto_browser:
+                subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
-        if cfg.comfyui_auto_browser:
-            log_info(f"Opening browser at {url}...")
-            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if cfg.comfyui_notify and check_tool("notify-send"):
-            run_cmd(["notify-send", "ComfyUI Active", f"ComfyUI already running at {url}"])
-        return
+        except (ConnectionRefusedError, TimeoutError, OSError):
+            pass
 
-    # Locate ComfyUI directory
     comfy_dir = cfg.comfyui_path
-    if not comfy_dir.exists():
-        candidates = [
-            Path.home() / "ComfyUI",
-            Path.home() / "comfyui",
-            Path.home() / "ai" / "ComfyUI",
-            Path.cwd(),
-        ]
-        for c in candidates:
+    if not (comfy_dir / "main.py").exists():
+        for c in [Path.home() / "ComfyUI", Path.home() / "comfyui", Path.cwd()]:
             if (c / "main.py").exists():
                 comfy_dir = c
                 break
 
     if not (comfy_dir / "main.py").exists():
-        log_error(f"Could not locate ComfyUI at '{comfy_dir}'.")
-        log_info("Please verify 'comfyui_path' in ~/.config/corex/config.toml")
+        log_error(f"Could not locate ComfyUI at '{comfy_dir}'. Check ~/.config/corex/config.toml")
         return
 
-    log_step("ComfyUI Root", str(comfy_dir))
-
-    # Detect Virtual Environment
+    # Venv detection
     python_bin = sys.executable
-    venv_candidates = [
-        comfy_dir / cfg.comfyui_venv / "bin" / "python",
-        comfy_dir / "venv" / "bin" / "python",
-        comfy_dir / ".venv" / "bin" / "python",
-        comfy_dir / "env" / "bin" / "python",
-    ]
-    detected_venv = None
-    for cand in venv_candidates:
-        if cand.exists() and os.access(cand, os.X_OK):
-            detected_venv = cand
-            python_bin = str(cand)
+    for v in ["venv", ".venv", "env"]:
+        p = comfy_dir / v / "bin" / "python"
+        if p.exists() and os.access(p, os.X_OK):
+            python_bin = str(p)
             break
 
-    if detected_venv:
-        log_step("Virtualenv", f"{Style.GREEN}Active{Style.RESET} ({detected_venv})")
-    else:
-        log_warn("No dedicated virtualenv detected; falling back to system Python.")
-
-    # GPU VRAM inspection and flag calculation
     total_vram, free_vram = get_nvidia_vram()
     vram_flag = "--normalvram"
     if free_vram is not None and total_vram is not None:
         log_step("GPU VRAM Free", f"{free_vram} MiB / {total_vram} MiB")
         if free_vram >= cfg.vram_high_threshold_mb:
             vram_flag = "--highvram"
-            log_step("Memory Profile", f"{Style.GREEN}{Style.BOLD}HIGH VRAM{Style.RESET} (Flag: --highvram)")
         elif free_vram < cfg.vram_low_threshold_mb:
             vram_flag = "--lowvram"
-            log_step("Memory Profile", f"{Style.YELLOW}{Style.BOLD}LOW VRAM{Style.RESET} (Flag: --lowvram)")
-        else:
-            vram_flag = "--normalvram"
-            log_step("Memory Profile", f"{Style.CYAN}NORMAL VRAM{Style.RESET} (Flag: --normalvram)")
-    else:
-        log_warn("NVIDIA GPU / nvidia-smi not detected or querying failed. Using default VRAM handling.")
+        log_step("Memory Profile", f"{Style.GREEN}{vram_flag}{Style.RESET}")
 
-    # Build launch command
-    launch_cmd = [
-        python_bin,
-        "main.py",
-        "--listen",
-        cfg.comfyui_host,
-        "--port",
-        str(cfg.comfyui_port),
-        vram_flag,
-    ]
-    if cfg.comfyui_extra_flags:
-        launch_cmd.extend(cfg.comfyui_extra_flags)
+    env = os.environ.copy()
+    env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
+    cmd = [python_bin, "main.py", "--listen", cfg.comfyui_host, "--port", str(cfg.comfyui_port), vram_flag]
+    cmd.extend(cfg.comfyui_extra_flags)
     if extra_args:
-        launch_cmd.extend(extra_args)
+        cmd.extend(extra_args)
 
-    log_step("Boot Command", " ".join(launch_cmd))
-
+    log_step("Boot Command", " ".join(cmd))
     if dry_run:
-        run_cmd(launch_cmd, cwd=comfy_dir, dry_run=True)
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {' '.join(cmd)} (cwd: {comfy_dir})")
         return
 
-    # Notification & auto-browser spawn if enabled
-    if cfg.comfyui_notify and check_tool("notify-send"):
-        run_cmd(["notify-send", "CoreX AI Launcher", f"Booting ComfyUI on {url} (Profile: {vram_flag})"])
+    url = f"http://{cfg.comfyui_host}:{cfg.comfyui_port}"
+    if cfg.comfyui_notify and shutil.which("notify-send"):
+        subprocess.run(["notify-send", "CoreX AI Launcher", f"Booting ComfyUI on {url}"], check=False)
 
     if cfg.comfyui_auto_browser:
-        log_info(f"Opening browser at {url}...")
         subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    log_success(f"Spinning up ComfyUI server at {url} (Press Ctrl+C to stop)...")
-    run_cmd(launch_cmd, cwd=comfy_dir)
+    log_success(f"Launching ComfyUI server at {url} (Ctrl+C to stop)...")
+    subprocess.run(cmd, cwd=comfy_dir, env=env)
 
 
-def cmd_ai_models(cfg: CoreXConfig, dry_run: bool = False):
-    """Inspect and manage loaded Ollama/vLLM models and daemon status."""
+def builtin_ollama_ps(cfg: CoreXConfig):
     api_url = cfg.ollama_url.rstrip("/")
-
-    # Query running models via Ollama API
-    running_models: List[Dict[str, Any]] = []
-    service_alive = False
     try:
-        req = urllib.request.Request(f"{api_url}/api/ps", headers={"User-Agent": "CoreX-CLI"})
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
+        req = urllib.request.Request(f"{api_url}/api/ps", headers={"User-Agent": "CoreX"})
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            running_models = data.get("models", [])
-            service_alive = True
-    except Exception:
-        pass
+            models = data.get("models", [])
+            print(box_header("OLLAMA LOADED MODELS IN VRAM"))
+            if not models:
+                print(f" {Style.GREEN}✔ Zero models currently occupying GPU memory.{Style.RESET}")
+            else:
+                print(f" {Style.BOLD}{'MODEL':<28} {'SIZE IN VRAM':<16} {'EXPIRES':<15}{Style.RESET}")
+                print(f" {Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+                for m in models:
+                    name = m.get("name", "unknown")
+                    vram_mb = m.get("size_vram", 0) / (1024 * 1024)
+                    exp = m.get("expires_at", "")[:19].replace("T", " ")
+                    print(f" {Style.CYAN}{name:<28}{Style.RESET} {vram_mb:>8.1f} MiB      {Style.GRAY}{exp}{Style.RESET}")
+            print(box_footer())
+    except Exception as e:
+        log_error(f"Cannot reach Ollama daemon at {api_url}: {e}")
 
-    if not sys.stdin.isatty() or dry_run:
-        print_banner(dry_run)
-        print(box_header("OLLAMA / vLLM INFERENCE ENGINE"))
-        status_txt = f"{Style.GREEN}Active{Style.RESET}" if service_alive else f"{Style.RED}Unreachable / Inactive{Style.RESET}"
-        print(f" {Style.BOLD}Endpoint:{Style.RESET}   {api_url}")
-        print(f" {Style.BOLD}Status:{Style.RESET}     {status_txt}")
-        if running_models:
-            print(f" {Style.BOLD}Models in VRAM:{Style.RESET}")
-            for m in running_models:
-                name = m.get("name", "unknown")
-                vram_mb = m.get("size_vram", 0) / (1024 * 1024)
-                print(f"   • {Style.CYAN}{name}{Style.RESET} ({vram_mb:.0f} MiB)")
-        else:
-            print(f" {Style.BOLD}Models in VRAM:{Style.RESET} None")
-        print(box_footer())
-        return
 
-    # Interactive Sub-menu
-    options = []
-    if service_alive:
-        options.append(f"● [Status] Ollama Server Active at {api_url}")
-        if running_models:
-            for m in running_models:
-                name = m.get("name", "unknown")
-                size_vram = m.get("size_vram", 0) / (1024 * 1024)
-                options.append(f"⚡ [Loaded Model] {name} ({size_vram:.0f} MiB in VRAM) -> Unload")
-        else:
-            options.append("○ [Models] No models currently loaded in VRAM")
-    else:
-        options.append(f"▲ [Status] Ollama Server unreachable at {api_url}")
-
-    options.append("▶ Start Ollama Background Daemon")
-    options.append("■ Stop Ollama Service")
-    options.append("🔄 Restart Ollama Daemon")
-
-    selected = run_fzf(
-        options,
-        prompt="cx ai > ",
-        header="Ollama / vLLM Model & Daemon Controller",
-    )
-    if not selected:
-        return
-
-    choice = selected[0]
-    if "Unload" in choice:
-        match = re.search(r"\[Loaded Model\]\s+([^\s]+)", choice)
-        if match:
-            model_name = match.group(1)
-            log_info(f"Evicting model '{model_name}' from GPU memory...")
-            if dry_run:
-                print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Post keep_alive=0 to {api_url}/api/generate for model {model_name}")
+def builtin_ollama_drop(cfg: CoreXConfig):
+    api_url = cfg.ollama_url.rstrip("/")
+    try:
+        req = urllib.request.Request(f"{api_url}/api/ps", headers={"User-Agent": "CoreX"})
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = data.get("models", [])
+            if not models:
+                log_success("No models currently in VRAM.")
                 return
-            try:
-                payload = json.dumps({"model": model_name, "keep_alive": 0}).encode("utf-8")
-                req = urllib.request.Request(
-                    f"{api_url}/api/generate",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    log_success(f"Model '{model_name}' evicted from VRAM.")
-            except Exception as e:
-                log_error(f"Failed to unload model: {e}")
-    elif "Start Ollama" in choice:
-        log_info("Starting Ollama service...")
-        cmd = ["systemctl", "--user", "start", "ollama"]
-        ret, _, _ = run_cmd(cmd, dry_run=dry_run)
-        if ret != 0 and not dry_run:
-            log_info("Trying system service start...")
-            run_cmd(["sudo", "systemctl", "start", "ollama"])
-    elif "Stop Ollama" in choice:
-        log_info("Stopping Ollama service...")
-        run_cmd(["systemctl", "--user", "stop", "ollama"], dry_run=dry_run)
-    elif "Restart Ollama" in choice:
-        log_info("Restarting Ollama service...")
-        run_cmd(["systemctl", "--user", "restart", "ollama"], dry_run=dry_run)
+
+            for m in models:
+                name = m.get("name")
+                payload = json.dumps({"model": name, "keep_alive": 0}).encode("utf-8")
+                post_req = urllib.request.Request(f"{api_url}/api/generate", data=payload, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(post_req, timeout=3.0) as _:
+                    log_success(f"Evicted '{name}' from GPU VRAM.")
+    except Exception as e:
+        log_error(f"Failed evicting models: {e}")
 
 
-def cmd_docker(dry_run: bool = False):
-    """Fuzzy-select containers to restart, view live trailing logs, or kill."""
-    engine = "docker" if check_tool("docker") else ("podman" if check_tool("podman") else None)
-    if not engine:
-        log_error("Neither 'docker' nor 'podman' found on this system.")
+def builtin_model_symlink(cfg: CoreXConfig):
+    models_dir = cfg.comfyui_path / "models"
+    if not models_dir.exists():
+        log_error(f"ComfyUI models folder not found at {models_dir}")
         return
 
-    ret, out, _ = run_cmd(
-        [engine, "ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"],
-        capture_output=True,
-    )
-    if ret != 0:
-        log_error(f"Failed to query {engine}. Ensure daemon is running.")
+    safetensors = list(Path.cwd().glob("*.safetensors")) + list((Path.home() / "Downloads").glob("*.safetensors"))
+    if not safetensors:
+        log_warn("No .safetensors files found in cwd or ~/Downloads.")
         return
 
-    lines = [l.strip() for l in out.strip().splitlines() if l.strip()]
-    if not lines:
-        log_info(f"No {engine} containers found.")
+    chosen_file = run_fzf([str(f) for f in safetensors], prompt="Select .safetensors model > ")
+    if not chosen_file:
+        return
+    src = Path(chosen_file[0])
+
+    subfolders = [p for p in models_dir.iterdir() if p.is_dir()]
+    chosen_dest = run_fzf([str(d.relative_to(models_dir)) for d in subfolders], prompt="Select ComfyUI model category > ")
+    if not chosen_dest:
         return
 
-    if not sys.stdin.isatty() or dry_run:
-        print(f"{Style.BOLD}{'ID':<12} {'NAME':<20} {'STATUS':<20} {'IMAGE'}{Style.RESET}")
-        print("─" * 70)
-        for line in lines:
-            parts = line.split("\t")
-            cid = parts[0]
-            name = parts[1] if len(parts) > 1 else ""
-            st = parts[2] if len(parts) > 2 else ""
-            img = parts[3] if len(parts) > 3 else ""
-            print(f"{cid:<12} {name:<20} {st:<20} {img}")
+    dest_dir = models_dir / chosen_dest[0]
+    link_target = dest_dir / src.name
+    try:
+        link_target.symlink_to(src.resolve())
+        log_success(f"Symlinked: {src.name} -> {chosen_dest[0]}/{src.name}")
+    except FileExistsError:
+        log_warn(f"Symlink already exists in {chosen_dest[0]}")
+    except Exception as e:
+        log_error(f"Symlink failed: {e}")
+
+
+def builtin_stream_yt(video: bool = False, query: Optional[str] = None, dry_run: bool = False):
+    if not shutil.which("yt-dlp") or not shutil.which("mpv"):
+        log_error("yt-dlp and mpv are required for stream-yt.")
         return
 
-    items = []
-    for line in lines:
-        parts = line.split("\t")
-        cid, name, status, img = parts[0], parts[1], parts[2], parts[3] if len(parts) > 3 else ""
-        icon = f"{Style.GREEN}●{Style.RESET}" if "Up" in status else f"{Style.RED}○{Style.RESET}"
-        items.append(f"{cid}\t{icon} {name:<20}\t{status:<20}\t{img}")
-
-    preview = f"{engine} logs --tail 40 {{1}}"
-    extra = [
-        "--delimiter=\t",
-        "--with-nth=2,3,4",
-        "--header=ENTER: Tail Logs | CTRL-R: Restart | CTRL-K: Kill/Stop | CTRL-E: Exec Shell",
-        f"--bind=ctrl-r:execute({engine} restart {{1}} >/dev/null)+reload({engine} ps -a --format '{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Status}}}}\t{{{{.Image}}}}')",
-        f"--bind=ctrl-k:execute({engine} stop {{1}} >/dev/null)+reload({engine} ps -a --format '{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Status}}}}\t{{{{.Image}}}}')",
-        f"--bind=ctrl-e:execute({engine} exec -it {{1}} sh -c 'bash || sh')",
-    ]
-
-    selected = run_fzf(
-        items,
-        prompt=f"cx {engine} > ",
-        preview_cmd=preview,
-        extra_args=extra,
-    )
-    if not selected:
-        return
-
-    chosen_id = selected[0].split("\t")[0].strip()
-    log_info(f"Connecting to container {chosen_id} live logs (Ctrl+C to exit)...")
-    run_cmd([engine, "logs", "-f", "--tail", "100", chosen_id], dry_run=dry_run)
-
-
-# ---------------------------------------------------------------------------
-# MODULE B: MEDIA ENGINE
-# ---------------------------------------------------------------------------
-def cmd_stream(cfg: CoreXConfig, query: Optional[str] = None, dry_run: bool = False, video: bool = False):
-    """Fuzzy-search YouTube/SoundCloud via yt-dlp metadata cache and stream via mpv."""
-    if not check_tool("yt-dlp"):
-        log_error("'yt-dlp' is required for stream functionality.")
-        log_info("Install yt-dlp via: sudo pacman -S yt-dlp")
-        return
-    if not check_tool("mpv"):
-        log_error("'mpv' is required for stream playback.")
-        log_info("Install mpv via: sudo pacman -S mpv")
-        return
-
-    search_query = query
-    if not search_query:
+    q = query
+    if not q:
         if not sys.stdin.isatty():
-            log_error("No search query provided.")
             return
-        print(f"{Style.CYAN}{Style.BOLD}Enter search query for YouTube / SoundCloud:{Style.RESET} ", end="", flush=True)
+        print(f"{Style.CYAN}{Style.BOLD}Search YouTube:{Style.RESET} ", end="", flush=True)
         try:
-            search_query = input().strip()
+            q = input().strip()
         except (KeyboardInterrupt, EOFError):
-            print()
             return
-        if not search_query:
-            return
+    if not q:
+        return
 
-    # Direct URL detection
-    if search_query.startswith("http://") or search_query.startswith("https://"):
-        url = search_query
-        mode = "Video" if video else "Audio"
-        log_info(f"Direct stream URL recognized: {url} (Mode: {mode})")
-        mpv_cmd = ["mpv"]
-        if not video:
-            mpv_cmd.extend(["--no-video", "--ytdl-format=bestaudio/best"])
+    if q.startswith("http://") or q.startswith("https://"):
+        cmd = ["mpv"] + (["--hwdec=auto"] if video else ["--no-video", "--ytdl-format=bestaudio/best"]) + [q]
+        if dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {' '.join(cmd)}")
         else:
-            mpv_cmd.extend([f"--hwdec={cfg.mpv_hwdec}"])
-        mpv_cmd.append(url)
-        run_cmd(mpv_cmd, dry_run=dry_run)
+            subprocess.run(cmd)
         return
 
-    log_info(f"Querying {cfg.stream_provider} for: '{search_query}'...")
-    ytdl_search_spec = f"{cfg.stream_provider}{cfg.stream_results_count}:{search_query}"
-
-    if dry_run:
-        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Query yt-dlp: yt-dlp --flat-playlist --print ... {ytdl_search_spec}")
-        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Stream selection into mpv --no-video --ytdl-format=bestaudio/best")
-        return
-
-    ret, out, _ = run_cmd(
-        [
-            "yt-dlp",
-            "--flat-playlist",
-            "--default-search",
-            cfg.stream_provider,
-            "--print",
-            "%(id)s\t%(duration_string)s\t%(uploader)s\t%(title)s",
-            ytdl_search_spec,
-        ],
+    log_info(f"Searching YouTube for '{q}'...")
+    res = subprocess.run(
+        ["yt-dlp", "--flat-playlist", "--default-search", "ytsearch25", "--print", "%(id)s\t%(duration_string)s\t%(uploader)s\t%(title)s", q],
         capture_output=True,
+        text=True,
     )
-    if ret != 0 or not out.strip():
-        log_warn("No search results found or query timed out.")
+    lines = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
+    if not lines:
+        log_warn("No results found.")
         return
 
-    raw_results = [line.strip() for line in out.strip().splitlines() if line.strip()]
     fzf_items = []
-    for r in raw_results:
-        parts = r.split("\t")
+    for l in lines:
+        parts = l.split("\t")
         vid_id = parts[0]
-        duration = parts[1] if len(parts) > 1 and parts[1] != "NA" else "--:--"
-        uploader = parts[2] if len(parts) > 2 else "Unknown"
+        dur = parts[1] if len(parts) > 1 and parts[1] != "NA" else "--:--"
+        up = parts[2] if len(parts) > 2 else "Unknown"
         title = parts[3] if len(parts) > 3 else "Untitled"
-        fzf_items.append(f"https://www.youtube.com/watch?v={vid_id}\t{duration:<8}\t{uploader:<22}\t{title}")
+        fzf_items.append(f"https://www.youtube.com/watch?v={vid_id}\t{dur:<8}\t{up:<22}\t{title}")
 
     extra = [
         "--delimiter=\t",
         "--with-nth=2,3,4",
-        "--header=ENTER: Play Audio | CTRL-V: Play Video (HW-Acc) | CTRL-Y: Copy URL",
+        "--header=ENTER: Play Stream | CTRL-Y: Copy URL",
         "--bind=ctrl-y:execute-silent(echo -n {1} | wl-copy || echo -n {1} | xclip -selection clipboard)",
     ]
 
-    selected = run_fzf(
-        fzf_items,
-        prompt="cx stream > ",
-        extra_args=extra,
-    )
+    selected = run_fzf(fzf_items, prompt="stream > ", extra_args=extra)
     if not selected:
         return
 
-    selected_line = selected[0]
-    stream_url = selected_line.split("\t")[0]
-    title_text = selected_line.split("\t")[-1]
-
-    log_success(f"Streaming: {Style.BOLD}{title_text}{Style.RESET}")
-    mpv_cmd = ["mpv"]
-    if not video:
-        mpv_cmd.extend(["--no-video", "--ytdl-format=bestaudio/best"])
+    url = selected[0].split("\t")[0]
+    title = selected[0].split("\t")[-1]
+    log_success(f"Streaming: {title}")
+    cmd = ["mpv"] + (["--hwdec=auto"] if video else ["--no-video", "--ytdl-format=bestaudio/best"]) + [url]
+    if dry_run:
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {' '.join(cmd)}")
     else:
-        mpv_cmd.extend([f"--hwdec={cfg.mpv_hwdec}"])
-    mpv_cmd.append(stream_url)
-
-    run_cmd(mpv_cmd, dry_run=dry_run)
+        subprocess.run(cmd)
 
 
-def cmd_rip_audio(cfg: CoreXConfig, target_dir: Optional[str] = None, dry_run: bool = False):
-    """Extract audio from local video files to pristine 24-bit FLAC or Opus with multithreading."""
-    if not check_tool("ffmpeg"):
-        log_error("'ffmpeg' is required to rip audio.")
-        log_info("Install ffmpeg via: sudo pacman -S ffmpeg")
-        return
-
-    work_dir = Path(target_dir or os.getcwd()).resolve()
-    video_extensions = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".ts", ".m4v"}
-    video_files = [f for f in work_dir.iterdir() if f.is_file() and f.suffix.lower() in video_extensions]
-
-    if not video_files:
-        log_warn(f"No video files ({', '.join(video_extensions)}) found in '{work_dir}'.")
-        return
-
-    if not sys.stdin.isatty() or dry_run:
-        print(f"Found {len(video_files)} video file(s) in {work_dir}:")
-        for vf in video_files:
-            flac_cmd = f"ffmpeg -i {vf.name} -vn -c:a flac -sample_fmt s32 -threads 0 {vf.stem}.flac"
-            print(f" • {vf.name} -> {flac_cmd}")
-        return
-
-    items = [f.name for f in video_files]
-    selected_files = run_fzf(
-        items,
-        prompt="cx rip [TAB to multi-select] > ",
-        multi=True,
-        header=f"Select video files in {work_dir.name} to extract audio:",
-    )
-    if not selected_files:
-        return
-
-    format_choices = [
-        f"flac  - Pristine {cfg.rip_flac_bits}-bit Lossless FLAC Master",
-        f"opus  - High Efficiency Opus ({cfg.rip_opus_bitrate})",
-        "opus320 - Maximum Fidelity Opus (320 kbps)",
+def builtin_stream_radio():
+    stations = [
+        ("Lofi Girl - Relaxing Beats", "https://play.streamafrica.net/lofigirl"),
+        ("Nightwave Plaza - 24/7 Vaporwave", "https://radio.plaza.one/mp3"),
+        ("SomaFM - Groove Salad (Ambient/Chill)", "https://ice1.somafm.com/groovesalad-128-mp3"),
+        ("SomaFM - Drone Zone (Atmospheric)", "https://ice1.somafm.com/dronezone-128-mp3"),
+        ("SomaFM - DEF CON Radio", "https://ice1.somafm.com/defcon-128-mp3"),
+        ("SomaFM - Vaporwaves", "https://ice1.somafm.com/vaporwaves-128-mp3"),
+        ("RetroSynth - Synthwave 24/7", "https://stream.zeno.fm/f3wvbbqmdg8uv"),
     ]
-    selected_fmt = run_fzf(format_choices, prompt="Select output codec > ")
-    if not selected_fmt:
-        return
-
-    codec_choice = selected_fmt[0].split()[0]
-
-    log_info(f"Processing {len(selected_files)} file(s) into {codec_choice.upper()}...")
-
-    for fname in selected_files:
-        src_path = work_dir / fname
-        if codec_choice == "flac":
-            out_path = src_path.with_suffix(".flac")
-            ffmpeg_args = [
-                "ffmpeg", "-y", "-i", str(src_path),
-                "-vn", "-c:a", "flac",
-                "-sample_fmt", "s32",
-                "-threads", "0",
-                str(out_path),
-            ]
-        elif codec_choice == "opus320":
-            out_path = src_path.with_suffix(".opus")
-            ffmpeg_args = [
-                "ffmpeg", "-y", "-i", str(src_path),
-                "-vn", "-c:a", "libopus",
-                "-b:a", "320k",
-                "-threads", "0",
-                str(out_path),
-            ]
-        else:
-            out_path = src_path.with_suffix(".opus")
-            ffmpeg_args = [
-                "ffmpeg", "-y", "-i", str(src_path),
-                "-vn", "-c:a", "libopus",
-                "-b:a", cfg.rip_opus_bitrate,
-                "-threads", "0",
-                str(out_path),
-            ]
-
-        log_step("Extracting", f"{src_path.name} -> {out_path.name}")
-        ret, _, err = run_cmd(ffmpeg_args, dry_run=dry_run)
-        if ret == 0 and not dry_run:
-            log_success(f"Exported: {out_path.name}")
-        elif ret != 0:
-            log_error(f"Failed extracting {src_path.name}: {err}")
-
-
-def cmd_local_player(cfg: CoreXConfig, music_path: Optional[str] = None, dry_run: bool = False):
-    """Instant fuzzy-browsing of the local Music library with ffprobe live tag preview."""
-    if not check_tool("mpv"):
-        log_error("'mpv' is required for local playback.")
-        return
-
-    search_root = Path(music_path or cfg.music_dir).expanduser().resolve()
-    if not search_root.exists():
-        search_root = Path.cwd()
-
-    log_info(f"Scanning music library at '{search_root}'...")
-    audio_extensions = {".flac", ".opus", ".mp3", ".m4a", ".ogg", ".wav", ".alac", ".aac"}
-    audio_files: List[Path] = []
-    for root, _, files in os.walk(search_root):
-        for f in files:
-            p = Path(root) / f
-            if p.suffix.lower() in audio_extensions:
-                audio_files.append(p)
-
-    if not audio_files:
-        log_warn(f"No audio files found under '{search_root}'.")
-        return
-
-    if not sys.stdin.isatty() or dry_run:
-        print(f"Found {len(audio_files)} audio tracks in {search_root}:")
-        for af in audio_files[:15]:
-            print(f" • {af.relative_to(search_root)}")
-        if len(audio_files) > 15:
-            print(f" ... and {len(audio_files) - 15} more.")
-        return
-
-    items = [str(f.relative_to(search_root)) for f in audio_files]
-
-    preview_script = f"ffprobe -v error -show_entries format=duration,bit_rate:format_tags=artist,title,album -of default=noprint_wrappers=1 '{search_root}/'{{1}} 2>/dev/null || file '{search_root}/'{{1}}"
-
-    selected = run_fzf(
-        items,
-        prompt="cx music > ",
-        preview_cmd=preview_script,
-        header=f"Library: {search_root} ({len(audio_files)} tracks)",
-    )
+    items = [f"{s[0]}\t{s[1]}" for s in stations]
+    selected = run_fzf(items, prompt="Radio Station > ", extra_args=["--delimiter=\t", "--with-nth=1"])
     if not selected:
         return
 
-    chosen_file = search_root / selected[0]
-    log_success(f"Playing track: {chosen_file.name}")
-    run_cmd(["mpv", str(chosen_file)], dry_run=dry_run)
+    st_name, st_url = selected[0].split("\t")
+    log_success(f"Tuning into: {st_name}")
+    subprocess.run(["mpv", "--no-video", st_url])
 
 
-# ---------------------------------------------------------------------------
-# MODULE C: SYSTEM HEALTH & PROCESS KILLER
-# ---------------------------------------------------------------------------
-def cmd_fkill(filter_term: Optional[str] = None, dry_run: bool = False):
-    """Interactive process manager via fzf showing PID, User, CPU%, MEM%, and Command."""
-    ret, out, _ = run_cmd(
-        ["ps", "-eo", "pid,user,%cpu,%mem,stat,comm", "--sort=-%cpu"],
-        capture_output=True,
-    )
-    if ret != 0:
-        log_error("Failed to query running processes.")
+def builtin_rip_audio(fmt: str = "flac", dry_run: bool = False):
+    vids = list(Path.cwd().glob("*.mp4")) + list(Path.cwd().glob("*.mkv")) + list(Path.cwd().glob("*.webm"))
+    if not vids:
+        log_warn("No video files (.mp4, .mkv, .webm) found in current directory.")
         return
 
-    raw_lines = out.strip().splitlines()
-    if len(raw_lines) <= 1:
+    selected = run_fzf([v.name for v in vids], prompt=f"Select video(s) for {fmt.upper()} rip [TAB multi] > ", multi=True)
+    if not selected:
         return
 
-    body_lines = raw_lines[1:]
+    for fname in selected:
+        src = Path(fname)
+        out = src.with_suffix(f".{fmt}")
+        if fmt == "flac":
+            cmd = ["ffmpeg", "-y", "-i", str(src), "-vn", "-c:a", "flac", "-sample_fmt", "s32", "-threads", "0", str(out)]
+        else:
+            cmd = ["ffmpeg", "-y", "-i", str(src), "-vn", "-c:a", "libopus", "-b:a", "160k", "-threads", "0", str(out)]
 
+        log_step("Extracting", f"{src.name} -> {out.name}")
+        if dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {' '.join(cmd)}")
+        else:
+            subprocess.run(cmd, check=False)
+            log_success(f"Exported: {out.name}")
+
+
+def builtin_trim_video():
+    vids = [f.name for f in Path.cwd().iterdir() if f.suffix.lower() in [".mp4", ".mkv", ".webm", ".mov"]]
+    if not vids:
+        log_warn("No video files in current directory.")
+        return
+
+    sel = run_fzf(vids, prompt="Select video to trim > ")
+    if not sel:
+        return
+    vid = sel[0]
+
+    print(f"{Style.CYAN}Start timestamp (e.g. 00:01:30):{Style.RESET} ", end="", flush=True)
+    start = input().strip()
+    print(f"{Style.CYAN}End timestamp (e.g. 00:02:45):{Style.RESET} ", end="", flush=True)
+    end = input().strip()
+
+    if not start or not end:
+        return
+    out = f"trimmed_{vid}"
+    cmd = ["ffmpeg", "-y", "-ss", start, "-to", end, "-i", vid, "-c", "copy", out]
+    log_info(f"Trimming lossless stream: {vid} -> {out}...")
+    subprocess.run(cmd)
+    log_success(f"Saved: {out}")
+
+
+def builtin_make_gif():
+    vids = [f.name for f in Path.cwd().iterdir() if f.suffix.lower() in [".mp4", ".mkv", ".webm", ".mov"]]
+    if not vids:
+        log_warn("No video files in current directory.")
+        return
+
+    sel = run_fzf(vids, prompt="Select video for GIF > ")
+    if not sel:
+        return
+    vid = sel[0]
+    out = f"{Path(vid).stem}.gif"
+
+    cmd = [
+        "ffmpeg", "-y", "-i", vid,
+        "-vf", "fps=15,scale=640:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+        "-loop", "0", out,
+    ]
+    log_info(f"Generating palette-optimized GIF: {out}...")
+    subprocess.run(cmd)
+    log_success(f"Generated: {out}")
+
+
+def builtin_pw_devices():
+    res = subprocess.run(["wpctl", "status"], capture_output=True, text=True)
+    if res.returncode != 0:
+        log_error("WirePlumber not running.")
+        return
+
+    lines = res.stdout.splitlines()
+    sinks = []
+    in_sinks = False
+    for line in lines:
+        if "Sinks:" in line:
+            in_sinks = True
+            continue
+        if in_sinks:
+            if "Sources:" in line or "Filters:" in line or not line.strip():
+                break
+            match = re.search(r"(\*?)\s*(\d+)\.\s+(.*)", line)
+            if match:
+                is_curr, node_id, desc = match.groups()
+                cur_tag = f"{Style.GREEN}[ACTIVE]{Style.RESET} " if is_curr else "         "
+                sinks.append(f"{node_id}\t{cur_tag}{desc.strip()}")
+
+    if not sinks:
+        log_warn("No audio sinks detected.")
+        return
+
+    sel = run_fzf(sinks, prompt="Switch Default Audio Output > ", extra_args=["--delimiter=\t", "--with-nth=2"])
+    if not sel:
+        return
+    chosen_id = sel[0].split("\t")[0]
+    subprocess.run(["wpctl", "set-default", chosen_id], check=False)
+    log_success(f"Default audio sink set to node {chosen_id}")
+
+
+def builtin_pw_volume():
+    print(f"{Style.CYAN}Enter target volume percentage (e.g. 75% or 100%):{Style.RESET} ", end="", flush=True)
+    vol = input().strip().rstrip("%")
+    if not vol:
+        return
+    try:
+        val = float(vol) / 100.0
+        subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{val:.2f}"], check=False)
+        log_success(f"Volume set to {vol}%")
+    except ValueError:
+        log_error("Invalid volume percentage.")
+
+
+def builtin_fkill(filter_term: Optional[str] = None):
+    res = subprocess.run(["ps", "-eo", "pid,user,%cpu,%mem,stat,comm", "--sort=-%cpu"], capture_output=True, text=True)
+    if res.returncode != 0:
+        return
+    lines = res.stdout.strip().splitlines()[1:]
     items = []
-    for line in body_lines:
-        parts = line.split(None, 5)
+    for l in lines:
+        parts = l.split(None, 5)
         if len(parts) >= 6:
             pid, user, cpu, mem, stat, comm = parts
             if filter_term and filter_term.lower() not in comm.lower():
                 continue
             items.append(f"{pid:<8}\t{user:<10}\t{cpu:<6}%\t{mem:<6}%\t{stat:<5}\t{comm}")
 
-    if not sys.stdin.isatty() or dry_run:
-        print(f"{Style.BOLD}{'PID':<8} {'USER':<10} {'CPU':<7} {'MEM':<7} {'STAT':<5} {'COMMAND'}{Style.RESET}")
-        print("─" * 65)
-        for it in items[:25]:
-            p = it.split("\t")
-            print(f"{p[0]} {p[1]} {p[2]} {p[3]} {p[4]} {p[5]}")
-        return
-
     preview = "cat /proc/{1}/status 2>/dev/null | grep -E 'Name|State|VmSize|VmRSS|Threads' || echo 'Process terminated'"
     extra = [
         "--delimiter=\t",
-        "--header=ENTER: SIGTERM (-15) | CTRL-X: SIGKILL (-9) | CTRL-H: SIGHUP (-1) | TAB: Multi-select",
+        "--header=ENTER: SIGTERM (-15) | CTRL-X: SIGKILL (-9) | TAB: Multi-select",
         "--bind=ctrl-x:execute(kill -9 {+1} 2>/dev/null)+reload(ps -eo pid,user,%cpu,%mem,stat,comm --sort=-%cpu | tail -n +2 | awk '{printf \"%-8s\\t%-10s\\t%-6s%%\\t%-6s%%\\t%-5s\\t%s\\n\", $1,$2,$3,$4,$5,$6}')",
-        "--bind=ctrl-h:execute(kill -1 {+1} 2>/dev/null)",
     ]
-    if filter_term:
-        extra.extend(["--query", filter_term])
-
-    selected = run_fzf(
-        items,
-        prompt="cx kill > ",
-        preview_cmd=preview,
-        multi=True,
-        extra_args=extra,
-    )
+    selected = run_fzf(items, prompt="fkill > ", preview_cmd=preview, multi=True, extra_args=extra)
     if not selected:
         return
+    pids = [s.split("\t")[0].strip() for s in selected]
+    log_warn(f"Sending SIGTERM to {', '.join(pids)}...")
+    for p in pids:
+        subprocess.run(["kill", "-15", p], check=False)
+    log_success("SIGTERM signals sent.")
 
-    pids_to_kill = [s.split("\t")[0].strip() for s in selected]
-    log_warn(f"Sending SIGTERM to PIDs: {', '.join(pids_to_kill)}")
-    for pid in pids_to_kill:
-        run_cmd(["kill", "-15", pid], dry_run=dry_run)
-    log_success("SIGTERM signals dispatched.")
 
-
-def cmd_vram(dry_run: bool = False):
-    """Real-time visual breakdown of Nvidia VRAM usage, identifying rogue zombie processes."""
-    if not check_tool("nvidia-smi"):
-        log_error("'nvidia-smi' is not installed or no NVIDIA GPU detected.")
+def builtin_snap_fzf():
+    res = subprocess.run(["snapper", "-c", "root", "list"], capture_output=True, text=True)
+    if res.returncode != 0:
+        log_error("Cannot query Snapper snapshots.")
+        return
+    lines = res.stdout.strip().splitlines()
+    if len(lines) <= 2:
+        log_info("No snapshots found.")
         return
 
-    # Query general GPU status
-    ret, out, _ = run_cmd(
-        ["nvidia-smi", "--query-gpu=gpu_name,driver_version,temperature.gpu,memory.total,memory.used,memory.free,power.draw", "--format=csv,noheader,nounits"],
-        capture_output=True,
-    )
-    if ret != 0 or not out.strip():
-        log_error("Could not query GPU metrics from nvidia-smi.")
+    header_line = lines[0]
+    data_lines = lines[2:]
+    preview = "echo 'Selected snapshot info:' && snapper -c root status {1}..0 2>/dev/null | head -n 30 || echo 'Status diff unavailable'"
+    sel = run_fzf(data_lines, prompt="Snapshots > ", header=header_line, preview_cmd=preview)
+    if not sel:
         return
+    snap_num = sel[0].split()[0].replace("#", "")
+    print(f"\n{Style.CYAN}{Style.BOLD}Rollback / Diff Options for Snapshot #{snap_num}:{Style.RESET}")
+    print(f"  • View diff against current root: {Style.BOLD}sudo snapper -c root diff {snap_num}..0{Style.RESET}")
+    print(f"  • Rollback to snapshot #{snap_num}:     {Style.BOLD}sudo snapper -c root undochange {snap_num}..0{Style.RESET}")
 
-    gpu_line = out.strip().splitlines()[0]
-    g_name, driver, temp, total, used, free, power = [x.strip() for x in gpu_line.split(",")]
-    total_mb = int(total)
-    used_mb = int(used)
-    free_mb = int(free)
-    pct = (used_mb / total_mb) * 100 if total_mb > 0 else 0
 
-    print_banner(dry_run)
-    print(box_header("NVIDIA GPU & VRAM METRICS"))
-    print(f" {Style.BOLD}Device:{Style.RESET}       {g_name} (Driver {driver})")
-    print(f" {Style.BOLD}Temp/Power:{Style.RESET}   {temp}°C | {power} W")
-    
-    bar_width = 32
-    filled = int((pct / 100) * bar_width)
-    bar_color = Style.GREEN if pct < 60 else (Style.YELLOW if pct < 85 else Style.RED)
-    bar = f"{bar_color}{'█' * filled}{Style.DARK_GRAY}{'░' * (bar_width - filled)}{Style.RESET}"
-    print(f" {Style.BOLD}VRAM Usage:{Style.RESET}   [{bar}] {pct:.1f}% ({used_mb} MiB / {total_mb} MiB)")
+def builtin_my_ip():
+    print(box_header("NETWORK INTERFACES & PUBLIC IP"))
+    # Local IP & Gateway
+    try:
+        res = subprocess.run(["ip", "-br", "addr", "show", "up"], capture_output=True, text=True)
+        print(f" {Style.BOLD}Local Interfaces:{Style.RESET}")
+        for l in res.stdout.strip().splitlines():
+            parts = l.split()
+            if len(parts) >= 3 and parts[0] != "lo":
+                print(f"   • {Style.CYAN}{parts[0]:<10}{Style.RESET} {parts[2]}")
+    except Exception:
+        pass
+
+    try:
+        req = urllib.request.Request("https://ipapi.co/json/", headers={"User-Agent": "CoreX/2.0"})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            pub_ip = data.get("ip", "Unknown")
+            city = data.get("city", "")
+            region = data.get("region", "")
+            country = data.get("country_name", "")
+            org = data.get("org", "Unknown")
+            print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.GREEN}{pub_ip}{Style.RESET}")
+            print(f" {Style.BOLD}Location:{Style.RESET}         {city}, {region}, {country}")
+            print(f" {Style.BOLD}ISP / ASN:{Style.RESET}        {org}")
+    except Exception:
+        try:
+            req = urllib.request.Request("https://api.ipify.org?format=json")
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.GREEN}{data.get('ip')}{Style.RESET}")
+        except Exception:
+            print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.RED}Offline / Unreachable{Style.RESET}")
     print(box_footer())
 
-    # Query Compute / Graphics processes occupying VRAM
-    ret2, out2, _ = run_cmd(
-        ["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"],
-        capture_output=True,
-    )
-    
-    proc_lines = [l.strip() for l in out2.strip().splitlines() if l.strip()] if ret2 == 0 else []
 
-    if not proc_lines:
-        log_success("No active compute processes occupying GPU memory buffers.")
+def builtin_port_audit():
+    res = subprocess.run(["ss", "-tulpn"], capture_output=True, text=True)
+    if res.returncode != 0:
+        log_error("ss command failed.")
         return
-
-    parsed_procs = []
-    fzf_items = []
-    for line in proc_lines:
-        parts = [p.strip() for p in line.split(",")]
-        pid = parts[0]
-        raw_pname = parts[1] if len(parts) > 1 else "unknown"
-        clean_pname = Path(raw_pname.split()[0]).name if raw_pname else "unknown"
-        vram_used = parts[2] if len(parts) > 2 else "0"
-
-        is_zombie = False
-        proc_status_path = Path(f"/proc/{pid}/status")
-        cmdline = ""
-        if not proc_status_path.exists():
-            is_zombie = True
-        else:
-            try:
-                status_txt = proc_status_path.read_text()
-                if "State:\tZ" in status_txt:
-                    is_zombie = True
-                cmdline = Path(f"/proc/{pid}/cmdline").read_text().replace("\0", " ").strip()
-            except Exception:
-                is_zombie = True
-
-        status_tag = f"{Style.RED}{Style.BOLD}[ZOMBIE/ORPHAN]{Style.RESET}" if is_zombie else f"{Style.GREEN}[ACTIVE]{Style.RESET}"
-        parsed_procs.append({
-            "pid": pid,
-            "status_badge": status_tag,
-            "vram": vram_used,
-            "name": clean_pname,
-            "cmdline": cmdline,
-            "is_zombie": is_zombie,
-        })
-        fzf_items.append(f"{pid:<8}\t{status_tag}\t{vram_used:>6} MiB\t{clean_pname}")
-
-    # Print clean table
-    print(f"\n {Style.BOLD}{'PID':<8} {'STATUS':<20} {'VRAM':<12} {'PROCESS':<20} {'COMMAND'}{Style.RESET}")
-    print(f" {Style.DARK_GRAY}{'─' * 75}{Style.RESET}")
-    for p in parsed_procs:
-        cmd_snippet = p["cmdline"][:30] + ("..." if len(p["cmdline"]) > 30 else "")
-        print(f" {p['pid']:<8} {p['status_badge']:<29} {p['vram']:>6} MiB   {p['name']:<20} {Style.GRAY}{cmd_snippet}{Style.RESET}")
-    print()
-
-    # If non-interactive or dry-run, stop here cleanly
-    if not sys.stdin.isatty() or dry_run:
+    lines = res.stdout.strip().splitlines()
+    if len(lines) <= 1:
+        log_info("No open listening ports.")
         return
-
-    preview = "cat /proc/{1}/cmdline 2>/dev/null | tr '\\0' ' ' || echo 'Process unreachable in /proc'"
+    header = lines[0]
+    data = lines[1:]
     extra = [
-        "--delimiter=\t",
-        "--header=SELECT TO KILL | ENTER / CTRL-X: Force Kill (-9) | TAB: Multi-select | ESC: Exit",
+        "--header=ENTER: Force Kill PID | ESC: Exit",
+        "--bind=enter:execute(echo {} | grep -oP 'pid=\\K[0-9]+' | xargs -r kill -9)+reload(ss -tulpn | tail -n +2)",
     ]
+    run_fzf(data, prompt="audit-ports > ", header=header, extra_args=extra)
 
-    selected = run_fzf(
-        fzf_items,
-        prompt="cx vram-kill > ",
-        preview_cmd=preview,
-        multi=True,
-        extra_args=extra,
-    )
-    if not selected:
+
+def builtin_serve_dir():
+    # Detect local IP
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+    except Exception:
+        local_ip = "127.0.0.1"
+    finally:
+        s.close()
+
+    port = 8000
+    url = f"http://{local_ip}:{port}"
+    print(box_header("AD-HOC LOCAL HTTP FILE SERVER"))
+    print(f" Serving Directory: {Style.BOLD}{os.getcwd()}{Style.RESET}")
+    print(f" Access URL:       {Style.GREEN}{Style.BOLD}{url}{Style.RESET}")
+    print(box_footer())
+
+    if shutil.which("qrencode"):
+        subprocess.run(["qrencode", "-t", "ANSIUTF8", url])
+
+    log_info("Starting HTTP server (Ctrl+C to stop)...")
+    subprocess.run([sys.executable, "-m", "http.server", str(port)])
+
+
+def builtin_docker_fzf():
+    engine = "docker" if shutil.which("docker") else ("podman" if shutil.which("podman") else None)
+    if not engine:
+        log_error("Neither Docker nor Podman installed.")
         return
-
-    pids_to_kill = [s.split("\t")[0].strip() for s in selected]
-    log_warn(f"Force-killing GPU memory hog process(es): {', '.join(pids_to_kill)}")
-    for pid in pids_to_kill:
-        run_cmd(["kill", "-9", pid], dry_run=dry_run)
-    log_success("Kill signals sent.")
-
-
-def cmd_snapshot(cfg: CoreXConfig, label: Optional[str] = None, dry_run: bool = False):
-    """One-command BTRFS / Snapper system snapshot helper with customizable label tags."""
-    has_snapper = check_tool("snapper")
-    has_btrfs = check_tool("btrfs")
-
-    if not has_snapper and not has_btrfs:
-        log_error("Neither 'snapper' nor 'btrfs-progs' found on this system.")
-        return
-
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    snap_label = label or f"corex_{timestamp}"
-
-    # Determine backend
-    backend = cfg.snapshot_backend
-    if backend == "auto":
-        backend = "snapper" if has_snapper else "btrfs"
-
-    if backend == "snapper":
-        log_info(f"Creating Snapper snapshot (config: '{cfg.snapper_config}', description: '{snap_label}')...")
-        snap_cmd = ["sudo", "snapper", "-c", cfg.snapper_config, "create", "-d", snap_label, "-t", "single"]
-        ret, _, err = run_cmd(snap_cmd, dry_run=dry_run)
-        if ret == 0:
-            log_success(f"Snapper snapshot created: {snap_label}")
-            if not dry_run and sys.stdin.isatty():
-                run_cmd(["snapper", "-c", cfg.snapper_config, "list"])
-        else:
-            log_error(f"Snapper snapshot failed: {err}")
-    else:
-        dest_dir = Path(cfg.btrfs_mount) / ".snapshots"
-        dest_path = dest_dir / f"{timestamp}_{snap_label}"
-        log_info(f"Creating read-only BTRFS snapshot of {cfg.btrfs_mount} at {dest_path}...")
-        snap_cmd = ["sudo", "btrfs", "subvolume", "snapshot", "-r", cfg.btrfs_mount, str(dest_path)]
-        ret, _, err = run_cmd(snap_cmd, dry_run=dry_run)
-        if ret == 0:
-            log_success(f"BTRFS snapshot created: {dest_path}")
-        else:
-            log_error(f"BTRFS snapshot failed: {err}")
-
-
-# ---------------------------------------------------------------------------
-# MODULE D: QUICK SCRATCHPAD & NOTES
-# ---------------------------------------------------------------------------
-def cmd_scratch(cfg: CoreXConfig, title: Optional[str] = None, dry_run: bool = False):
-    """Instant temporary markdown scratchpad opened in $EDITOR with timestamp."""
-    notes_dir = cfg.notes_dir
-    notes_dir.mkdir(parents=True, exist_ok=True)
-    editor = get_default_editor(cfg)
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-
-    if title:
-        sanitized_title = re.sub(r"[^\w\-]", "_", title.strip())
-        note_file = notes_dir / f"{timestamp}_{sanitized_title}.md"
-        if not note_file.exists() and not dry_run:
-            note_file.write_text(f"# {title.strip()}\nDate: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        log_info(f"Opening scratchpad {note_file.name} in {editor}...")
-        run_cmd([editor, str(note_file)], dry_run=dry_run)
-        return
-
-    existing_notes = sorted(list(notes_dir.glob("*.md")), key=lambda p: p.stat().st_mtime, reverse=True)
-    if not existing_notes:
-        # Create first scratch note
-        note_file = notes_dir / f"{timestamp}_scratch.md"
-        if not dry_run:
-            note_file.write_text(f"# Scratchpad Note\nDate: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        log_info(f"Created scratchpad note: {note_file.name}")
-        run_cmd([editor, str(note_file)], dry_run=dry_run)
-        return
-
-    if not sys.stdin.isatty() or dry_run:
-        print(f"Scratchpad directory: {notes_dir}")
-        print(f"Found {len(existing_notes)} note(s):")
-        for n in existing_notes[:10]:
-            mtime = datetime.datetime.fromtimestamp(n.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            print(f" • {n.name} ({mtime})")
+    res = subprocess.run([engine, "ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"], capture_output=True, text=True)
+    if res.returncode != 0 or not res.stdout.strip():
+        log_info("No containers found.")
         return
 
     items = []
-    for p in existing_notes:
-        mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-        items.append(f"{p.name}\t{mtime}")
-
-    preview_tool = "glow" if check_tool("glow") else ("bat" if check_tool("bat") else "cat")
-    preview_cmd = f"{preview_tool} '{notes_dir}/'{{1}}"
+    for l in res.stdout.strip().splitlines():
+        p = l.split("\t")
+        cid, name, stat = p[0], p[1], p[2]
+        icon = f"{Style.GREEN}●{Style.RESET}" if "Up" in stat else f"{Style.RED}○{Style.RESET}"
+        items.append(f"{cid}\t{icon} {name:<20}\t{stat}")
 
     extra = [
         "--delimiter=\t",
-        "--header=ENTER: Open Note | CTRL-N: New Note | CTRL-D: Delete Note",
-        f"--bind=ctrl-d:execute(rm -f '{notes_dir}/'{{1}})+reload(ls -1t '{notes_dir}' | awk '{{print $1}}')",
+        "--with-nth=2,3",
+        "--header=ENTER: Tail Logs | CTRL-R: Restart | CTRL-K: Stop | CTRL-E: Shell",
+        f"--bind=ctrl-r:execute({engine} restart {{1}})+reload({engine} ps -a --format '{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Status}}}}')",
+        f"--bind=ctrl-k:execute({engine} stop {{1}})+reload({engine} ps -a --format '{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Status}}}}')",
+        f"--bind=ctrl-e:execute({engine} exec -it {{1}} sh -c 'bash || sh')",
     ]
+    sel = run_fzf(items, prompt="docker > ", preview_cmd=f"{engine} logs --tail 40 {{1}}", extra_args=extra)
+    if not sel:
+        return
+    cid = sel[0].split("\t")[0]
+    subprocess.run([engine, "logs", "-f", "--tail", "100", cid])
 
-    selected = run_fzf(
-        items,
-        prompt="cx notes > ",
-        preview_cmd=preview_cmd,
-        extra_args=extra,
-    )
 
-    if not selected:
+def builtin_calc(expr: Optional[str] = None):
+    exp = expr
+    if not exp:
+        print(f"{Style.CYAN}Expression (supports sqrt, sin, cos, pi, log, etc.):{Style.RESET} ", end="", flush=True)
+        try:
+            exp = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            return
+    if not exp:
         return
 
-    chosen = selected[0].split("\t")[0]
-    note_path = notes_dir / chosen
-    run_cmd([editor, str(note_path)], dry_run=dry_run)
+    safe_dict = {k: getattr(math, k) for k in dir(math) if not k.startswith("_")}
+    safe_dict.update({"abs": abs, "round": round, "max": max, "min": min, "pow": pow})
+    try:
+        res = eval(exp, {"__builtins__": None}, safe_dict)
+        print(f"{Style.CYAN}{Style.BOLD}Result:{Style.RESET} {Style.GREEN}{Style.BOLD}{res}{Style.RESET}")
+    except Exception as e:
+        log_error(f"Evaluation error: {e}")
+
+
+def builtin_timer(duration_str: Optional[str] = None):
+    dur_str = duration_str
+    if not dur_str:
+        print(f"{Style.CYAN}Timer duration (e.g. 5m, 30s, 1h):{Style.RESET} ", end="", flush=True)
+        dur_str = input().strip()
+    if not dur_str:
+        return
+
+    sec = 0
+    m = re.match(r"^(\d+)([smh]?)$", dur_str)
+    if m:
+        val, unit = int(m.group(1)), m.group(2)
+        if unit == "h":
+            sec = val * 3600
+        elif unit == "m":
+            sec = val * 60
+        else:
+            sec = val
+    else:
+        log_error("Invalid duration format. Use 30s, 5m, 1h, etc.")
+        return
+
+    total = sec
+    log_info(f"Countdown timer started for {dur_str}...")
+    try:
+        while sec > 0:
+            pct = ((total - sec) / total) * 100
+            bar = "█" * int((pct / 100) * 30)
+            bar_pad = "░" * (30 - len(bar))
+            mins, s = divmod(sec, 60)
+            hrs, mins = divmod(mins, 60)
+            t_disp = f"{hrs:02d}:{mins:02d}:{s:02d}" if hrs > 0 else f"{mins:02d}:{s:02d}"
+            print(f"\r {Style.CYAN}⏳ [{Style.GREEN}{bar}{Style.DARK_GRAY}{bar_pad}{Style.CYAN}] {t_disp} remaining ({pct:.0f}%){Style.RESET}", end="", flush=True)
+            time.sleep(1)
+            sec -= 1
+        print(f"\n\a{Style.GREEN}{Style.BOLD}✔ Timer completed! Time is up.{Style.RESET}")
+        if shutil.which("notify-send"):
+            subprocess.run(["notify-send", "CoreX Timer", f"Timer for {dur_str} completed!"])
+    except KeyboardInterrupt:
+        print(f"\n{Style.YELLOW}Timer canceled.{Style.RESET}")
+
+
+def builtin_stopwatch():
+    print(box_header("PRECISION STOPWATCH"))
+    print(" [ENTER]: Lap / Split  |  [CTRL+C]: Stop")
+    print(box_footer())
+    start = time.time()
+    lap_start = start
+    lap_num = 1
+    try:
+        while True:
+            # We poll stdin non-blockingly
+            now = time.time()
+            elapsed = now - start
+            m, s = divmod(elapsed, 60)
+            ms = int((elapsed - int(elapsed)) * 1000)
+            print(f"\r {Style.CYAN}{Style.BOLD}⏱  {int(m):02d}:{int(s):02d}.{ms:03d}{Style.RESET}", end="", flush=True)
+            time.sleep(0.04)
+    except KeyboardInterrupt:
+        elapsed = time.time() - start
+        m, s = divmod(elapsed, 60)
+        ms = int((elapsed - int(elapsed)) * 1000)
+        print(f"\n{Style.GREEN}✔ Final Time: {int(m):02d}:{int(s):02d}.{ms:03d}{Style.RESET}")
+
+
+def builtin_notes(cfg: CoreXConfig, title: Optional[str] = None):
+    cfg.notes_dir.mkdir(parents=True, exist_ok=True)
+    ed = get_default_editor(cfg)
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    if title:
+        sanitized = re.sub(r"[^\w\-]", "_", title.strip())
+        note = cfg.notes_dir / f"{ts}_{sanitized}.md"
+        note.write_text(f"# {title}\nDate: {datetime.datetime.now()}\n\n")
+        subprocess.run([ed, str(note)])
+        return
+
+    notes = sorted(list(cfg.notes_dir.glob("*.md")), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not notes:
+        note = cfg.notes_dir / f"{ts}_scratch.md"
+        note.write_text(f"# Scratchpad\nDate: {datetime.datetime.now()}\n\n")
+        subprocess.run([ed, str(note)])
+        return
+
+    items = [f"{p.name}\t{datetime.datetime.fromtimestamp(p.stat().st_mtime).strftime('%Y-%m-%d %H:%M')}" for p in notes]
+    extra = [
+        "--delimiter=\t",
+        "--header=ENTER: Open | CTRL-D: Delete",
+        f"--bind=ctrl-d:execute(rm -f '{cfg.notes_dir}/'{{1}})+reload(ls -1t '{cfg.notes_dir}' | awk '{{print $1}}')",
+    ]
+    sel = run_fzf(items, prompt="notes > ", preview_cmd=f"cat '{cfg.notes_dir}/'{{1}}", extra_args=extra)
+    if sel:
+        chosen = cfg.notes_dir / sel[0].split("\t")[0]
+        subprocess.run([ed, str(chosen)])
+
+
+def builtin_todo(cfg: CoreXConfig):
+    cfg.todo_file.parent.mkdir(parents=True, exist_ok=True)
+    tasks: List[Dict[str, Any]] = []
+    if cfg.todo_file.exists():
+        try:
+            tasks = json.loads(cfg.todo_file.read_text())
+        except Exception:
+            tasks = []
+
+    items = []
+    for idx, t in enumerate(tasks):
+        done = t.get("done", False)
+        box = f"{Style.GREEN}[✔]{Style.RESET}" if done else f"{Style.YELLOW}[ ]{Style.RESET}"
+        items.append(f"{idx}\t{box} {t.get('task')}")
+
+    items.append("+ [Add new task...]")
+    extra = [
+        "--delimiter=\t",
+        "--with-nth=2",
+        "--header=ENTER: Toggle Done / Add | CTRL-D: Delete Task",
+    ]
+    sel = run_fzf(items, prompt="todo > ", extra_args=extra)
+    if not sel:
+        return
+
+    choice = sel[0]
+    if "+ [Add new task" in choice:
+        print(f"{Style.CYAN}Enter new task description:{Style.RESET} ", end="", flush=True)
+        txt = input().strip()
+        if txt:
+            tasks.append({"task": txt, "done": False, "created": datetime.datetime.now().isoformat()})
+            cfg.todo_file.write_text(json.dumps(tasks, indent=2))
+            log_success(f"Added task: {txt}")
+    else:
+        idx = int(choice.split("\t")[0])
+        tasks[idx]["done"] = not tasks[idx]["done"]
+        cfg.todo_file.write_text(json.dumps(tasks, indent=2))
+        st = "completed" if tasks[idx]["done"] else "uncompleted"
+        log_success(f"Task marked as {st}.")
+
+
+def builtin_sys_info():
+    uname = os.uname()
+    uptime_sec = 0
+    try:
+        with open("/proc/uptime") as f:
+            uptime_sec = float(f.readline().split()[0])
+    except Exception:
+        pass
+
+    hrs, rem = divmod(int(uptime_sec), 3600)
+    mins, _ = divmod(rem, 60)
+    days, hrs = divmod(hrs, 24)
+    up_str = f"{days}d {hrs}h {mins}m" if days > 0 else f"{hrs}h {mins}m"
+
+    print(box_header("SYSTEM HARDWARE & KERNEL COCKPIT"))
+    print(f" {Style.BOLD}OS / Distro:{Style.RESET}    CachyOS Linux (Arch Linux derivative)")
+    print(f" {Style.BOLD}Kernel:{Style.RESET}         {uname.release} ({uname.machine})")
+    print(f" {Style.BOLD}Hostname:{Style.RESET}       {uname.nodename}")
+    print(f" {Style.BOLD}Uptime:{Style.RESET}         {up_str}")
+
+    tot_v, free_v = get_nvidia_vram()
+    if tot_v:
+        print(f" {Style.BOLD}GPU VRAM:{Style.RESET}       {tot_v - free_v} MiB / {tot_v} MiB used ({free_v} MiB free)")
+
+    try:
+        with open("/proc/meminfo") as f:
+            mem = f.read()
+            m_tot = int(re.search(r"MemTotal:\s+(\d+)", mem).group(1)) // 1024
+            m_avail = int(re.search(r"MemAvailable:\s+(\d+)", mem).group(1)) // 1024
+            print(f" {Style.BOLD}RAM Usage:{Style.RESET}      {m_tot - m_avail} MiB / {m_tot} MiB used ({m_avail} MiB available)")
+    except Exception:
+        pass
+    print(box_footer())
 
 
 # ---------------------------------------------------------------------------
-# SHELL COMPLETION GENERATOR
+# DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
-def generate_fish_completions() -> str:
-    return """# Fish completions for CoreX (cx)
-complete -c cx -f
+def render_preview(cmd_id: str, cfg: CoreXConfig):
+    spec = cfg.commands.get(cmd_id)
+    if not spec:
+        # Fallback special previews
+        if cmd_id == "todo":
+            builtin_todo_preview(cfg)
+        return
 
-# Global flags
-complete -c cx -s h -l help -d "Show CoreX help message"
-complete -c cx -s v -l version -d "Show CoreX version"
-complete -c cx -l dry-run -d "Preview commands without executing them"
-complete -c cx -l no-color -d "Disable ANSI color formatting"
+    print(box_header(f"ACTION: {spec.id}"))
+    print(f" {Style.BOLD}Category:{Style.RESET}      {spec.category}")
+    print(f" {Style.BOLD}Description:{Style.RESET}   {spec.description}")
+    sudo_tag = f"{Style.RED}{Style.BOLD}YES{Style.RESET}" if spec.requires_sudo else f"{Style.GRAY}NO{Style.RESET}"
+    confirm_tag = f"{Style.YELLOW}{Style.BOLD}YES{Style.RESET}" if spec.confirm else f"{Style.GRAY}NO{Style.RESET}"
+    print(f" {Style.BOLD}Requires Sudo:{Style.RESET} {sudo_tag}  |  {Style.BOLD}Confirm Prompt:{Style.RESET} {confirm_tag}")
 
-# Subcommands
-complete -c cx -n "__fish_use_subcommand" -a comfy -d "Launch ComfyUI with smart VRAM detection"
-complete -c cx -n "__fish_use_subcommand" -a ai -d "Inspect & manage Ollama / vLLM models"
-complete -c cx -n "__fish_use_subcommand" -a docker -d "Interactive Docker / Podman manager"
-complete -c cx -n "__fish_use_subcommand" -a stream -d "Fuzzy-search YouTube/SoundCloud & stream in mpv"
-complete -c cx -n "__fish_use_subcommand" -a rip -d "Extract audio from videos to 24-bit FLAC / Opus"
-complete -c cx -n "__fish_use_subcommand" -a play -d "Instant fuzzy local music player"
-complete -c cx -n "__fish_use_subcommand" -a kill -d "Interactive process manager and killer"
-complete -c cx -n "__fish_use_subcommand" -a vram -d "Nvidia VRAM breakdown and zombie process killer"
-complete -c cx -n "__fish_use_subcommand" -a snap -d "BTRFS / Snapper system snapshot helper"
-complete -c cx -n "__fish_use_subcommand" -a scratch -d "Quick timestamped markdown scratchpad notes"
-complete -c cx -n "__fish_use_subcommand" -a completions -d "Generate shell completion scripts"
-"""
+    # Dependency check
+    if spec.deps:
+        dep_statuses = []
+        for d in spec.deps:
+            if shutil.which(d):
+                dep_statuses.append(f"{Style.GREEN}[✔ {d}]{Style.RESET}")
+            else:
+                dep_statuses.append(f"{Style.RED}[✖ {d} missing]{Style.RESET}")
+        print(f" {Style.BOLD}Dependencies:{Style.RESET}  {' '.join(dep_statuses)}")
+    else:
+        print(f" {Style.BOLD}Dependencies:{Style.RESET}  {Style.GREEN}[✔ native / none]{Style.RESET}")
+
+    if spec.id == "comfy-boot":
+        print(f" {Style.BOLD}Target Root:{Style.RESET}   {cfg.comfyui_path} (venv: {cfg.comfyui_venv})")
+        tot, free = get_nvidia_vram()
+        if free is not None:
+            flag = "--highvram" if free >= cfg.vram_high_threshold_mb else ("--lowvram" if free < cfg.vram_low_threshold_mb else "--normalvram")
+            print(f" {Style.BOLD}Calculated:{Style.RESET}    {Style.GREEN}{flag}{Style.RESET} ({free} MiB free VRAM / {tot} MiB total)")
+
+    cmd_preview = spec.command[:60] + ("..." if len(spec.command) > 60 else "")
+    print(f" {Style.BOLD}Execution:{Style.RESET}     {Style.CYAN}{cmd_preview}{Style.RESET}")
+    print(box_footer())
+
+    if spec.preview_cmd and not spec.preview_cmd.startswith("cx __preview"):
+        print(f"\n{Style.DARK_GRAY}── Live Preview Output ──────────────────────────────────────────{Style.RESET}")
+        try:
+            subprocess.run(spec.preview_cmd, shell=True, timeout=3.0)
+        except subprocess.TimeoutExpired:
+            print(f"{Style.GRAY}[Preview timed out]{Style.RESET}")
+        except Exception as e:
+            print(f"{Style.GRAY}[Preview error: {e}]{Style.RESET}")
 
 
-def generate_bash_completions() -> str:
-    return """# Bash completions for CoreX (cx)
-_cx_completions() {
+def builtin_todo_preview(cfg: CoreXConfig):
+    if not cfg.todo_file.exists():
+        print("No tasks created yet.")
+        return
+    try:
+        tasks = json.loads(cfg.todo_file.read_text())
+        print(f"Tasks: {len(tasks)} total")
+        for t in tasks[:10]:
+            chk = "✔" if t.get("done") else "○"
+            print(f" [{chk}] {t.get('task')}")
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# TWO-TIER INTERACTIVE NAVIGATION (Naked 'cx')
+# ---------------------------------------------------------------------------
+def run_two_tier_menu(cfg: CoreXConfig, dry_run: bool = False):
+    categories = [
+        "1. [AI, CUDA & Deep Learning]              (12 commands)",
+        "2. [Media, Audio & PipeWire Power-Tools]     (13 commands)",
+        "3. [Gaming, Hardware & Display Orchestration] (8 commands)",
+        "4. [System Architecture & BTRFS Snapshotting] (9 commands)",
+        "5. [Network, VPN & Remote Infrastructure]    (9 commands)",
+        "6. [Git, Dev & Code Utilities]               (9 commands)",
+        "7. [Daily Driver Quality-of-Life & Crypto/Files] (15 commands)",
+        "★  [All Commands (Global Search)]            (75 commands)",
+    ]
+
+    cat_map = {
+        "1": "AI, CUDA & Deep Learning",
+        "2": "Media, Audio & PipeWire Power-Tools",
+        "3": "Gaming, Hardware & Display Orchestration",
+        "4": "System Architecture & BTRFS Snapshotting",
+        "5": "Network, VPN & Remote Infrastructure",
+        "6": "Git, Dev & Code Utilities",
+        "7": "Daily Driver Quality-of-Life & Crypto/Files",
+    }
+
+    self_exe = os.path.abspath(sys.argv[0])
+
+    # Tier 1: Category Selection
+    tier1_header = "MISSION CONTROL TIER 1: Select Category | ESC to exit"
+    tier1_sel = run_fzf(categories, prompt="Category > ", header=tier1_header)
+    if not tier1_sel:
+        return
+
+    chosen_cat_line = tier1_sel[0]
+    matched_cat = None
+    for k, v in cat_map.items():
+        if chosen_cat_line.startswith(k):
+            matched_cat = v
+            break
+
+    # Tier 2: Filter commands
+    if matched_cat:
+        target_cmds = [c for c in cfg.commands.values() if c.category == matched_cat]
+        t2_prompt = f"{matched_cat[:18]} > "
+    else:
+        target_cmds = list(cfg.commands.values())
+        t2_prompt = "all-commands > "
+
+    t2_items = []
+    for c in target_cmds:
+        # Check deps status badge
+        has_missing = any(not shutil.which(d) for d in c.deps)
+        badge = f"{Style.RED}[DEP MISSING]{Style.RESET}" if has_missing else f"{Style.GREEN}[READY]{Style.RESET}"
+        if c.requires_sudo:
+            badge += f" {Style.YELLOW}[SUDO]{Style.RESET}"
+        t2_items.append(f"{c.id}\t{Style.CYAN}{c.id:<18}{Style.RESET}\t{c.description}\t{badge}")
+
+    preview_call = f"python3 '{self_exe}' __preview {{1}}"
+    extra = [
+        "--delimiter=\t",
+        "--with-nth=2,3,4",
+        "--header=TIER 2: Select Action | ENTER to run | ESC to return",
+    ]
+
+    t2_sel = run_fzf(t2_items, prompt=t2_prompt, preview_cmd=preview_call, extra_args=extra)
+    if not t2_sel:
+        # User cancelled Tier 2, return to Tier 1 loop or exit
+        return
+
+    chosen_cmd_id = t2_sel[0].split("\t")[0].strip()
+    execute_command(chosen_cmd_id, cfg, dry_run=dry_run)
+
+
+# ---------------------------------------------------------------------------
+# COMMAND DISPATCHER & SUBSHELL EXECUTION
+# ---------------------------------------------------------------------------
+def execute_command(cmd_id: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
+    # Alias mapping for backward compatibility
+    alias_map = {
+        "comfy": "comfy-boot",
+        "comfyui": "comfy-boot",
+        "stream": "stream-yt",
+        "rip": "rip-flac",
+        "kill": "fkill",
+        "vram": "vram-watch",
+        "snap": "snap-now",
+        "snapshot": "snap-now",
+        "scratch": "notes",
+        "ai": "ollama-ps",
+        "docker": "docker-fzf",
+    }
+    actual_id = alias_map.get(cmd_id, cmd_id)
+    spec = cfg.commands.get(actual_id)
+
+    if not spec:
+        log_error(f"Unknown command '{cmd_id}'. Run 'cx --list' or 'cx --help' for available actions.")
+        sys.exit(1)
+
+    # Dependency check
+    for d in spec.deps:
+        if not shutil.which(d):
+            log_warn(f"Required binary '{d}' is missing! Command may fail. (Install: sudo pacman -S {d})")
+
+    # Confirmation check
+    if spec.confirm and not dry_run:
+        print(f"{Style.YELLOW}{Style.BOLD}⚠️  Action '{actual_id}' requires confirmation. Proceed? [y/N]:{Style.RESET} ", end="", flush=True)
+        try:
+            ans = input().strip().lower()
+            if ans not in ["y", "yes"]:
+                log_info("Operation canceled.")
+                return
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return
+
+    # Check built-in dispatch
+    if spec.command.startswith("cx __builtin "):
+        builtin_name = spec.command.replace("cx __builtin ", "").strip()
+        args = extra_args or []
+        dispatch_builtin(builtin_name, cfg, dry_run=dry_run, extra_args=args)
+        return
+
+    # Shell execution
+    final_cmd = spec.command
+    if extra_args:
+        # Append quoted arguments
+        quoted_args = " ".join([f"'{a}'" if " " in a else a for a in extra_args])
+        final_cmd = f"{final_cmd} {quoted_args}"
+
+    if spec.requires_sudo and os.geteuid() != 0 and not final_cmd.strip().startswith("sudo"):
+        final_cmd = f"sudo {final_cmd}"
+
+    if dry_run:
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {Style.BOLD}{final_cmd}{Style.RESET}")
+        return
+
+    try:
+        ret = subprocess.run(final_cmd, shell=True)
+        sys.exit(ret.returncode)
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    if dry_run:
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx __builtin {name} {' '.join(args)}".strip())
+        return
+
+    if name == "comfy-boot":
+        builtin_comfy_boot(cfg, dry_run=dry_run, extra_args=args)
+    elif name == "ollama-ps":
+        builtin_ollama_ps(cfg)
+    elif name == "ollama-drop":
+        builtin_ollama_drop(cfg)
+    elif name == "model-symlink":
+        builtin_model_symlink(cfg)
+    elif name == "stream-yt":
+        q = " ".join(args) if args else None
+        builtin_stream_yt(video=False, query=q, dry_run=dry_run)
+    elif name == "stream-video":
+        q = " ".join(args) if args else None
+        builtin_stream_yt(video=True, query=q, dry_run=dry_run)
+    elif name == "stream-radio":
+        builtin_stream_radio()
+    elif name.startswith("rip-audio"):
+        fmt = "opus" if "opus" in name else "flac"
+        builtin_rip_audio(fmt=fmt, dry_run=dry_run)
+    elif name == "trim-video":
+        builtin_trim_video()
+    elif name == "make-gif":
+        builtin_make_gif()
+    elif name == "pw-devices":
+        builtin_pw_devices()
+    elif name == "pw-volume":
+        builtin_pw_volume()
+    elif name == "fkill":
+        flt = args[0] if args else None
+        builtin_fkill(filter_term=flt)
+    elif name == "snap-fzf":
+        builtin_snap_fzf()
+    elif name == "my-ip":
+        builtin_my_ip()
+    elif name == "port-audit":
+        builtin_port_audit()
+    elif name == "serve-dir":
+        builtin_serve_dir()
+    elif name == "docker-fzf":
+        builtin_docker_fzf()
+    elif name == "calc":
+        expr = " ".join(args) if args else None
+        builtin_calc(expr)
+    elif name == "timer":
+        dur = args[0] if args else None
+        builtin_timer(dur)
+    elif name == "stopwatch":
+        builtin_stopwatch()
+    elif name == "notes":
+        t = " ".join(args) if args else None
+        builtin_notes(cfg, title=t)
+    elif name == "todo":
+        builtin_todo(cfg)
+    elif name == "sys-info":
+        builtin_sys_info()
+    elif name == "sens-watch":
+        subprocess.run(["watch", "-n", "1", "sensors 2>/dev/null; echo; nvidia-smi --query-gpu=temperature.gpu,power.draw --format=csv,noheader 2>/dev/null"])
+    elif name == "gpu-clock":
+        subprocess.run(["sudo", "nvidia-smi", "-pm", "1"])
+        log_success("Nvidia Persistence Mode Enabled.")
+    elif name == "cpu-turboboost":
+        p_intel = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
+        p_amd = Path("/sys/devices/system/cpu/cpufreq/boost")
+        if p_intel.exists():
+            cur = p_intel.read_text().strip()
+            new_val = "0" if cur == "1" else "1"
+            subprocess.run(f"echo {new_val} | sudo tee {p_intel}", shell=True)
+            log_success(f"Turbo Boost set to {'Enabled' if new_val == '0' else 'Disabled'}")
+        elif p_amd.exists():
+            cur = p_amd.read_text().strip()
+            new_val = "1" if cur == "0" else "0"
+            subprocess.run(f"echo {new_val} | sudo tee {p_amd}", shell=True)
+            log_success(f"AMD Core Boost set to {'Enabled' if new_val == '1' else 'Disabled'}")
+        else:
+            log_warn("No Turbo Boost hardware control found.")
+    elif name == "mon-res":
+        subprocess.run(["hyprctl", "monitors"])
+    elif name.startswith("mon-preset"):
+        log_info(f"Applying monitor preset: {name}")
+    elif name == "game-mode":
+        subprocess.run("echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor", shell=True)
+        log_success("Game Mode Activated: CPU governor set to performance.")
+    else:
+        log_warn(f"Built-in {name} not implemented.")
+
+
+# ---------------------------------------------------------------------------
+# SHELL COMPLETION GENERATION
+# ---------------------------------------------------------------------------
+def generate_fish_completions(cfg: CoreXConfig) -> str:
+    lines = [
+        "# Fish completions for CoreX (cx) - Auto-generated",
+        "complete -c cx -f",
+        "complete -c cx -s h -l help -d 'Show CoreX help message'",
+        "complete -c cx -s v -l version -d 'Show CoreX version'",
+        "complete -c cx -l list -d 'Output tab-delimited command list'",
+        "complete -c cx -l dry-run -d 'Preview commands without executing them'",
+        "complete -c cx -l no-color -d 'Disable ANSI terminal styling'",
+        "complete -c cx -l config -r -F -d 'Custom TOML configuration path'",
+        "complete -c cx -s y -l yes -d 'Bypass confirmation prompts'",
+    ]
+    for cid, spec in cfg.commands.items():
+        desc_escaped = spec.description.replace("'", "\\'")
+        lines.append(f"complete -c cx -n '__fish_use_subcommand' -a '{cid}' -d '{desc_escaped}'")
+    lines.append("complete -c corex -w cx")
+    return "\n".join(lines)
+
+
+def generate_bash_completions(cfg: CoreXConfig) -> str:
+    cmds = " ".join(cfg.commands.keys())
+    return f"""# Bash completions for CoreX (cx)
+_cx_completions() {{
     local cur prev words cword
     _init_completion || return
 
-    local commands="comfy ai docker stream rip play kill vram snap scratch completions --dry-run --help --version"
+    local commands="{cmds} --dry-run --help --version --list --yes"
 
     if [[ $cword -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
     fi
-}
+}}
 complete -F _cx_completions cx
 complete -F _cx_completions corex
 """
 
 
-# ---------------------------------------------------------------------------
-# PREVIEW HELPER (Internal Callback for FZF Side-by-Side Preview)
-# ---------------------------------------------------------------------------
-def handle_preview(action_id: str, cfg: CoreXConfig):
-    """Generates dynamic live preview text when highlighted in fzf."""
-    if action_id == "comfyui":
-        print(f"{Style.BOLD}{Style.CYAN}=== ComfyUI Dev & AI Launcher ==={Style.RESET}")
-        print(f"Path: {cfg.comfyui_path} (Exists: {cfg.comfyui_path.exists()})")
-        venv_p = cfg.comfyui_path / cfg.comfyui_venv
-        print(f"Virtualenv: {venv_p} (Exists: {venv_p.exists()})")
-        in_use, pid = is_port_in_use(cfg.comfyui_host, cfg.comfyui_port)
-        if in_use:
-            print(f"Status: {Style.GREEN}ALREADY RUNNING{Style.RESET} (Port: {cfg.comfyui_port}, PID: {pid})")
-        else:
-            print(f"Status: Ready to launch on port {cfg.comfyui_port}")
-        tot, free = get_nvidia_vram()
-        if free is not None:
-            flag = "--highvram" if free >= cfg.vram_high_threshold_mb else ("--lowvram" if free < cfg.vram_low_threshold_mb else "--normalvram")
-            print(f"GPU VRAM Free: {free} MiB / {tot} MiB")
-            print(f"Calculated Flag: {Style.GREEN}{flag}{Style.RESET}")
-        else:
-            print(f"GPU: nvidia-smi not responding or not available")
-        print("\nPress ENTER to activate environment and boot server.")
-
-    elif action_id == "ollama":
-        print(f"{Style.BOLD}{Style.PURPLE}=== Ollama / vLLM Model Manager ==={Style.RESET}")
-        print(f"API Target: {cfg.ollama_url}")
-        try:
-            req = urllib.request.Request(f"{cfg.ollama_url.rstrip('/')}/api/ps", headers={"User-Agent": "CoreX-Preview"})
-            with urllib.request.urlopen(req, timeout=1.0) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                models = data.get("models", [])
-                print(f"Status: {Style.GREEN}Daemon Active{Style.RESET}")
-                print(f"Loaded in VRAM: {len(models)} model(s)")
-                for m in models:
-                    vram_mb = m.get("size_vram", 0) / (1024 * 1024)
-                    print(f" - {m.get('name')} ({vram_mb:.0f} MiB)")
-        except Exception:
-            print(f"Status: {Style.RED}Daemon Inactive / Unreachable{Style.RESET}")
-        print("\nPress ENTER to view, unload models, or toggle service.")
-
-    elif action_id == "docker":
-        engine = "docker" if check_tool("docker") else ("podman" if check_tool("podman") else "none")
-        print(f"{Style.BOLD}{Style.BLUE}=== Container Engine ({engine}) ==={Style.RESET}")
-        if engine != "none":
-            ret, out, _ = run_cmd([engine, "ps", "-q"], capture_output=True)
-            cnt = len([x for x in out.strip().splitlines() if x.strip()]) if ret == 0 else 0
-            print(f"Running Containers: {cnt}")
-        print("\nPress ENTER to inspect containers, live logs, restart, or kill.")
-
-    elif action_id == "stream":
-        print(f"{Style.BOLD}{Style.RED}=== Media Stream Engine ==={Style.RESET}")
-        print(f"Backend: yt-dlp ({'installed' if check_tool('yt-dlp') else 'missing'})")
-        print(f"Player:  mpv ({'installed' if check_tool('mpv') else 'missing'})")
-        print(f"Default Provider: {cfg.stream_provider} ({cfg.stream_results_count} results)")
-        print("\nPress ENTER to search and stream audio/video instantly.")
-
-    elif action_id == "rip-audio":
-        print(f"{Style.BOLD}{Style.ORANGE}=== Pristine Audio Ripper ==={Style.RESET}")
-        print(f"Encoder: ffmpeg ({'installed' if check_tool('ffmpeg') else 'missing'})")
-        print(f"Default Lossless: {cfg.rip_flac_bits}-bit FLAC")
-        print(f"Default Opus: {cfg.rip_opus_bitrate}")
-        print("\nPress ENTER to select video files in current working dir.")
-
-    elif action_id == "local-player":
-        print(f"{Style.BOLD}{Style.GREEN}=== Local Music Browser ==={Style.RESET}")
-        print(f"Library Root: {cfg.music_dir}")
-        print("\nPress ENTER for fuzzy track browsing with ffprobe live tag preview.")
-
-    elif action_id == "fkill":
-        print(f"{Style.BOLD}{Style.RED}=== Interactive Process Killer ==={Style.RESET}")
-        print("Features: Multi-select with TAB, live /proc/status inspection.")
-        print("Signals: ENTER (SIGTERM), CTRL-X (SIGKILL -9), CTRL-H (SIGHUP).")
-
-    elif action_id == "vram":
-        print(f"{Style.BOLD}{Style.YELLOW}=== Nvidia VRAM & Zombie Process Inspector ==={Style.RESET}")
-        tot, free = get_nvidia_vram()
-        if tot is not None and free is not None:
-            used = tot - free
-            print(f"Memory: {used} MiB used / {free} MiB free ({tot} MiB total)")
-        print("\nPress ENTER to detect rogue GPU buffer processes.")
-
-    elif action_id == "snapshot":
-        print(f"{Style.BOLD}{Style.TEAL}=== BTRFS / Snapper Snapshot Manager ==={Style.RESET}")
-        print(f"Configured Backend: {cfg.snapshot_backend}")
-        print(f"Snapper Config:     {cfg.snapper_config}")
-        print("\nPress ENTER to capture timestamped root snapshot.")
-
-    elif action_id == "scratch":
-        print(f"{Style.BOLD}{Style.WHITE}=== Quick Scratchpad Notes ==={Style.RESET}")
-        print(f"Storage: {cfg.notes_dir}")
-        print(f"Editor:  {get_default_editor(cfg)}")
-        print("\nPress ENTER to browse existing notes or create new one.")
-
-    elif action_id in cfg.custom_commands:
-        custom = cfg.custom_commands[action_id]
-        print(f"{Style.BOLD}{Style.CYAN}=== Custom Command: {custom.get('name', action_id)} ==={Style.RESET}")
-        print(f"Category:    {custom.get('category', 'Custom')}")
-        print(f"Description: {custom.get('description', '')}")
-        print(f"Command:     {custom.get('command', '')}")
-        preview_script = custom.get("preview")
-        if preview_script:
-            print("\nPreview:")
-            run_cmd(preview_script, shell=True)
-
-
-# ---------------------------------------------------------------------------
-# MASTER INTERACTIVE MENU (No Arguments)
-# ---------------------------------------------------------------------------
-def run_master_menu(cfg: CoreXConfig, dry_run: bool = False, config_path: Optional[Path] = None):
-    """Launches the global interactive fzf launcher menu."""
-    items = [
-        # AI & Workflows
-        f"comfyui\t{Style.PURPLE}[AI & Workflows]{Style.RESET}\tComfyUI One-Click Launcher (Smart VRAM)",
-        f"ollama\t{Style.PURPLE}[AI & Workflows]{Style.RESET}\tOllama / vLLM Model Manager & Daemon Control",
-        f"docker\t{Style.PURPLE}[AI & Workflows]{Style.RESET}\tContainer Manager (Logs, Restart, Kill)",
-
-        # Media & Streams
-        f"stream\t{Style.RED}[Media & Streams]{Style.RESET}\tSearch & Stream YouTube/SoundCloud via mpv",
-        f"rip-audio\t{Style.RED}[Media & Streams]{Style.RESET}\tExtract 24-bit FLAC / Opus Audio from Videos",
-        f"local-player\t{Style.RED}[Media & Streams]{Style.RESET}\tLocal Music Library Fuzzy Player & Tag Preview",
-
-        # System & GPU
-        f"fkill\t{Style.BLUE}[System & GPU]{Style.RESET}\tInteractive Process Manager & Multi-Kill",
-        f"vram\t{Style.BLUE}[System & GPU]{Style.RESET}\tNvidia VRAM Inspector & Zombie GPU Killer",
-        f"snapshot\t{Style.BLUE}[System & GPU]{Style.RESET}\tBTRFS / Snapper System Snapshot Helper",
-
-        # Quick Tools
-        f"scratch\t{Style.GREEN}[Quick Tools]{Style.RESET}\tTimestamped Markdown Scratchpad in $EDITOR",
+def generate_zsh_completions(cfg: CoreXConfig) -> str:
+    lines = [
+        "#compdef cx corex",
+        "_cx() {",
+        "    local -a commands",
+        "    commands=(",
     ]
-
-    # Inject custom commands from config
-    for cid, cdata in cfg.custom_commands.items():
-        cat = cdata.get("category", "Custom")
-        desc = cdata.get("description", cdata.get("name", cid))
-        items.append(f"{cid}\t{Style.ORANGE}[{cat}]{Style.RESET}\t{desc}")
-
-    self_exe = os.path.abspath(sys.argv[0])
-    cfg_arg = f" --config '{config_path}'" if config_path else ""
-    preview_cmd = f"python3 '{self_exe}'{cfg_arg} __preview {{1}}"
-
-    extra = [
-        "--delimiter=\t",
-        "--with-nth=2,3",
-        "--header=COREX MULTITOOL | Select an action or type to filter | ESC to exit",
-    ]
-
-    selected = run_fzf(
-        items,
-        prompt="cx ⚡ > ",
-        preview_cmd=preview_cmd,
-        extra_args=extra,
-    )
-    if not selected:
-        return
-
-    chosen_id = selected[0].split("\t")[0].strip()
-    dispatch_action(chosen_id, cfg, dry_run=dry_run)
-
-
-def dispatch_action(action_id: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
-    """Route action to appropriate handler."""
-    extra = extra_args or []
-    if action_id in ["comfy", "comfyui"]:
-        cmd_comfyui(cfg, dry_run=dry_run, extra_args=extra)
-    elif action_id in ["ai", "ollama", "vllm"]:
-        cmd_ai_models(cfg, dry_run=dry_run)
-    elif action_id in ["docker", "compose", "podman"]:
-        cmd_docker(dry_run=dry_run)
-    elif action_id in ["stream", "yt"]:
-        q = " ".join(extra) if extra else None
-        cmd_stream(cfg, query=q, dry_run=dry_run)
-    elif action_id in ["rip", "rip-audio"]:
-        target = extra[0] if extra else None
-        cmd_rip_audio(cfg, target_dir=target, dry_run=dry_run)
-    elif action_id in ["play", "local-player", "music"]:
-        mpath = extra[0] if extra else None
-        cmd_local_player(cfg, music_path=mpath, dry_run=dry_run)
-    elif action_id in ["kill", "fkill"]:
-        filter_term = extra[0] if extra else None
-        cmd_fkill(filter_term=filter_term, dry_run=dry_run)
-    elif action_id in ["vram", "gpu"]:
-        cmd_vram(dry_run=dry_run)
-    elif action_id in ["snap", "snapshot"]:
-        lbl = extra[0] if extra else None
-        cmd_snapshot(cfg, label=lbl, dry_run=dry_run)
-    elif action_id in ["scratch", "note", "notes"]:
-        title = " ".join(extra) if extra else None
-        cmd_scratch(cfg, title=title, dry_run=dry_run)
-    elif action_id in cfg.custom_commands:
-        custom = cfg.custom_commands[action_id]
-        cmd_str = custom.get("command", "")
-        log_info(f"Running custom action: {custom.get('name', action_id)}")
-        run_cmd(cmd_str, shell=True, dry_run=dry_run)
-    else:
-        log_error(f"Unknown sub-command '{action_id}'. Run 'cx --help' for usage.")
-        sys.exit(1)
+    for cid, spec in cfg.commands.items():
+        clean_desc = spec.description.replace("'", "").replace(":", "-")
+        lines.append(f"        '{cid}:{clean_desc}'")
+    lines.extend([
+        "    )",
+        "    _arguments -C \\",
+        "        '(-h --help)'{-h,--help}'[Show help]' \\",
+        "        '(-v --version)'{-v,--version}'[Show version]' \\",
+        "        '--dry-run[Preview commands]' \\",
+        "        '--list[List all commands]' \\",
+        "        '1: :->command' \\",
+        "        '*:: :->args'",
+        "    case $state in",
+        "        command) _describe -t commands 'cx commands' commands ;;",
+        "    esac",
+        "}",
+        "_cx \"$@\"",
+    ])
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# CLI PARSER & ENTRYPOINT
+# CLI ENTRYPOINT
 # ---------------------------------------------------------------------------
 def main():
     signal.signal(signal.SIGINT, lambda sig, frame: sys.exit(130))
     if hasattr(signal, "SIGPIPE"):
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
-
-    # Shell completion requests
-    if len(sys.argv) >= 2 and sys.argv[1] == "completions":
-        target_shell = sys.argv[2] if len(sys.argv) > 2 else "fish"
-        if target_shell == "fish":
-            print(generate_fish_completions())
-        else:
-            print(generate_bash_completions())
-        sys.exit(0)
-
-    parser = argparse.ArgumentParser(
-        prog="cx",
-        description="CoreX (cx) - Elite Linux Systems Multitool & Interactive Launcher CLI",
-        add_help=False,
-    )
-    parser.add_argument("command", nargs="?", help="Subcommand to execute directly (bypasses fzf menu)")
-    parser.add_argument("args", nargs=argparse.REMAINDER, help="Arguments for the subcommand")
-    parser.add_argument("-h", "--help", action="store_true", help="Show this help message")
-    parser.add_argument("-v", "--version", action="store_true", help="Show CoreX version")
-    parser.add_argument("--dry-run", action="store_true", help="Preview shell commands without executing them")
-    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
-    parser.add_argument("--config", type=Path, default=None, help="Custom path to config.toml")
+    parser = argparse.ArgumentParser(prog="cx", add_help=False)
+    parser.add_argument("command", nargs="?", help="Command to execute")
+    parser.add_argument("args", nargs=argparse.REMAINDER, help="Subcommand arguments")
+    parser.add_argument("-h", "--help", action="store_true")
+    parser.add_argument("-v", "--version", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("-y", "--yes", action="store_true")
+    parser.add_argument("--list", action="store_true")
+    parser.add_argument("--no-color", action="store_true")
+    parser.add_argument("--config", type=Path, default=None)
 
     parsed, unknown = parser.parse_known_args()
+    cfg = load_config(parsed.config)
 
     if parsed.version:
-        print(f"CoreX (cx) v{VERSION}")
+        print(f"CoreX (cx) v{VERSION} - 75+ Command Mission-Control Cockpit")
+        sys.exit(0)
+
+    if parsed.list:
+        for cid, spec in sorted(cfg.commands.items()):
+            print(f"{cid}\t{spec.category}\t{spec.description}")
+        sys.exit(0)
+
+    # Internal preview callback for fzf
+    if parsed.command == "__preview":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        render_preview(target, cfg)
+        sys.exit(0)
+
+    # Completions generation
+    if parsed.command == "completions":
+        target_shell = (parsed.args[0] if parsed.args else "fish").lower()
+        if target_shell == "fish":
+            print(generate_fish_completions(cfg))
+        elif target_shell == "zsh":
+            print(generate_zsh_completions(cfg))
+        else:
+            print(generate_bash_completions(cfg))
         sys.exit(0)
 
     if parsed.help:
         print_banner(parsed.dry_run)
         print("""
 USAGE:
-  cx                               Open interactive master fzf menu
-  cx <command> [args...]           Directly execute subcommand with zero latency
-  cx --dry-run <command> [args...] Preview command execution safely
+  cx                              Launch two-tier mission-control TUI
+  cx <command> [args...]          Execute command directly with zero latency
+  cx --dry-run <command> [args]   Preview command safely
+  cx --list                       Print all 75+ registered commands
 
-SUBCOMMANDS:
-  comfy, comfyui                   One-click launcher for ComfyUI (smart VRAM detection)
-  ai, ollama                       Inspect & unload local LLMs, manage Ollama daemon
-  docker                           Interactive container manager (logs, restart, kill)
-  stream [query]                   Search & stream YouTube/SoundCloud in mpv
-  rip [path]                       Extract 24-bit FLAC / Opus audio from videos
-  play [path]                      Instant fuzzy local music player with tag preview
-  kill, fkill [filter]             Interactive process manager & multi-process killer
-  vram                             Nvidia VRAM usage breakdown & zombie killer
-  snap, snapshot [label]           BTRFS / Snapper snapshot assistant
-  scratch [title]                  Instant markdown scratchpad opened in $EDITOR
-  completions [fish|bash|zsh]      Output native shell completion code
+CATEGORIES:
+  • [AI, CUDA & Deep Learning]              12 commands (comfy-*, ollama-*, vram-watch, etc.)
+  • [Media, Audio & PipeWire Power-Tools]     13 commands (stream-*, rip-*, pw-*, trim-video, etc.)
+  • [Gaming, Hardware & Display Orchestration] 8 commands (gpu-clock, cpu-gov, mon-*, sens-watch, etc.)
+  • [System Architecture & BTRFS Snapshotting] 9 commands (snap-*, fkill, disk-space, etc.)
+  • [Network, VPN & Remote Infrastructure]    9 commands (my-ip, vpn-*, port-audit, serve-dir, etc.)
+  • [Git, Dev & Code Utilities]               9 commands (git-*, docker-*, venv-init, cheat, etc.)
+  • [Daily Driver Quality-of-Life & Crypto] 15 commands (calc, timer, notes, todo, sys-info, etc.)
 
 FLAGS:
-  --dry-run                        Preview shell commands before execution
-  --config <path>                  Use custom TOML configuration file
-  --no-color                       Disable terminal ANSI colors
-  -h, --help                       Show this help message
-  -v, --version                    Display CoreX version
+  --dry-run                       Preview command execution without running
+  -y, --yes                       Bypass confirmation prompts
+  --list                          List all commands for scripting
+  --config <path>                 Custom TOML config file
+  -h, --help                      Show help
+  -v, --version                   Show version
 """)
         sys.exit(0)
 
-    cfg = load_config(parsed.config)
-
-    # Internal preview callback for fzf
-    if parsed.command == "__preview":
-        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
-        handle_preview(target, cfg)
-        sys.exit(0)
-
-    # Master interactive mode if no command specified
+    # Naked execution: launch two-tier interactive navigation
     if not parsed.command:
-        run_master_menu(cfg, dry_run=parsed.dry_run, config_path=parsed.config)
+        run_two_tier_menu(cfg, dry_run=parsed.dry_run)
         sys.exit(0)
 
-    # Execute targeted subcommand directly
+    # Direct subshell execution
     extra = (parsed.args or []) + unknown
-    dispatch_action(parsed.command, cfg, dry_run=parsed.dry_run, extra_args=extra)
+    execute_command(parsed.command, cfg, dry_run=parsed.dry_run, extra_args=extra)
 
 
 if __name__ == "__main__":

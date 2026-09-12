@@ -1,78 +1,723 @@
-# CoreX (cx) - Configuration File
+# CoreX (cx) - 75+ Command Mission-Control Workstation Engine Configuration
 # Location: ~/.config/corex/config.toml
 
 [general]
-# Default text editor for scratchpad notes (falls back to $EDITOR, nvim, micro, nano, or vi)
-editor = ""
-# Notes / scratchpad directory
-notes_dir = "~/.local/share/corex/notes"
-# Enable rich ANSI color output
+editor = ""                            # Default editor ($EDITOR, nvim, micro, nano, vi)
+notes_dir = "~/.local/share/corex/notes" # Notes directory
+todo_file = "~/.local/share/corex/todo.json" # Todo tracking file
 color = true
 
 [ai]
-# ComfyUI installation root directory (leave empty for auto-detection in ~/ComfyUI or current dir)
-comfyui_path = "~/ComfyUI"
-# Virtual environment directory name inside comfyui_path (e.g. "venv", ".venv", "env")
-comfyui_venv = "venv"
-# ComfyUI listen port and address
+comfyui_path = "~/ComfyUI"             # Root directory of ComfyUI
+comfyui_venv = "venv"                  # Virtualenv subfolder
 comfyui_port = 8188
 comfyui_host = "127.0.0.1"
-# VRAM threshold in MiB to activate --highvram (otherwise --normalvram or --lowvram)
 vram_high_threshold_mb = 8192
 vram_low_threshold_mb = 4096
-# Custom extra launch arguments for ComfyUI
 comfyui_extra_flags = ["--preview-method", "auto"]
-# Auto-open browser when ComfyUI starts
 comfyui_auto_browser = true
-# Send desktop notification on server readiness
 comfyui_notify = true
-
-# Ollama API URL
 ollama_url = "http://127.0.0.1:11434"
 
-[media]
-# Local music directory for fuzzy player
-music_dir = "~/Music"
-# Default yt-dlp search provider (ytsearch or scsearch for SoundCloud)
-stream_provider = "ytsearch"
-# Maximum search results to query from yt-dlp
-stream_results_count = 25
-# Hardware acceleration flag for mpv video streaming
-mpv_hwdec = "auto"
-# Audio rip default format ("flac" or "opus")
-rip_format = "flac"
-# Audio rip quality: for opus (bitrate in kbps e.g. "256k", "320k"), for flac (compression 0-12, sample_fmt)
-rip_flac_bits = "24"
-rip_opus_bitrate = "256k"
+# ==============================================================================
+# 1. AI, CUDA & DEEP LEARNING (12 Commands)
+# ==============================================================================
 
-[system]
-# Snapshot manager: "auto", "snapper", or "btrfs"
-snapshot_backend = "auto"
-# Snapper configuration name (usually "root" or "home")
-snapper_config = "root"
-# Default BTRFS subvolume root mount path
-btrfs_mount = "/"
+[commands.comfy-boot]
+category = "AI, CUDA & Deep Learning"
+description = "Detect venv, check port 8188, apply CUDA alloc flags, launch ComfyUI & notify"
+command = "cx __builtin comfy-boot"
+preview_cmd = "ss -tulpn | grep 8188 || echo 'Port 8188 ready for ComfyUI boot'"
+requires_sudo = false
+confirm = false
+deps = ["python3"]
 
-# Custom user-defined sub-commands
-# You can add as many custom commands as you want!
-# They will automatically appear in the interactive 'cx' menu and can be run via 'cx <id>'
-[custom_commands.update]
-name = "System Update"
-category = "System & GPU"
-description = "Fast system package upgrade via pacman / cachyos-rate-mirrors"
-command = "sudo pacman -Syu"
-preview = "echo 'Performs full Arch / CachyOS system package synchronization and upgrade.'"
+[commands.comfy-nuke]
+category = "AI, CUDA & Deep Learning"
+description = "Force kill any zombie ComfyUI server and associated Python/Torch memory holders"
+command = "pkill -9 -f 'main.py.*comfy' 2>/dev/null || pkill -9 -f 'ComfyUI/main.py' 2>/dev/null || fuser -k 8188/tcp 2>/dev/null; echo '✔ ComfyUI instances nuked.'"
+preview_cmd = "ss -tulpn | grep 8188 || echo 'Port 8188 clear'"
+requires_sudo = false
+confirm = true
+deps = ["pkill"]
 
-[custom_commands.hypr_reload]
-name = "Reload Hyprland"
-category = "Quick Tools"
-description = "Reload Hyprland compositor configuration"
-command = "hyprctl reload"
-preview = "echo 'Sends reload signal to Hyprland compositor.'"
+[commands.comfy-sync]
+category = "AI, CUDA & Deep Learning"
+description = "Parallel git-pull across ComfyUI core and all cloned custom_nodes directories"
+command = "cd ~/ComfyUI && echo -e '\\033[1;36m==> Syncing ComfyUI Core...\\033[0m' && git pull && find custom_nodes -mindepth 1 -maxdepth 1 -type d -exec sh -c 'cd \"$1\" && [ -d .git ] && echo -e \"\\033[1;34m==> Updating $(basename \"$1\")...\\033[0m\" && git pull' _ {} \\;"
+preview_cmd = "cd ~/ComfyUI && git status -sb 2>/dev/null || echo 'ComfyUI not found at ~/ComfyUI'"
+requires_sudo = false
+confirm = false
+deps = ["git"]
 
-[custom_commands.git_status]
-name = "Git Repository Status"
-category = "Quick Tools"
-description = "Quick status and recent commits of current git repository"
-command = "git status -sb && git log -n 5 --oneline"
-preview = "git status 2>/dev/null || echo 'Not inside a git repository'"
+[commands.model-symlink]
+category = "AI, CUDA & Deep Learning"
+description = "Interactive fzf picker to symlink any .safetensors file into target ComfyUI model folder"
+command = "cx __builtin model-symlink"
+preview_cmd = "find ~/ComfyUI/models -maxdepth 2 -type d 2>/dev/null | head -n 15"
+requires_sudo = false
+confirm = false
+deps = ["fzf"]
+
+[commands.ollama-up]
+category = "AI, CUDA & Deep Learning"
+description = "Start the Ollama background inference daemon if stopped"
+command = "systemctl --user start ollama 2>/dev/null || sudo systemctl start ollama 2>/dev/null || nohup ollama serve >/dev/null 2>&1 & echo '✔ Ollama daemon started.'"
+preview_cmd = "systemctl --user is-active ollama 2>/dev/null || echo 'Inactive'"
+requires_sudo = false
+confirm = false
+deps = ["ollama"]
+
+[commands.ollama-ps]
+category = "AI, CUDA & Deep Learning"
+description = "Display currently loaded models in GPU memory with context memory footprint"
+command = "cx __builtin ollama-ps"
+preview_cmd = "curl -s http://127.0.0.1:11434/api/ps 2>/dev/null | jq . 2>/dev/null || echo 'Ollama API unreachable'"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.ollama-drop]
+category = "AI, CUDA & Deep Learning"
+description = "Unload all active LLMs from VRAM immediately"
+command = "cx __builtin ollama-drop"
+preview_cmd = "curl -s http://127.0.0.1:11434/api/ps 2>/dev/null || echo 'Ollama API unreachable'"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.ollama-fzf]
+category = "AI, CUDA & Deep Learning"
+description = "Interactive fzf selector to run or chat with any locally pulled model"
+command = "ollama list | tail -n +2 | fzf --prompt='Select model > ' --height=40% --border | awk '{print $1}' | xargs -r -o ollama run"
+preview_cmd = "ollama list 2>/dev/null || echo 'No models found'"
+requires_sudo = false
+confirm = false
+deps = ["ollama", "fzf"]
+
+[commands.hf-download]
+category = "AI, CUDA & Deep Learning"
+description = "Fast model puller from HuggingFace via aria2c multithreaded resume"
+command = "echo -n 'Enter HuggingFace file URL: ' && read -r url && [ -n \"$url\" ] && aria2c -x 16 -s 16 -k 1M -c \"$url\""
+preview_cmd = "echo 'Usage: aria2c -x 16 -s 16 -k 1M -c <url>'"
+requires_sudo = false
+confirm = false
+deps = ["aria2c"]
+
+[commands.civit-grab]
+category = "AI, CUDA & Deep Learning"
+description = "Download model/LoRA from Civitai API key/URL with SHA256 verification"
+command = "cx __builtin civit-grab"
+preview_cmd = "echo 'Downloads Civitai model/LoRA with optional sha256 checksum check.'"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.vram-watch]
+category = "AI, CUDA & Deep Learning"
+description = "Loop nvidia-smi showing per-process memory, power draw, and temperature at 1000ms"
+command = "watch -n 1 -c 'nvidia-smi --query-gpu=temperature.gpu,power.draw,memory.used,memory.total --format=csv,noheader && echo && nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv'"
+preview_cmd = "nvidia-smi --query-gpu=temperature.gpu,memory.used,memory.total --format=csv 2>/dev/null || echo 'No NVIDIA GPU'"
+requires_sudo = false
+confirm = false
+deps = ["nvidia-smi", "watch"]
+
+[commands.cuda-purge]
+category = "AI, CUDA & Deep Learning"
+description = "Scan specifically for orphaned Python processes holding /dev/nvidia* file handles and terminate them"
+command = "fuser -v /dev/nvidia* 2>&1 | awk '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]+$/) print $i}' | sort -u | xargs -r kill -9 && echo '✔ Terminated rogue GPU file handle holders.'"
+preview_cmd = "fuser -v /dev/nvidia* 2>&1 || echo 'No active GPU file handles'"
+requires_sudo = false
+confirm = true
+deps = ["fuser"]
+
+# ==============================================================================
+# 2. MEDIA, AUDIO & PIPEWIRE POWER-TOOLS (13 Commands)
+# ==============================================================================
+
+[commands.stream-yt]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Interactive YouTube fuzzy search via yt-dlp metadata streaming directly into mpv --no-video"
+command = "cx __builtin stream-yt"
+preview_cmd = "echo 'Interactive YouTube audio streamer via yt-dlp & mpv'"
+requires_sudo = false
+confirm = false
+deps = ["yt-dlp", "mpv", "fzf"]
+
+[commands.stream-video]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Search YouTube and stream hardware-accelerated 1440p/4K video directly into borderless mpv"
+command = "cx __builtin stream-video"
+preview_cmd = "echo 'Hardware accelerated video stream via mpv --hwdec=auto'"
+requires_sudo = false
+confirm = false
+deps = ["yt-dlp", "mpv", "fzf"]
+
+[commands.stream-radio]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Background endless ambient/lo-fi/synthwave stream player with minimal CPU footprint"
+command = "cx __builtin stream-radio"
+preview_cmd = "echo 'Curated high-quality audio streams: Lofi Girl, Nightwave Plaza, SomaFM Groove Salad'"
+requires_sudo = false
+confirm = false
+deps = ["mpv", "fzf"]
+
+[commands.rip-flac]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Batch-convert video or audio files in current directory to uncompressed 24-bit FLAC"
+command = "cx __builtin rip-audio flac"
+preview_cmd = "ls -1 *.{mp4,mkv,webm,wav,m4a} 2>/dev/null || echo 'No media files in current directory'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg"]
+
+[commands.rip-opus]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Fast high-efficiency audio compression to Opus at 160kbps"
+command = "cx __builtin rip-audio opus"
+preview_cmd = "ls -1 *.{mp4,mkv,webm,wav,m4a} 2>/dev/null || echo 'No media files in current directory'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg"]
+
+[commands.trim-video]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Interactive lossless video cutter via ffmpeg stream copy (start, end timestamps without re-encoding)"
+command = "cx __builtin trim-video"
+preview_cmd = "echo 'Lossless video segment extractor via ffmpeg -c copy'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg"]
+
+[commands.make-gif]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "High-fidelity palettegen GIF converter from any video segment"
+command = "cx __builtin make-gif"
+preview_cmd = "echo 'Converts video file to high-quality palette-optimized GIF via ffmpeg'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg"]
+
+[commands.demucs-stems]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Demix any audio track in cwd into 4 isolated stems (vocals, drums, bass, other) via local Demucs CLI"
+command = "file=$(ls *.{mp3,flac,wav,ogg,m4a} 2>/dev/null | fzf --prompt='Select audio file for stem split > ') && [ -n \"$file\" ] && demucs -n htdemucs \"$file\""
+preview_cmd = "ls -1 *.{mp3,flac,wav,ogg,m4a} 2>/dev/null || echo 'No audio files in current directory'"
+requires_sudo = false
+confirm = false
+deps = ["demucs", "fzf"]
+
+[commands.pw-restart]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "One-key reboot of PipeWire, WirePlumber, and pipewire-pulse daemons"
+command = "systemctl --user restart pipewire pipewire-pulse wireplumber && echo '✔ PipeWire audio stack restarted.'"
+preview_cmd = "systemctl --user status pipewire --lines=3 2>/dev/null || echo 'PipeWire status unavailable'"
+requires_sudo = false
+confirm = false
+deps = ["systemctl"]
+
+[commands.pw-devices]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Interactive fzf picker to switch default audio output sink on the fly"
+command = "cx __builtin pw-devices"
+preview_cmd = "wpctl status 2>/dev/null || echo 'WirePlumber not running'"
+requires_sudo = false
+confirm = false
+deps = ["wpctl", "fzf"]
+
+[commands.pw-volume]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Interactive CLI volume fader for master audio channel"
+command = "cx __builtin pw-volume"
+preview_cmd = "wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null || echo 'Volume unavailable'"
+requires_sudo = false
+confirm = false
+deps = ["wpctl"]
+
+[commands.tag-editor]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Fast CLI audio metadata editor/inspector via ffprobe"
+command = "file=$(ls *.{mp3,flac,m4a,opus,ogg} 2>/dev/null | fzf --prompt='Select audio file > ') && [ -n \"$file\" ] && ffprobe -hide_banner \"$file\""
+preview_cmd = "echo 'Inspects audio metadata tags with ffprobe'"
+requires_sudo = false
+confirm = false
+deps = ["ffprobe", "fzf"]
+
+[commands.cover-extract]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Extract embedded album art from FLAC/MP3 files into cover.jpg"
+command = "file=$(ls *.{mp3,flac,m4a} 2>/dev/null | fzf --prompt='Select audio file to extract cover > ') && [ -n \"$file\" ] && ffmpeg -y -i \"$file\" -an -vcodec copy cover.jpg && echo '✔ Extracted cover.jpg'"
+preview_cmd = "echo 'Extracts embedded ID3/FLAC picture block to cover.jpg'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg", "fzf"]
+
+# ==============================================================================
+# 3. GAMING, HARDWARE & DISPLAY ORCHESTRATION (8 Commands)
+# ==============================================================================
+
+[commands.gpu-clock]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Toggle GPU power limit or persistence mode for maximum sustained clocks"
+command = "cx __builtin gpu-clock"
+preview_cmd = "nvidia-smi -q -d POWER 2>/dev/null | grep -E 'Power Limit|Default Power' || echo 'No NVIDIA GPU'"
+requires_sudo = true
+confirm = false
+deps = ["nvidia-smi"]
+
+[commands.cpu-gov]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Interactive picker for CPU governors (performance, powersave, schedutil)"
+command = "gov=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors 2>/dev/null | tr ' ' '\\n' | fzf --prompt='Select CPU governor > ') && [ -n \"$gov\" ] && echo \"$gov\" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor && echo \"✔ CPU Governor set to $gov\""
+preview_cmd = "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo 'Unavailable'"
+requires_sudo = true
+confirm = false
+deps = ["fzf"]
+
+[commands.cpu-turboboost]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Toggle Intel/AMD Turbo Boost state on/off"
+command = "cx __builtin cpu-turboboost"
+preview_cmd = "cat /sys/devices/system/cpu/cpufreq/boost 2>/dev/null || cat /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || echo 'Turbo Boost path unavailable'"
+requires_sudo = true
+confirm = false
+deps = []
+
+[commands.mon-res]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Toggle primary monitor refresh rates (e.g., 360Hz / 240Hz / 144Hz) via compositor"
+command = "cx __builtin mon-res"
+preview_cmd = "hyprctl monitors 2>/dev/null || wlr-randr 2>/dev/null || xrandr --current 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.mon-dual]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Set dual-monitor arrangement preset"
+command = "cx __builtin mon-preset dual"
+preview_cmd = "hyprctl monitors 2>/dev/null || echo 'Dual monitor configuration profile'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.mon-single]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Disable secondary monitor and enforce max refresh rate on primary display"
+command = "cx __builtin mon-preset single"
+preview_cmd = "echo 'Disables secondary display and dedicates GPU bandwidth to primary monitor'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.sens-watch]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Clean ANSI visual dashboard for NVMe, GPU hotspot, and CPU per-core temperatures"
+command = "cx __builtin sens-watch"
+preview_cmd = "sensors 2>/dev/null | head -n 15 || echo 'lm_sensors not installed'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.game-mode]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Kill non-essential background daemons, switch CPU to performance, and enable GameMode"
+command = "cx __builtin game-mode"
+preview_cmd = "echo 'Enforces performance governor, sets GPU clock limits, pauses indexers'"
+requires_sudo = true
+confirm = false
+deps = []
+
+# ==============================================================================
+# 4. SYSTEM ARCHITECTURE & BTRFS SNAPSHOTTING (9 Commands)
+# ==============================================================================
+
+[commands.snap-now]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Prompt for a quick snapshot comment and trigger an instant Snapper/BTRFS root snapshot"
+command = "echo -n 'Enter snapshot description: ' && read -r desc && sudo snapper -c root create -d \"${desc:-corex_manual}\" -t single && echo '✔ Snapshot created successfully.'"
+preview_cmd = "snapper -c root list 2>/dev/null | tail -n 5 || echo 'Snapper root config unavailable'"
+requires_sudo = true
+confirm = false
+deps = ["snapper"]
+
+[commands.snap-fzf]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Interactive browser of past snapshots with rollback commands and file diff preview"
+command = "cx __builtin snap-fzf"
+preview_cmd = "snapper -c root list 2>/dev/null | tail -n 10 || echo 'No snapshots found'"
+requires_sudo = false
+confirm = false
+deps = ["snapper", "fzf"]
+
+[commands.snap-clean]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Prune old or orphaned system snapshots"
+command = "sudo snapper -c root cleanup number && sudo snapper -c root cleanup timeline && echo '✔ Old snapshots pruned.'"
+preview_cmd = "snapper -c root list 2>/dev/null | wc -l | awk '{print $1 \" snapshots currently stored.\"}'"
+requires_sudo = true
+confirm = true
+deps = ["snapper"]
+
+[commands.fkill]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Interactive multi-select process terminator with live CPU/RAM previews"
+command = "cx __builtin fkill"
+preview_cmd = "ps -eo pid,user,%cpu,%mem,comm --sort=-%cpu | head -n 10"
+requires_sudo = false
+confirm = false
+deps = ["fzf", "ps"]
+
+[commands.disk-space]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Interactive visual disk usage explorer via ncdu or dust"
+command = "ncdu ~ 2>/dev/null || dust ~ 2>/dev/null || df -h"
+preview_cmd = "df -h -x tmpfs -x devtmpfs 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.pkg-orphans]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Scan and remove unneeded package dependencies and clean package cache"
+command = "orphans=$(pacman -Qdtq 2>/dev/null) && [ -n \"$orphans\" ] && sudo pacman -Rns $orphans || echo '✔ No orphaned packages found.'"
+preview_cmd = "pacman -Qdtq 2>/dev/null || echo 'No orphaned packages'"
+requires_sudo = true
+confirm = true
+deps = ["pacman"]
+
+[commands.service-fail]
+category = "System Architecture & BTRFS Snapshotting"
+description = "List all failed systemd system and user services (systemctl --failed)"
+command = "echo -e '\\033[1;31m=== Failed System Services ===\\033[0m' && systemctl --failed && echo -e '\\n\\033[1;33m=== Failed User Services ===\\033[0m' && systemctl --user --failed"
+preview_cmd = "systemctl --failed --no-legend 2>/dev/null | wc -l | awk '{print $1 \" failed services\"}'"
+requires_sudo = false
+confirm = false
+deps = ["systemctl"]
+
+[commands.journal-vacuum]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Trim systemd logs to under 200MB"
+command = "sudo journalctl --vacuum-size=200M"
+preview_cmd = "journalctl --disk-usage 2>/dev/null"
+requires_sudo = true
+confirm = false
+deps = ["journalctl"]
+
+[commands.boot-analyze]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Profile kernel and userspace boot duration via systemd-analyze blame"
+command = "systemd-analyze && echo && systemd-analyze blame | head -n 20"
+preview_cmd = "systemd-analyze 2>/dev/null || echo 'Boot analysis unavailable'"
+requires_sudo = false
+confirm = false
+deps = ["systemd-analyze"]
+
+# ==============================================================================
+# 5. NETWORK, VPN & REMOTE INFRASTRUCTURE (9 Commands)
+# ==============================================================================
+
+[commands.my-ip]
+category = "Network, VPN & Remote Infrastructure"
+description = "Detailed ANSI card showing Public IP, Local IP, Gateway, ISP, and Geo-coordinates"
+command = "cx __builtin my-ip"
+preview_cmd = "ip -br a 2>/dev/null | head -n 5"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.vpn-up]
+category = "Network, VPN & Remote Infrastructure"
+description = "Interactive fzf selector for WireGuard/OpenVPN/Proton configuration profiles"
+command = "conf=$(ls /etc/wireguard/*.conf ~/.config/wireguard/*.conf 2>/dev/null | fzf --prompt='Select VPN profile > ') && [ -n \"$conf\" ] && sudo wg-quick up \"$conf\" && echo \"✔ Connected to $(basename \"$conf\")\""
+preview_cmd = "sudo wg show 2>/dev/null || echo 'No active WireGuard tunnels'"
+requires_sudo = true
+confirm = false
+deps = ["fzf"]
+
+[commands.vpn-down]
+category = "Network, VPN & Remote Infrastructure"
+description = "Clean disconnect and DNS leak prevention restore"
+command = "sudo wg show interfaces 2>/dev/null | tr ' ' '\\n' | xargs -r -I{} sudo wg-quick down {} && echo '✔ Disconnected all VPN interfaces.'"
+preview_cmd = "sudo wg show 2>/dev/null || echo 'WireGuard inactive'"
+requires_sudo = true
+confirm = false
+deps = []
+
+[commands.port-audit]
+category = "Network, VPN & Remote Infrastructure"
+description = "Interactive open-port inspector (ss -tulpn) showing PID/service and one-key process kill"
+command = "cx __builtin port-audit"
+preview_cmd = "ss -tulpn | head -n 12"
+requires_sudo = false
+confirm = false
+deps = ["ss"]
+
+[commands.speed-check]
+category = "Network, VPN & Remote Infrastructure"
+description = "Fast network speed and latency test"
+command = "speedtest-cli 2>/dev/null || curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 -"
+preview_cmd = "ping -c 3 1.1.1.1 2>/dev/null | tail -n 2 || echo 'Cannot reach 1.1.1.1'"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.lan-scan]
+category = "Network, VPN & Remote Infrastructure"
+description = "ARP scan local subnet to list active devices, IP addresses, and MAC vendors"
+command = "ip neigh show || arp -a 2>/dev/null"
+preview_cmd = "ip route show default 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = ["ip"]
+
+[commands.ssh-fzf]
+category = "Network, VPN & Remote Infrastructure"
+description = "Interactive fuzzy selector pulling hosts from ~/.ssh/config for one-key remote connection"
+command = "host=$(grep -E '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '\\*' | fzf --prompt='Select SSH host > ') && [ -n \"$host\" ] && ssh \"$host\""
+preview_cmd = "grep -E '^Host ' ~/.ssh/config 2>/dev/null | head -n 10 || echo 'No ~/.ssh/config found'"
+requires_sudo = false
+confirm = false
+deps = ["ssh", "fzf"]
+
+[commands.serve-dir]
+category = "Network, VPN & Remote Infrastructure"
+description = "Spin up an instant ad-hoc Python HTTP file server in cwd and show a scannable QR code"
+command = "cx __builtin serve-dir"
+preview_cmd = "echo 'Hosts current directory at http://<local-ip>:8000 with terminal QR code'"
+requires_sudo = false
+confirm = false
+deps = ["python3"]
+
+[commands.dns-flush]
+category = "Network, VPN & Remote Infrastructure"
+description = "Flush local systemd-resolved DNS cache"
+command = "sudo resolvectl flush-caches && echo '✔ DNS cache flushed.'"
+preview_cmd = "resolvectl statistics 2>/dev/null || echo 'systemd-resolved stats unavailable'"
+requires_sudo = true
+confirm = false
+deps = ["resolvectl"]
+
+# ==============================================================================
+# 6. GIT, DEV & CODE UTILITIES (9 Commands)
+# ==============================================================================
+
+[commands.git-branch-fzf]
+category = "Git, Dev & Code Utilities"
+description = "Interactive fuzzy Git branch switcher with preview of latest commit log"
+command = "branch=$(git branch --all --color=never | sed 's/^[ *]*//;s#remotes/origin/##' | sort -u | fzf --preview 'git log --oneline --graph -n 20 --color=always {} 2>/dev/null' --prompt='Switch branch > ') && [ -n \"$branch\" ] && git checkout \"$branch\""
+preview_cmd = "git branch --show-current 2>/dev/null && git status -sb 2>/dev/null || echo 'Not a git repo'"
+requires_sudo = false
+confirm = false
+deps = ["git", "fzf"]
+
+[commands.git-squash]
+category = "Git, Dev & Code Utilities"
+description = "Interactive commit squasher combining last N commits into one"
+command = "echo -n 'Enter number of commits to squash: ' && read -r n && [ -n \"$n\" ] && git reset --soft \"HEAD~$n\" && echo \"✔ Reset to HEAD~$n. Run git commit to save squashed changes.\""
+preview_cmd = "git log --oneline -n 10 2>/dev/null || echo 'Not a git repo'"
+requires_sudo = false
+confirm = true
+deps = ["git"]
+
+[commands.git-stash-pop]
+category = "Git, Dev & Code Utilities"
+description = "Fuzzy browse stashes with diff preview and apply"
+command = "stash=$(git stash list | fzf --preview 'git stash show -p $(echo {} | cut -d: -f1)' --prompt='Select stash > ') && [ -n \"$stash\" ] && git stash pop $(echo \"$stash\" | cut -d: -f1)"
+preview_cmd = "git stash list 2>/dev/null || echo 'No stashes found'"
+requires_sudo = false
+confirm = false
+deps = ["git", "fzf"]
+
+[commands.git-clean-branches]
+category = "Git, Dev & Code Utilities"
+description = "Prune local branches already merged into default branch"
+command = "git branch --merged | grep -v -E '^\\*|main|master|develop' | xargs -r git branch -d && echo '✔ Cleaned merged branches.'"
+preview_cmd = "git branch --merged 2>/dev/null | grep -v -E '^\\*|main|master|develop' || echo 'No merged branches to prune'"
+requires_sudo = false
+confirm = true
+deps = ["git"]
+
+[commands.docker-fzf]
+category = "Git, Dev & Code Utilities"
+description = "Multi-select Docker container manager (start, stop, logs, restart)"
+command = "cx __builtin docker-fzf"
+preview_cmd = "docker ps --format 'table {{.Names}}\\t{{.Status}}\\t{{.Image}}' 2>/dev/null || echo 'Docker not running'"
+requires_sudo = false
+confirm = false
+deps = ["fzf"]
+
+[commands.docker-prune]
+category = "Git, Dev & Code Utilities"
+description = "Clean all dangling Docker images, volumes, and networks"
+command = "docker system prune -af --volumes && echo '✔ Docker dangling resources pruned.'"
+preview_cmd = "docker system df 2>/dev/null || echo 'Docker unavailable'"
+requires_sudo = false
+confirm = true
+deps = ["docker"]
+
+[commands.venv-init]
+category = "Git, Dev & Code Utilities"
+description = "One-key .venv creation, activation, and pip update in cwd"
+command = "python3 -m venv .venv && source .venv/bin/activate && pip install --upgrade pip && echo '✔ Initialized and upgraded .venv in current directory.'"
+preview_cmd = "ls -d .venv 2>/dev/null && echo '.venv exists' || echo 'No .venv in current directory'"
+requires_sudo = false
+confirm = false
+deps = ["python3"]
+
+[commands.cheat]
+category = "Git, Dev & Code Utilities"
+description = "Interactive programming cheatsheet lookup via cht.sh/<lang>/<query>"
+command = "echo -n 'Enter language and query (e.g. python/reverse-list): ' && read -r q && [ -n \"$q\" ] && curl -s \"cht.sh/$q\" | less -R"
+preview_cmd = "echo 'Queries cht.sh community programming cheatsheets'"
+requires_sudo = false
+confirm = false
+deps = ["curl", "less"]
+
+[commands.hex-view]
+category = "Git, Dev & Code Utilities"
+description = "Quick terminal hex dump inspection of any binary file"
+command = "file=$(ls 2>/dev/null | fzf --prompt='Select binary file > ') && [ -n \"$file\" ] && (hexdump -C \"$file\" 2>/dev/null || xxd \"$file\") | head -n 40"
+preview_cmd = "echo 'Displays formatted hexadecimal bytes and ASCII preview'"
+requires_sudo = false
+confirm = false
+deps = ["fzf"]
+
+# ==============================================================================
+# 7. DAILY DRIVER QUALITY-OF-LIFE & CRYPTO/FILES (15 Commands)
+# ==============================================================================
+
+[commands.clip-hist]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Fuzzy search clipboard history and copy selection to active buffer"
+command = "cx __builtin clip-hist"
+preview_cmd = "cliphist list 2>/dev/null | head -n 5 || echo 'cliphist not installed'"
+requires_sudo = false
+confirm = false
+deps = ["fzf"]
+
+[commands.qr-gen]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Generate terminal ANSI QR code from any string or file path"
+command = "echo -n 'Enter text/URL for QR code: ' && read -r txt && [ -n \"$txt\" ] && qrencode -t ANSIUTF8 \"$txt\""
+preview_cmd = "echo 'Generates crisp ANSI UTF-8 QR code directly in terminal'"
+requires_sudo = false
+confirm = false
+deps = ["qrencode"]
+
+[commands.qr-read]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Scan QR code from screen capture or image file"
+command = "cx __builtin qr-read"
+preview_cmd = "echo 'Decodes QR code from screen snip or image file'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.tar-pack]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Interactive archive creator (tar.gz, tar.zst, zip) with progress"
+command = "cx __builtin tar-pack"
+preview_cmd = "echo 'Compresses files/folders into high-ratio tar.zst, tar.gz, or zip'"
+requires_sudo = false
+confirm = false
+deps = ["tar"]
+
+[commands.tar-unpack]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Extract any compressed archive automatically detecting format"
+command = "cx __builtin tar-unpack"
+preview_cmd = "ls -1 *.{tar.gz,tgz,tar.zst,tar.xz,zip,tar.bz2} 2>/dev/null || echo 'No archives in cwd'"
+requires_sudo = false
+confirm = false
+deps = ["tar"]
+
+[commands.hash-check]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Calculate and compare MD5/SHA256 checksums interactively"
+command = "cx __builtin hash-check"
+preview_cmd = "echo 'Calculates SHA256 and MD5 hashes with optional match verification'"
+requires_sudo = false
+confirm = false
+deps = ["sha256sum"]
+
+[commands.weather]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Minimalist ANSI terminal weather forecast for current location (wttr.in/?0)"
+command = "curl -s 'wttr.in/?0' || curl -s 'wttr.in'"
+preview_cmd = "curl -s 'wttr.in/?0' 2>/dev/null || echo 'Weather service unreachable'"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.calc]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Fast mathematical evaluator supporting basic arithmetic, roots, and trigonometry"
+command = "cx __builtin calc"
+preview_cmd = "echo 'Usage: cx calc \"sqrt(144) + sin(pi/2) * 5\"'"
+requires_sudo = false
+confirm = false
+deps = ["python3"]
+
+[commands.timer]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Countdown timer with terminal progress bar and desktop audio chime on completion"
+command = "cx __builtin timer"
+preview_cmd = "echo 'Usage: cx timer 5m (or 30s, 1h)'"
+requires_sudo = false
+confirm = false
+deps = ["python3"]
+
+[commands.stopwatch]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Precision terminal stopwatch with split times"
+command = "cx __builtin stopwatch"
+preview_cmd = "echo 'High-resolution terminal stopwatch with lap tracking'"
+requires_sudo = false
+confirm = false
+deps = ["python3"]
+
+[commands.notes]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Instant markdown scratchpad opened in $EDITOR saved with timestamp to ~/.local/share/corex/notes/"
+command = "cx __builtin notes"
+preview_cmd = "ls -lt ~/.local/share/corex/notes/*.md 2>/dev/null | head -n 8 || echo 'No notes yet'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.todo]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Minimalist CLI task tracker with fuzzy completion checklist"
+command = "cx __builtin todo"
+preview_cmd = "cat ~/.local/share/corex/todo.json 2>/dev/null | grep -o '\"task\": \"[^\"]*\"' | head -n 8 || echo 'No active tasks'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.url-short]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Generate a quick shortened URL from clipboard"
+command = "cx __builtin url-short"
+preview_cmd = "echo 'Shortens URL from clipboard via 0x0.st / TinyURL'"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.trash-empty]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Display size of trash directory and perform safe wipe"
+command = "size=$(du -sh ~/.local/share/Trash 2>/dev/null | awk '{print $1}') && echo \"Trash size: $size\" && rm -rf ~/.local/share/Trash/* && echo '✔ Trash emptied successfully.'"
+preview_cmd = "du -sh ~/.local/share/Trash 2>/dev/null || echo 'Trash empty'"
+requires_sudo = false
+confirm = true
+deps = []
+
+[commands.sys-info]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Pristine, customized minimalist hardware/OS summary card without bloated screenfetch ASCII"
+command = "cx __builtin sys-info"
+preview_cmd = "uname -srm 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
