@@ -308,10 +308,12 @@ def run_fzf(
 
     if multi:
         fzf_args.append("--multi")
-    if header:
+    if header and not any(isinstance(a, str) and a.startswith("--header") for a in (extra_args or [])):
         fzf_args.extend(["--header", header])
     if preview_cmd:
-        fzf_args.extend(["--preview", preview_cmd, f"--preview-window={preview_window}"])
+        fzf_args.extend(["--preview", preview_cmd])
+        if not any(isinstance(a, str) and a.startswith("--preview-window") for a in (extra_args or [])):
+            fzf_args.append(f"--preview-window={preview_window}")
     if extra_args:
         fzf_args.extend(extra_args)
 
@@ -1197,31 +1199,33 @@ def render_model_preview(model_name: str, cfg: CoreXConfig):
         pass
 
     active_model = cfg.ollama_model
+    div = f"  {Style.DARK_GRAY}" + "─" * 52 + f"{Style.RESET}"
 
-    print(box_header(f"MODEL SPECIFICATION: {spec['name']}", color=rating["color"]))
-    print(f" {Style.BOLD}Category:{Style.RESET}        {spec['category']}")
-    print(f" {Style.BOLD}Parameters:{Style.RESET}      {spec['params']}")
-    print(f" {Style.BOLD}Download Size:{Style.RESET}   {size_str}")
-    print(f" {Style.BOLD}Required VRAM:{Style.RESET}   ~{spec['vram_mb'] / 1024:.1f} GB (Weights + KV Cache)")
-    print(f" {Style.BOLD}Description:{Style.RESET}     {spec['desc']}")
-    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+    print(f"\n  {rating['color']}🧠 {Style.BOLD}{Style.WHITE}{spec['name']}{Style.RESET}")
+    print(f"  {Style.GRAY}{spec['desc']}{Style.RESET}\n")
+    print(div)
 
-    print(f" {Style.BOLD}HARDWARE PERFORMANCE ANALYSIS:{Style.RESET}")
+    print(f"  {Style.BOLD}Category:{Style.RESET}        {spec['category']}")
+    print(f"  {Style.BOLD}Parameters:{Style.RESET}      {spec['params']}")
+    print(f"  {Style.BOLD}Download Size:{Style.RESET}   {size_str}")
+    print(f"  {Style.BOLD}Required VRAM:{Style.RESET}   ~{spec['vram_mb'] / 1024:.1f} GB (Weights + KV Cache)")
+
+    print(f"\n{div}")
+    print(f"  {Style.BOLD}HARDWARE PERFORMANCE ANALYSIS{Style.RESET}")
     print(f"  • {Style.BOLD}Detected Host:{Style.RESET}   {hw['gpu_name']} ({hw['vram_total_mb']/1024:.1f} GB VRAM) | RAM: {hw['ram_total_mb']/1024:.1f} GB")
     print(f"  • {Style.BOLD}Rating Tier:{Style.RESET}     {rating['badge']}")
     print(f"  • {Style.BOLD}Execution Fit:{Style.RESET}   {rating['fit']}")
     print(f"  • {Style.BOLD}Estimated Speed:{Style.RESET} {rating['est_speed']}")
     print(f"  • {Style.BOLD}Feasibility:{Style.RESET}     {rating['note']}")
-    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
 
-    print(f" {Style.BOLD}DEPLOYMENT STATUS:{Style.RESET}")
+    print(f"\n{div}")
+    print(f"  {Style.BOLD}DEPLOYMENT STATUS{Style.RESET}")
     status_str = f"{Style.GREEN}✔ Installed & Ready{Style.RESET}" if installed else f"{Style.YELLOW}▲ Not Downloaded (Press ENTER to pull){Style.RESET}"
     if in_vram:
         status_str += f" | {Style.CYAN}⚡ Currently Live in VRAM{Style.RESET}"
     print(f"  • {Style.BOLD}Local Status:{Style.RESET}    {status_str}")
     default_str = f"{Style.GREEN}★ Active Default for cx ask{Style.RESET}" if raw_name == active_model else f"{Style.GRAY}Inactive (Press ENTER to activate){Style.RESET}"
     print(f"  • {Style.BOLD}Configuration:{Style.RESET}   {default_str}")
-    print(box_footer(color=rating["color"]))
 
 
 def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
@@ -1952,14 +1956,13 @@ def get_station_stream_title(url: str, timeout: float = 0.9) -> str:
 
 
 def render_radio_preview(target: str, cfg: CoreXConfig):
-    """Renders ANSI preview card for the FZF stream radio chooser."""
+    """Renders clean preview card for the FZF stream radio chooser."""
     all_stations = list(RADIO_STATIONS) + load_custom_radio_stations()
     raw = target.strip()
     st = next((s for s in all_stations if s["name"].lower() == raw.lower() or s["url"] == raw or raw.lower() in s["name"].lower()), None)
     if not st:
-        print(f"\n{box_header('RADIO STATION PREVIEW', color=Style.CYAN)}")
-        print(f" Station:  {raw}")
-        print(box_footer(color=Style.CYAN))
+        print(f"\n  {Style.CYAN}📻 STATION PREVIEW{Style.RESET}")
+        print(f"  {raw}")
         return
 
     cat_colors = {
@@ -1978,32 +1981,31 @@ def render_radio_preview(target: str, cfg: CoreXConfig):
         "News / Talk": Style.WHITE,
     }
     col = cat_colors.get(st["category"], Style.CYAN)
-
     cur_song = get_station_stream_title(st["url"])
+    div = f"  {Style.DARK_GRAY}" + "─" * 52 + f"{Style.RESET}"
 
-    print(box_header(f"STATION: {st['name']}", color=col))
-    print(f" {Style.BOLD}Category:{Style.RESET}       {col}{st['category']}{Style.RESET}")
-    print(f" {Style.BOLD}Genre / Style:{Style.RESET}  {st['genre']}")
-    print(f" {Style.BOLD}Description:{Style.RESET}    {st['desc']}")
-    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
-    print(f" {Style.BOLD}🎵 CURRENTLY STREAMING:{Style.RESET}")
+    print(f"\n  {col}📻 {Style.BOLD}{Style.WHITE}{st['name']}{Style.RESET}")
+    print(f"  {Style.GRAY}{st['desc']}{Style.RESET}\n")
+    print(div)
+
+    print(f"  {Style.BOLD}Category:{Style.RESET}       {col}{st['category']}{Style.RESET}")
+    print(f"  {Style.BOLD}Genre / Style:{Style.RESET}  {st['genre']}")
+
+    print(f"\n{div}")
+    print(f"  {Style.BOLD}🎵 CURRENTLY STREAMING{Style.RESET}")
     if cur_song and cur_song != "Live Broadcast Stream":
         print(f"  • {Style.BOLD}Now Playing:{Style.RESET}   {Style.GREEN}{Style.BOLD}{cur_song}{Style.RESET}")
     else:
         print(f"  • {Style.BOLD}Broadcast:{Style.RESET}     {Style.CYAN}Live 24/7 Audio Broadcast Stream{Style.RESET}")
-    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
-    print(f" {Style.BOLD}STREAM TELEMETRY & AUDIO ENGINE:{Style.RESET}")
-    print(f"  • {Style.BOLD}Protocol:{Style.RESET}     Direct HTTPS/HTTP Icecast/Shoutcast Stream")
-    print(f"  • {Style.BOLD}Playback:{Style.RESET}     mpv --no-video (PipeWire Low-Latency Audio)")
-    print(f"  • {Style.BOLD}Metadata:{Style.RESET}     Real-Time ICY Demuxing & Track OSD")
-    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
-    print(f" {Style.BOLD}HOTKEYS:{Style.RESET}")
-    print(f"  • {Style.BOLD}ENTER:{Style.RESET}        Tune in immediately (Opens Live Player)")
-    print(f"  • {Style.BOLD}CTRL-Y:{Style.RESET}       Copy stream URL to clipboard")
-    print(f"  • {Style.BOLD}q:{Style.RESET}            Stop playback cleanly")
-    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
-    print(f" {Style.BOLD}Direct URL:{Style.RESET}     {Style.GRAY}{st['url']}{Style.RESET}")
-    print(box_footer(color=col))
+
+    print(f"\n{div}")
+    print(f"  {Style.BOLD}STREAM TELEMETRY & AUDIO ENGINE{Style.RESET}")
+    print(f"  • Protocol:     Direct HTTPS/HTTP Icecast/Shoutcast Stream")
+    print(f"  • Playback:     mpv --no-video (PipeWire Low-Latency Audio)")
+    print(f"  • Metadata:     Real-Time ICY Demuxing & Track OSD")
+
+    print(f"\n{div}")
+    print(f"  {Style.BOLD}Direct URL:{Style.RESET}     {Style.GRAY}{st['url']}{Style.RESET}")
 
 
 def _play_radio_stream(st: Dict[str, Any]):
@@ -4113,12 +4115,17 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
     tag = CATEGORY_TAGS.get(spec.category, "@action")
     t_color = get_tag_color(tag)
 
-    print(box_header(f"ACTION: {spec.id}", color=t_color))
-    print(f" {Style.BOLD}Category:{Style.RESET}     {t_color}{tag:<8}{Style.RESET} {Style.DARK_GRAY}│{Style.RESET} {Style.GRAY}{spec.category}{Style.RESET}")
-    print(f" {Style.BOLD}Summary:{Style.RESET}      {Style.WHITE}{spec.description}{Style.RESET}")
+    div = f"  {Style.DARK_GRAY}" + "─" * 52 + f"{Style.RESET}"
+
+    print(f"\n  {t_color}⚡ {Style.BOLD}{Style.WHITE}{spec.id}{Style.RESET}")
+    print(f"  {Style.GRAY}{spec.description}{Style.RESET}\n")
+    print(div)
+
+    # Metadata
+    print(f"  {Style.BOLD}Category:{Style.RESET}     {t_color}{tag}{Style.RESET} {Style.DARK_GRAY}•{Style.RESET} {Style.GRAY}{spec.category}{Style.RESET}")
 
     if spec.requires_sudo:
-        priv_badge = f"{Style.ORANGE}{Style.BOLD}⚡ ROOT (Sudo Required){Style.RESET}"
+        priv_badge = f"{Style.YELLOW}⚡ ROOT (Sudo Required){Style.RESET}"
     else:
         priv_badge = f"{Style.GREEN}🛡️  USER (Safe){Style.RESET}"
 
@@ -4127,7 +4134,7 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
     else:
         conf_badge = f"{Style.GRAY}⚡ Instant Execution{Style.RESET}"
 
-    print(f" {Style.BOLD}Security:{Style.RESET}     {priv_badge}  {Style.DARK_GRAY}•{Style.RESET}  {conf_badge}")
+    print(f"  {Style.BOLD}Privilege:{Style.RESET}    {priv_badge}  {Style.DARK_GRAY}•{Style.RESET}  {conf_badge}")
 
     # Dependency check
     if spec.deps:
@@ -4137,36 +4144,51 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
                 dep_statuses.append(f"{Style.GREEN}✔ {d}{Style.RESET}")
             else:
                 dep_statuses.append(f"{Style.RED}▲ {d} missing{Style.RESET}")
-        print(f" {Style.BOLD}Dependencies:{Style.RESET} {' '.join(dep_statuses)}")
+        print(f"  {Style.BOLD}Dependencies:{Style.RESET} {' '.join(dep_statuses)}")
     else:
-        print(f" {Style.BOLD}Dependencies:{Style.RESET} {Style.GRAY}✔ Native shell / none{Style.RESET}")
+        print(f"  {Style.BOLD}Dependencies:{Style.RESET} {Style.GRAY}✔ Native shell / none{Style.RESET}")
 
     if spec.id == "comfy-boot":
-        print(f" {Style.BOLD}Target Root:{Style.RESET}  {cfg.comfyui_path} (venv: {cfg.comfyui_venv})")
+        print(f"  {Style.BOLD}Target Root:{Style.RESET}  {cfg.comfyui_path} (venv: {cfg.comfyui_venv})")
         tot, free = get_nvidia_vram()
         if free is not None:
             flag = "--highvram" if free >= cfg.vram_high_threshold_mb else ("--lowvram" if free < cfg.vram_low_threshold_mb else "--normalvram")
-            print(f" {Style.BOLD}Calculated:{Style.RESET}   {Style.GREEN}{flag}{Style.RESET} ({free} MiB free VRAM / {tot} MiB total)")
+            print(f"  {Style.BOLD}Calculated:{Style.RESET}   {Style.GREEN}{flag}{Style.RESET} ({free} MiB free VRAM / {tot} MiB total)")
 
-    print(f"\n {Style.BOLD}{Style.CYAN}Shell Command:{Style.RESET}")
+    print(f"\n{div}")
+    print(f"  {Style.BOLD}{Style.CYAN}SHELL COMMAND{Style.RESET}")
     cmd_lines = spec.command.strip().splitlines()
     for line in cmd_lines[:8]:
-        print(f"  {Style.DARK_GRAY}❯{Style.RESET} {Style.WHITE}{line}{Style.RESET}")
+        print(f"   {Style.DARK_GRAY}❯{Style.RESET} {Style.WHITE}{line}{Style.RESET}")
     if len(cmd_lines) > 8:
-        print(f"  {Style.GRAY}... ({len(cmd_lines) - 8} more lines){Style.RESET}")
+        print(f"   {Style.GRAY}... ({len(cmd_lines) - 8} more lines){Style.RESET}")
 
-    print(f"\n {Style.GRAY}Shortcuts: {Style.BOLD}[Enter]{Style.RESET} {Style.GRAY}Run │ {Style.BOLD}[^N]{Style.RESET} {Style.GRAY}Builder │ {Style.BOLD}[^Y]{Style.RESET} {Style.GRAY}Copy │ {Style.BOLD}[^D]{Style.RESET} {Style.GRAY}Dry-Run │ {Style.BOLD}[^E]{Style.RESET} {Style.GRAY}Edit{Style.RESET}")
-    print(box_footer(color=t_color))
-
-    if spec.preview_cmd and not spec.preview_cmd.startswith("cx __preview"):
-        print(f"\n{box_header('LIVE PREVIEW', color=Style.PURPLE)}")
-        try:
-            subprocess.run(spec.preview_cmd, shell=True, timeout=3.0)
-        except subprocess.TimeoutExpired:
-            print(f" {Style.GRAY}[Live preview timed out]{Style.RESET}")
-        except Exception as e:
-            print(f" {Style.GRAY}[Live preview error: {e}]{Style.RESET}")
-        print(box_footer(color=Style.PURPLE))
+    pcmd = spec.preview_cmd.strip() if spec.preview_cmd else ""
+    if pcmd:
+        # If preview_cmd is just an echo string, treat it as a clean Usage / Note
+        if (pcmd.startswith("echo '") and pcmd.endswith("'")) or (pcmd.startswith('echo "') and pcmd.endswith('"')):
+            echo_msg = pcmd[6:-1].strip()
+            if echo_msg and echo_msg.lower() != spec.description.lower():
+                print(f"\n{div}")
+                print(f"  {Style.BOLD}USAGE & NOTES{Style.RESET}")
+                print(f"  {Style.GRAY}{echo_msg}{Style.RESET}")
+        elif not pcmd.startswith("cx __preview"):
+            print(f"\n{div}")
+            print(f"  {Style.BOLD}{Style.PURPLE}LIVE SYSTEM TELEMETRY{Style.RESET}")
+            try:
+                res = subprocess.run(pcmd, shell=True, timeout=2.5, capture_output=True, text=True)
+                out_lines = [l for l in res.stdout.splitlines() if l.strip()]
+                if out_lines:
+                    for l in out_lines[:10]:
+                        print(f"   {Style.DARK_GRAY}│{Style.RESET} {l}")
+                    if len(out_lines) > 10:
+                        print(f"   {Style.GRAY}... ({len(out_lines) - 10} more lines){Style.RESET}")
+                elif res.stderr:
+                    print(f"   {Style.GRAY}{res.stderr.strip()}{Style.RESET}")
+            except subprocess.TimeoutExpired:
+                print(f"   {Style.GRAY}[Telemetry probe timed out]{Style.RESET}")
+            except Exception as e:
+                print(f"   {Style.GRAY}[Telemetry error: {e}]{Style.RESET}")
 
 
 # ---------------------------------------------------------------------------
@@ -4180,23 +4202,22 @@ def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
         t_color = get_tag_color(tag)
         has_missing = any(not shutil.which(d) for d in c.deps)
 
-        badges = []
         if has_missing:
-            badges.append(f"{Style.RED}{Style.BOLD}▲ MISSING{Style.RESET}")
-        if c.requires_sudo:
-            badges.append(f"{Style.YELLOW}⚡SUDO{Style.RESET}")
-
-        badge_str = " ".join(badges) if badges else f"{Style.DARK_GRAY}•{Style.RESET}"
+            badge = f"{Style.RED}▲{Style.RESET} "
+        elif c.requires_sudo:
+            badge = f"{Style.YELLOW}⚡{Style.RESET} "
+        else:
+            badge = f"{Style.DARK_GRAY}•{Style.RESET} "
 
         # Delimiter: tab
         # 1: id (hidden from display via --with-nth)
-        # 2: colored tag
-        # 3: command id
-        # 4: subtle vertical separator
-        # 5: description
-        # 6: badges
+        # 2: colored tag (e.g. @audio)
+        # 3: status badge (▲ or ⚡ or •)
+        # 4: command id (bold white)
+        # 5: subtle vertical separator
+        # 6: description
         items.append(
-            f"{c.id}\t{t_color}{tag:<9}{Style.RESET}\t{Style.BOLD}{Style.WHITE}{c.id:<22}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description:<48}{Style.RESET}\t{badge_str}"
+            f"{c.id}\t{t_color}{tag:<8}{Style.RESET}\t{badge}\t{Style.BOLD}{Style.WHITE}{c.id:<18}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description}{Style.RESET}"
         )
     return items
 
@@ -4210,22 +4231,22 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
     items = format_cockpit_items(cfg)
 
     preview_call = f"python3 '{self_exe}' __preview {{1}}"
-    header = (
-        f"  CoreX Cockpit • {len(cfg.commands)} Actions Ready  │  Type '@<tag>' to filter categories (e.g. @sys, @ai, @gpu)\n"
-        f"  [Enter] Run  │  [^N] Builder  │  [^Y] Copy  │  [^D] Dry-Run  │  [^E] Edit & Run  │  [^R] Reload  │  [ESC] Quit"
-    )
 
     extra = [
         "--delimiter=\t",
         "--with-nth=2,3,4,5,6",
-        "--header-first",
-        f"--header={header}",
         "--border=rounded",
         "--border-label= ⚡ COREX WORKSTATION COCKPIT ",
         "--border-label-pos=3",
-        "--preview-window=right:52%:border-rounded:wrap",
+        "--preview-window=right:50%:border-rounded:wrap",
         "--preview-label= ACTION DETAILS ",
         "--preview-label-pos=3",
+        "--header= Filter: @ai  @audio  @gpu  @sys  @net  @dev  @daily  @docker  @code ",
+        "--header-label= CATEGORIES ",
+        "--header-label-pos=3",
+        "--footer= [Enter] Run  │  [^N] Builder  │  [^Y] Copy  │  [^D] Dry-Run  │  [^E] Edit  │  [ESC] Quit ",
+        "--footer-label= KEYBINDINGS ",
+        "--footer-label-pos=3",
         "--prompt=  ◈ cx ❯ ",
         "--pointer=▶ ",
         "--marker=◈ ",
@@ -4239,7 +4260,7 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
         "--bind=?:toggle-preview",
     ]
 
-    sel = run_fzf(items, prompt="  ◈ cx ❯ ", preview_cmd=preview_call, extra_args=extra)
+    sel = run_fzf(items, prompt="  ◈ cx ❯ ", preview_cmd=preview_call, preview_window="right:50%:border-rounded:wrap", extra_args=extra)
     if not sel:
         return
 
