@@ -763,27 +763,189 @@ def builtin_my_ip():
     except Exception:
         pass
 
+    data = {}
+    # Provider 1: ipinfo.io
     try:
-        req = urllib.request.Request("https://ipapi.co/json/", headers={"User-Agent": "CoreX/3.0"})
+        req = urllib.request.Request("https://ipinfo.io/json", headers={"User-Agent": "CoreX/3.0"})
         with urllib.request.urlopen(req, timeout=3.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            pub_ip = data.get("ip", "Unknown")
-            city = data.get("city", "")
-            region = data.get("region", "")
-            country = data.get("country_name", "")
-            org = data.get("org", "Unknown")
-            print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.GREEN}{pub_ip}{Style.RESET}")
-            print(f" {Style.BOLD}Location:{Style.RESET}         {city}, {region}, {country}")
-            print(f" {Style.BOLD}ISP / ASN:{Style.RESET}        {org}")
+            parsed = json.loads(resp.read().decode("utf-8"))
+            if parsed.get("ip") and not parsed.get("error"):
+                data = {
+                    "ip": parsed.get("ip", "Unknown"),
+                    "city": parsed.get("city", ""),
+                    "region": parsed.get("region", ""),
+                    "country": parsed.get("country", ""),
+                    "org": parsed.get("org", "Unknown"),
+                }
     except Exception:
+        pass
+
+    # Provider 2: am.i.mullvad.net
+    if not data:
         try:
-            req = urllib.request.Request("https://api.ipify.org?format=json")
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.GREEN}{data.get('ip')}{Style.RESET}")
+            req = urllib.request.Request("https://am.i.mullvad.net/json", headers={"User-Agent": "CoreX/3.0"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                parsed = json.loads(resp.read().decode("utf-8"))
+                if parsed.get("ip"):
+                    data = {
+                        "ip": parsed.get("ip", "Unknown"),
+                        "city": parsed.get("city", ""),
+                        "region": "",
+                        "country": parsed.get("country", ""),
+                        "org": parsed.get("organization", "Unknown"),
+                    }
         except Exception:
-            print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.RED}Offline / Unreachable{Style.RESET}")
+            pass
+
+    # Provider 3: ipapi.co
+    if not data:
+        try:
+            req = urllib.request.Request("https://ipapi.co/json/", headers={"User-Agent": "CoreX/3.0"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                parsed = json.loads(resp.read().decode("utf-8"))
+                if parsed.get("ip") and not parsed.get("error"):
+                    data = {
+                        "ip": parsed.get("ip", "Unknown"),
+                        "city": parsed.get("city", ""),
+                        "region": parsed.get("region", ""),
+                        "country": parsed.get("country_name", ""),
+                        "org": parsed.get("org", "Unknown"),
+                    }
+        except Exception:
+            pass
+
+    # Provider 4: ipify.org
+    if not data:
+        try:
+            req = urllib.request.Request("https://api.ipify.org?format=json", headers={"User-Agent": "CoreX/3.0"})
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                parsed = json.loads(resp.read().decode("utf-8"))
+                if parsed.get("ip"):
+                    data = {"ip": parsed.get("ip"), "city": "", "region": "", "country": "", "org": "Unknown"}
+        except Exception:
+            pass
+
+    if data and data.get("ip"):
+        print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.GREEN}{data['ip']}{Style.RESET}")
+        loc_parts = [p for p in [data.get("city"), data.get("region"), data.get("country")] if p]
+        if loc_parts:
+            print(f" {Style.BOLD}Location:{Style.RESET}         {', '.join(loc_parts)}")
+        if data.get("org") and data.get("org") != "Unknown":
+            print(f" {Style.BOLD}ISP / ASN:{Style.RESET}        {data['org']}")
+    else:
+        print(f" {Style.BOLD}Public IP:{Style.RESET}        {Style.RED}Offline / Unreachable{Style.RESET}")
+
     print(box_footer())
+
+
+def builtin_url_short(target_url: Optional[str] = None):
+    """Shortens URL via multiple resilient APIs with automatic clipboard integration."""
+    import urllib.parse
+    import urllib.request
+
+    url = (target_url or "").strip()
+    if not url:
+        clip = ""
+        if shutil.which("wl-paste"):
+            try:
+                res = subprocess.run(["wl-paste"], capture_output=True, text=True, timeout=1.0)
+                clip = res.stdout.strip()
+            except Exception:
+                pass
+        if not clip and shutil.which("xclip"):
+            try:
+                res = subprocess.run(["xclip", "-o", "-selection", "clipboard"], capture_output=True, text=True, timeout=1.0)
+                clip = res.stdout.strip()
+            except Exception:
+                pass
+
+        if clip.startswith("http://") or clip.startswith("https://"):
+            print(f" {Style.GRAY}Clipboard URL detected:{Style.RESET} {clip}")
+            try:
+                ans = input(f" {Style.BOLD}Use clipboard URL? [Y/n]: {Style.RESET}").strip().lower()
+                if ans in ("", "y", "yes"):
+                    url = clip
+            except (KeyboardInterrupt, EOFError):
+                print()
+                return
+
+    if not url:
+        try:
+            url = input(f" {Style.BOLD}Enter URL to shorten: {Style.RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return
+
+    if not url:
+        log_warn("No URL provided.")
+        return
+
+    if not url.startswith("http://") and not url.startswith("https://"):
+        url = "https://" + url
+
+    log_info(f"Shortening URL: {url} ...")
+    short_url = None
+
+    # Endpoint 1: TinyURL
+    try:
+        enc = urllib.parse.quote(url, safe="")
+        req = urllib.request.Request(f"https://tinyurl.com/api-create.php?url={enc}", headers={"User-Agent": "CoreX/3.0"})
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            out = resp.read().decode("utf-8").strip()
+            if out.startswith("http://") or out.startswith("https://"):
+                short_url = out
+    except Exception:
+        pass
+
+    # Endpoint 2: clck.ru (Fallback)
+    if not short_url:
+        try:
+            enc = urllib.parse.quote(url, safe="")
+            req = urllib.request.Request(f"https://clck.ru/--?url={enc}", headers={"User-Agent": "CoreX/3.0"})
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                out = resp.read().decode("utf-8").strip()
+                if out.startswith("http://") or out.startswith("https://"):
+                    short_url = out
+        except Exception:
+            pass
+
+    # Endpoint 3: is.gd (Fallback)
+    if not short_url:
+        try:
+            enc = urllib.parse.quote(url, safe="")
+            req = urllib.request.Request(f"https://is.gd/create.php?format=simple&url={enc}", headers={"User-Agent": "CoreX/3.0"})
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                out = resp.read().decode("utf-8").strip()
+                if out.startswith("http://") or out.startswith("https://"):
+                    short_url = out
+        except Exception:
+            pass
+
+    if not short_url:
+        log_error("Failed to shorten URL. All shortening endpoints (TinyURL, Clck.ru, is.gd) were unreachable.")
+        return
+
+    # Auto-copy to system clipboard
+    copied = False
+    if shutil.which("wl-copy"):
+        try:
+            subprocess.run(["wl-copy"], input=short_url.encode("utf-8"), check=True)
+            copied = True
+        except Exception:
+            pass
+    if not copied and shutil.which("xclip"):
+        try:
+            subprocess.run(["xclip", "-selection", "clipboard"], input=short_url.encode("utf-8"), check=True)
+            copied = True
+        except Exception:
+            pass
+
+    print(f"\n{box_header('URL SHORTENER RESULT', color=Style.GREEN)}")
+    print(f" {Style.BOLD}Original:{Style.RESET}   {Style.GRAY}{url}{Style.RESET}")
+    print(f" {Style.BOLD}Shortened:{Style.RESET}  {Style.BOLD}{Style.CYAN}{short_url}{Style.RESET}")
+    if copied:
+        print(f" {Style.GREEN}✔ Copied to system clipboard!{Style.RESET}")
+    print(box_footer(color=Style.GREEN))
 
 
 def builtin_port_audit():
@@ -1403,7 +1565,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "sys-info", "irq-top", "oom-score", "ram-breakdown", "hugepages-toggle",
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
-        "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder"
+        "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
+        "url-short"
     }
 
     for cid, spec in cfg.commands.items():
@@ -2151,6 +2314,8 @@ def execute_command(
         "edit": "builder",
         "delete": "builder",
         "remove": "builder",
+        "shorten": "url-short",
+        "short": "url-short",
     }
     actual_id = alias_map.get(cmd_id, cmd_id)
     spec = cfg.commands.get(actual_id)
@@ -2300,6 +2465,9 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_serve_dir()
     elif name == "docker-fzf":
         builtin_docker_fzf()
+    elif name == "url-short":
+        target = args[0] if args else None
+        builtin_url_short(target)
     elif name == "calc":
         expr = " ".join(args) if args else None
         builtin_calc(expr)
@@ -2518,6 +2686,13 @@ def main():
     # Internal helper: return formatted lines for FZF reload
     if parsed.command == "__fzf_items":
         print("\n".join(format_cockpit_items(cfg)))
+        sys.exit(0)
+
+    # Internal helper: direct dispatch for cx __builtin <name>
+    if parsed.command == "__builtin":
+        b_name = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        b_args = (parsed.args[1:] if len(parsed.args) > 1 else []) + unknown[1:]
+        dispatch_builtin(b_name, cfg, dry_run=parsed.dry_run, extra_args=b_args)
         sys.exit(0)
 
     # Internal preview callback for fzf

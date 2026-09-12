@@ -430,7 +430,7 @@ deps = ["curl"]
 category = "Network, VPN & Remote Infrastructure"
 description = "Interactive fzf selector for WireGuard/OpenVPN/Proton configuration profiles"
 command = "conf=$(ls /etc/wireguard/*.conf ~/.config/wireguard/*.conf 2>/dev/null | fzf --prompt='Select VPN profile > ') && [ -n \"$conf\" ] && sudo wg-quick up \"$conf\" && echo \"✔ Connected to $(basename \"$conf\")\""
-preview_cmd = "sudo wg show 2>/dev/null || echo 'No active WireGuard tunnels'"
+preview_cmd = "sudo -n wg show 2>/dev/null || echo 'WireGuard tunnel inspection requires sudo (or no active tunnels)'"
 requires_sudo = true
 confirm = false
 deps = ["fzf"]
@@ -439,7 +439,7 @@ deps = ["fzf"]
 category = "Network, VPN & Remote Infrastructure"
 description = "Clean disconnect and DNS leak prevention restore"
 command = "sudo wg show interfaces 2>/dev/null | tr ' ' '\\n' | xargs -r -I{} sudo wg-quick down {} && echo '✔ Disconnected all VPN interfaces.'"
-preview_cmd = "sudo wg show 2>/dev/null || echo 'WireGuard inactive'"
+preview_cmd = "sudo -n wg show 2>/dev/null || echo 'WireGuard inactive or requires root'"
 requires_sudo = true
 confirm = false
 deps = []
@@ -457,7 +457,7 @@ deps = ["ss"]
 category = "Network, VPN & Remote Infrastructure"
 description = "Fast network speed and latency test"
 command = "speedtest-cli 2>/dev/null || curl -s https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py | python3 -"
-preview_cmd = "ping -c 3 1.1.1.1 2>/dev/null | tail -n 2 || echo 'Cannot reach 1.1.1.1'"
+preview_cmd = "ping -c 1 -W 1 1.1.1.1 2>/dev/null | tail -n 2 || echo 'Cannot reach 1.1.1.1'"
 requires_sudo = false
 confirm = false
 deps = ["curl"]
@@ -473,16 +473,16 @@ deps = ["ip"]
 
 [commands.ssh-fzf]
 category = "Network, VPN & Remote Infrastructure"
-description = "Interactive fuzzy selector pulling hosts from ~/.ssh/config for one-key remote connection"
-command = "host=$(grep -E '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '\\*' | fzf --prompt='Select SSH host > ') && [ -n \"$host\" ] && ssh \"$host\""
-preview_cmd = "grep -E '^Host ' ~/.ssh/config 2>/dev/null | head -n 10 || echo 'No ~/.ssh/config found'"
+description = "Interactive SSH connection picker parsing ~/.ssh/config hosts and known hosts"
+command = "host=$(grep -iE '^Host ' ~/.ssh/config 2>/dev/null | awk '{print $2}' | grep -v '*' | fzf --prompt='Select SSH host > ') && [ -n \"$host\" ] && ssh \"$host\""
+preview_cmd = "grep -iE '^Host ' ~/.ssh/config 2>/dev/null || echo 'No SSH hosts found'"
 requires_sudo = false
 confirm = false
 deps = ["ssh", "fzf"]
 
 [commands.serve-dir]
 category = "Network, VPN & Remote Infrastructure"
-description = "Spin up an instant ad-hoc Python HTTP file server in cwd and show a scannable QR code"
+description = "Spin up ad-hoc Python HTTP file server in current directory with terminal QR code for phone download"
 command = "cx __builtin serve-dir"
 preview_cmd = "echo 'Hosts current directory at http://<local-ip>:8000 with terminal QR code'"
 requires_sudo = false
@@ -493,7 +493,7 @@ deps = ["python3"]
 category = "Network, VPN & Remote Infrastructure"
 description = "Flush local systemd-resolved DNS cache"
 command = "sudo resolvectl flush-caches && echo '✔ DNS cache flushed.'"
-preview_cmd = "resolvectl statistics 2>/dev/null || echo 'systemd-resolved stats unavailable'"
+preview_cmd = "resolvectl dns 2>/dev/null || cat /etc/resolv.conf 2>/dev/null || echo 'DNS resolver status unavailable'"
 requires_sudo = true
 confirm = false
 deps = ["resolvectl"]
@@ -698,11 +698,11 @@ deps = []
 [commands.url-short]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
 description = "Generate a quick shortened URL from clipboard or input"
-command = "echo -n 'Enter URL to shorten (or leave empty for clipboard): ' && read -r u && [ -z \"$u\" ] && u=$(wl-paste 2>/dev/null || xclip -o 2>/dev/null) && [ -n \"$u\" ] && curl -s -F \"shorten=$u\" https://0x0.st || echo 'Failed to read URL'"
-preview_cmd = "echo 'Shortens URL via 0x0.st from clipboard or prompt'"
+command = "cx __builtin url-short"
+preview_cmd = "echo 'Shortens URL via TinyURL & Clck.ru with automatic clipboard sync'"
 requires_sudo = false
 confirm = false
-deps = ["curl"]
+deps = []
 
 [commands.trash-empty]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
@@ -739,7 +739,7 @@ deps = []
 category = "Kernel Tracing, Interrupts & eBPF"
 description = "Colorized, human-readable kernel ring buffer log stream filtering out noise and flagging hardware errors"
 command = "dmesg -wH --level=err,warn,alert,crit 2>/dev/null || sudo dmesg -wH"
-preview_cmd = "dmesg -T --level=err,warn 2>/dev/null | tail -n 12 || sudo dmesg -T | tail -n 12"
+preview_cmd = "journalctl -k -p 4 -n 12 --no-pager 2>/dev/null || dmesg -T --level=err,warn 2>/dev/null | tail -n 12 || echo 'Kernel log requires root'"
 requires_sudo = true
 confirm = false
 deps = ["dmesg"]
@@ -783,8 +783,8 @@ deps = []
 [commands.klog-err]
 category = "Kernel Tracing, Interrupts & eBPF"
 description = "Scan dmesg specifically for hardware MCE, PCIe AER, and kernel taint warnings"
-command = "dmesg -T | grep -iE 'mce|aer|taint|segfault|corrupted|error' | tail -n 30"
-preview_cmd = "dmesg -T 2>/dev/null | grep -iE 'error|warning|tainted' | tail -n 10 || echo 'No kernel errors logged'"
+command = "sudo dmesg -T 2>/dev/null | grep -iE 'mce|aer|taint|segfault|corrupted|error' | tail -n 30 || journalctl -k -p 3 -n 30 --no-pager"
+preview_cmd = "journalctl -k -p 3 -n 10 --no-pager 2>/dev/null || echo 'No kernel errors found'"
 requires_sudo = true
 confirm = false
 deps = ["dmesg"]
@@ -842,7 +842,7 @@ deps = ["vulkaninfo", "fzf"]
 category = "Vulkan, 3D & Graphics Telemetry"
 description = "View and toggle active Vulkan implicit/explicit validation and capture layers (MangoHud, OBS)"
 command = "cx __builtin vk-layers"
-preview_cmd = "ls -la /usr/share/vulkan/explicit_layer.d/ /usr/share/vulkan/implicit_layer.d/ ~/.local/share/vulkan/ 2>/dev/null"
+preview_cmd = "find /usr/share/vulkan/ ~/.local/share/vulkan/ -name '*.json' 2>/dev/null || echo 'No Vulkan layer manifests found'"
 requires_sudo = false
 confirm = false
 deps = []
@@ -1038,7 +1038,7 @@ deps = ["ss"]
 [commands.dns-leak-test]
 category = "Network Traffic Analysis & Socket Forensics"
 description = "Query external leak testing endpoints to verify DNS requests transit through encrypted tunnels"
-command = "curl -s 'https://api.mullvad.net/am-i-mullvad/' | jq . 2>/dev/null || curl -s https://am.i.mullvad.net/json | jq . 2>/dev/null || echo 'DNS leak endpoint query finished.'"
+command = "curl -s https://am.i.mullvad.net/json 2>/dev/null | jq . 2>/dev/null || curl -s https://ipinfo.io/json 2>/dev/null | jq . 2>/dev/null || echo 'Unable to reach leak test endpoints.'"
 preview_cmd = "cat /etc/resolv.conf 2>/dev/null"
 requires_sudo = false
 confirm = false
@@ -1101,7 +1101,7 @@ deps = []
 [commands.dns-benchmark]
 category = "Network Traffic Analysis & Socket Forensics"
 description = "Benchmark response latencies across Cloudflare, Quad9, Google, and local DNS resolvers"
-command = "for dns in 1.1.1.1 9.9.9.9 8.8.8.8 127.0.0.53; do echo -n \"Testing $dns: \"; dig @$dns google.com +stats | grep 'Query time:' || echo 'Timeout'; done"
+command = "for dns in 1.1.1.1 9.9.9.9 8.8.8.8 127.0.0.53; do echo -n \"Testing $dns: \"; dig @$dns google.com +time=2 +tries=1 +stats 2>/dev/null | grep 'Query time:' || echo 'Timeout'; done"
 preview_cmd = "cat /etc/resolv.conf 2>/dev/null"
 requires_sudo = false
 confirm = false
@@ -1111,7 +1111,7 @@ deps = ["dig"]
 category = "Network Traffic Analysis & Socket Forensics"
 description = "Scan local 2.4GHz / 5GHz / 6GHz Wi-Fi channels, signal strength (dBm), and BSSID congestion"
 command = "nmcli -f BSSID,SSID,CHAN,FREQ,RATE,SIGNAL,BARS,SECURITY dev wifi list --rescan yes"
-preview_cmd = "nmcli -f SSID,SIGNAL dev wifi 2>/dev/null | head -n 10"
+preview_cmd = "nmcli --rescan no -f SSID,SIGNAL dev wifi 2>/dev/null | head -n 10 || echo 'Wi-Fi interface inactive'"
 requires_sudo = false
 confirm = false
 deps = ["nmcli"]
@@ -1120,7 +1120,7 @@ deps = ["nmcli"]
 category = "Network Traffic Analysis & Socket Forensics"
 description = "Inspect UFW / iptables / nftables active rulesets and dropped packet counters"
 command = "sudo ufw status verbose 2>/dev/null || sudo nft list ruleset 2>/dev/null || sudo iptables -S"
-preview_cmd = "sudo ufw status 2>/dev/null || echo 'Firewall status check'"
+preview_cmd = "sudo -n ufw status 2>/dev/null || sudo -n nft list ruleset 2>/dev/null || echo 'Firewall inspection requires root'"
 requires_sudo = true
 confirm = false
 deps = []
@@ -1187,7 +1187,7 @@ deps = ["pw-link", "fzf"]
 category = "Audio Synthesis, Signal Routing & Metrology"
 description = "Inspect active PipeWire graph latency, quantum buffer sizes, and clock jitter"
 command = "pw-top 2>/dev/null || echo 'Install: sudo pacman -S pipewire'"
-preview_cmd = "pw-top -n 1 2>/dev/null | head -n 15"
+preview_cmd = "pw-top -b -n 1 2>/dev/null | head -n 15 || echo 'PipeWire top unavailable'"
 requires_sudo = false
 confirm = false
 deps = []
@@ -1195,7 +1195,7 @@ deps = []
 [commands.sweep-gen]
 category = "Audio Synthesis, Signal Routing & Metrology"
 description = "Generate 20Hz-20kHz logarithmic audio frequency sweep for frequency response testing"
-command = "ffmpeg -f lavfi -i \"sine=frequency=20:duration=10\" -af \"asetrate=48000*2^(t/10*9.965)\" -f wav - | mpv -"
+command = "ffmpeg -f lavfi -i \"sine=f=20:b=20000:d=10\" -f wav - | mpv -"
 preview_cmd = "echo 'Generates 20Hz to 20,000Hz continuous exponential frequency sweep'"
 requires_sudo = false
 confirm = false
@@ -1204,7 +1204,7 @@ deps = ["ffmpeg", "mpv"]
 [commands.bit-depth-check]
 category = "Audio Synthesis, Signal Routing & Metrology"
 description = "Audit ALSA and PipeWire hardware playback rate, sample format, and DAC bit depth"
-command = "cat /proc/asound/card*/pcm*p/sub*/hw_params 2>/dev/null || echo 'No active PCM playback streams in /proc/asound'"
+command = "grep -v 'closed' /proc/asound/card*/pcm*p/sub*/hw_params 2>/dev/null || echo 'No active PCM playback streams (all devices idle).'"
 preview_cmd = "cat /proc/asound/cards 2>/dev/null"
 requires_sudo = false
 confirm = false
@@ -1236,7 +1236,7 @@ deps = ["docker", "fzf"]
 category = "Container, Pod & Service Micro-Orchestration"
 description = "One-key interactive drop into an active container's bash or sh environment"
 command = "cid=$(docker ps --format '{{.ID}}\t{{.Names}}\t{{.Image}}' 2>/dev/null | fzf --prompt='Select container shell > ' | awk '{print $1}') && [ -n \"$cid\" ] && docker exec -it \"$cid\" sh -c 'bash || sh'"
-preview_cmd = "docker ps --format '{{.Names}} ({{.Image}})' 2>/dev/null"
+preview_cmd = "docker ps --format 'table {{.Names}}\t{{.Status}}' 2>/dev/null || echo 'Docker daemon not running or no active containers'"
 requires_sudo = false
 confirm = false
 deps = ["docker", "fzf"]
@@ -1245,7 +1245,7 @@ deps = ["docker", "fzf"]
 category = "Container, Pod & Service Micro-Orchestration"
 description = "Analyze Docker image layer sizes and waste extent using dive inside the terminal"
 command = "img=$(docker images --format '{{.Repository}}:{{.Tag}}' | fzf --prompt='Select image for dive > ') && [ -n \"$img\" ] && dive \"$img\""
-preview_cmd = "docker images --format '{{.Repository}}:{{.Tag}}\t{{.Size}}' 2>/dev/null | head -n 15"
+preview_cmd = "docker images --format 'table {{.Repository}}:{{.Tag}}\t{{.Size}}' 2>/dev/null | head -n 15 || echo 'Docker not running'"
 requires_sudo = false
 confirm = false
 deps = ["docker", "fzf"]
@@ -1263,7 +1263,7 @@ deps = ["curl", "jq"]
 category = "Container, Pod & Service Micro-Orchestration"
 description = "Live graphical CPU, memory, network I/O, and block I/O stream for all running containers"
 command = "docker stats"
-preview_cmd = "docker stats --no-stream 2>/dev/null"
+preview_cmd = "docker stats --no-stream 2>/dev/null || echo 'Docker daemon not running or no active containers'"
 requires_sudo = false
 confirm = false
 deps = ["docker"]
