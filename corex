@@ -6,13 +6,16 @@ Engineered for modern Linux power users (CachyOS/Arch, Hyprland, Fish/Bash/Zsh,
 Nvidia GPU, BTRFS/Snapper, Dev & AI workflows).
 """
 
+import json
 import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1881,6 +1884,73 @@ def load_custom_radio_stations() -> List[Dict[str, str]]:
         return []
 
 
+RADIO_SOCK = "/tmp/corex-radio.sock"
+RADIO_CACHE_FILE = "/tmp/corex_radio_cache.json"
+
+
+def get_station_stream_title(url: str, timeout: float = 0.9) -> str:
+    """Probes the live ICY metadata stream title for an Icecast/Shoutcast radio station with caching."""
+    # 1. If currently playing locally via mpv IPC socket, query it instantly (0ms)
+    if os.path.exists(RADIO_SOCK):
+        try:
+            info = get_now_playing()
+            if info and info.get("source") == "CoreX Radio Stream":
+                cur_raw = info.get("raw", "")
+                if cur_raw:
+                    return cur_raw
+        except Exception:
+            pass
+
+    # 2. Check disk cache (valid for 60 seconds)
+    cache: Dict[str, Any] = {}
+    if os.path.exists(RADIO_CACHE_FILE):
+        try:
+            with open(RADIO_CACHE_FILE, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        except Exception:
+            cache = {}
+    now = time.time()
+    if url in cache and (now - cache[url].get("ts", 0)) < 60:
+        return cache[url].get("title", "")
+
+    # 3. Fast probe ICY metadata via HTTP headers
+    title = None
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Icy-MetaData": "1",
+                "User-Agent": "CoreX/3.0 (Linux; +https://github.com/Darnix-a/CoreX)",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            metaint = int(resp.headers.get("icy-metaint", 0))
+            if metaint > 0:
+                resp.read(metaint)
+                b = resp.read(1)
+                if b:
+                    meta_len = ord(b) * 16
+                    if meta_len > 0:
+                        raw = resp.read(meta_len).decode("utf-8", errors="replace")
+                        m = re.search(r"StreamTitle='([^']*)'", raw)
+                        if m and m.group(1).strip():
+                            title = m.group(1).strip()
+    except Exception:
+        pass
+
+    if not title:
+        title = "Live Broadcast Stream"
+
+    cache[url] = {"title": title, "ts": now}
+    try:
+        with open(RADIO_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except Exception:
+        pass
+
+    return title
+
+
 def render_radio_preview(target: str, cfg: CoreXConfig):
     """Renders ANSI preview card for the FZF stream radio chooser."""
     all_stations = list(RADIO_STATIONS) + load_custom_radio_stations()
@@ -1909,63 +1979,271 @@ def render_radio_preview(target: str, cfg: CoreXConfig):
     }
     col = cat_colors.get(st["category"], Style.CYAN)
 
+    cur_song = get_station_stream_title(st["url"])
+
     print(box_header(f"STATION: {st['name']}", color=col))
     print(f" {Style.BOLD}Category:{Style.RESET}       {col}{st['category']}{Style.RESET}")
     print(f" {Style.BOLD}Genre / Style:{Style.RESET}  {st['genre']}")
     print(f" {Style.BOLD}Description:{Style.RESET}    {st['desc']}")
     print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+    print(f" {Style.BOLD}🎵 CURRENTLY STREAMING:{Style.RESET}")
+    if cur_song and cur_song != "Live Broadcast Stream":
+        print(f"  • {Style.BOLD}Now Playing:{Style.RESET}   {Style.GREEN}{Style.BOLD}{cur_song}{Style.RESET}")
+    else:
+        print(f"  • {Style.BOLD}Broadcast:{Style.RESET}     {Style.CYAN}Live 24/7 Audio Broadcast Stream{Style.RESET}")
+    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
     print(f" {Style.BOLD}STREAM TELEMETRY & AUDIO ENGINE:{Style.RESET}")
     print(f"  • {Style.BOLD}Protocol:{Style.RESET}     Direct HTTPS/HTTP Icecast/Shoutcast Stream")
-    print(f"  • {Style.BOLD}Playback:{Style.RESET}     mpv --no-video (Minimal RAM & CPU footprint)")
-    print(f"  • {Style.BOLD}Audio Subsys:{Style.RESET} PipeWire / WirePlumber Low-Latency Audio")
-    print(f"  • {Style.BOLD}Metadata:{Style.RESET}     Live Stream Icy-Title (Artist & Track OSD)")
+    print(f"  • {Style.BOLD}Playback:{Style.RESET}     mpv --no-video (PipeWire Low-Latency Audio)")
+    print(f"  • {Style.BOLD}Metadata:{Style.RESET}     Real-Time ICY Demuxing & Track OSD")
     print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
     print(f" {Style.BOLD}HOTKEYS:{Style.RESET}")
-    print(f"  • {Style.BOLD}ENTER:{Style.RESET}        Tune in immediately")
+    print(f"  • {Style.BOLD}ENTER:{Style.RESET}        Tune in immediately (Opens Live Player)")
     print(f"  • {Style.BOLD}CTRL-Y:{Style.RESET}       Copy stream URL to clipboard")
-    print(f"  • {Style.BOLD}q in mpv:{Style.RESET}     Stop playback cleanly")
+    print(f"  • {Style.BOLD}q:{Style.RESET}            Stop playback cleanly")
     print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
     print(f" {Style.BOLD}Direct URL:{Style.RESET}     {Style.GRAY}{st['url']}{Style.RESET}")
     print(box_footer(color=col))
 
 
-RADIO_SOCK = "/tmp/corex-radio.sock"
-
-
 def _play_radio_stream(st: Dict[str, Any]):
-    print(f"\n{box_header('LIVE RADIO TUNER', color=Style.CYAN)}")
-    print(f" Station:       {Style.BOLD}{st['name']}{Style.RESET}")
-    print(f" Category:      {st.get('category', 'Radio')}")
-    print(f" Genre / Style: {st.get('genre', 'Music')}")
-    print(f" Stream URL:    {st['url']}")
-    print(f" Audio Engine:  mpv --no-video (PipeWire)")
-    print(f" Control:       Press {Style.BOLD}'q'{Style.RESET} in terminal to stop playback")
-    print(f" Now Playing:   Run {Style.BOLD}'cx now-playing'{Style.RESET} or {Style.BOLD}'cx song'{Style.RESET} anytime to get track info")
-    print(box_footer(color=Style.CYAN))
-    log_step("Tuning in", f"Connecting to {st['name']}...")
+    """Tunes into a radio station with a live now-playing terminal cockpit and interactive controls."""
     if os.path.exists(RADIO_SOCK):
         try:
             os.remove(RADIO_SOCK)
         except Exception:
             pass
+
     cmd = [
         "mpv",
         "--no-video",
         f"--input-ipc-server={RADIO_SOCK}",
-        "--term-osd-bar",
-        "--display-tags=icy-title,Title,Artist,Album",
+        "--really-quiet",
         st["url"],
     ]
+
+    # Non-interactive / headless / background fallback
+    if not sys.stdin.isatty():
+        cmd = [
+            "mpv",
+            "--no-video",
+            f"--input-ipc-server={RADIO_SOCK}",
+            "--term-status-msg=🎵 ${metadata/by-key/icy-title:${media-title}}",
+            st["url"],
+        ]
+        try:
+            subprocess.run(cmd)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if os.path.exists(RADIO_SOCK):
+                try:
+                    os.remove(RADIO_SOCK)
+                except Exception:
+                    pass
+        return
+
+    # Interactive TTY Mode with Live Now-Playing Cockpit
+    print(f"\n{box_header('CONNECTING TO RADIO STREAM', color=Style.CYAN)}")
+    print(f" Station:  {Style.BOLD}{st['name']}{Style.RESET}")
+    print(f" Genre:    {st.get('genre', 'Music')}")
+    print(f" URL:      {st['url']}")
+    print(f" Audio:    mpv --no-video (PipeWire Low-Latency)")
+    print(box_footer(color=Style.CYAN))
+    log_step("Tuning in", f"Connecting to {st['name']}...")
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    import termios
+    import tty
+    import select
+
+    old_term = None
     try:
-        subprocess.run(cmd)
+        old_term = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())
+    except Exception:
+        old_term = None
+
+    sock = None
+    track_title = "Buffering stream..."
+    is_paused = False
+    vol = 100.0
+    is_mute = False
+    recent_tracks: List[Tuple[str, str]] = []
+    flash_msg = ""
+    flash_time = 0.0
+
+    try:
+        # Wait up to 3 seconds for mpv IPC socket to be ready
+        for _ in range(30):
+            if os.path.exists(RADIO_SOCK):
+                break
+            if proc.poll() is not None:
+                break
+            time.sleep(0.1)
+
+        if os.path.exists(RADIO_SOCK):
+            try:
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.connect(RADIO_SOCK)
+                sock.setblocking(False)
+                # Observe metadata, pause, volume, mute
+                sock.sendall(json.dumps({"command": ["observe_property", 1, "metadata"]}).encode("utf-8") + b"\n")
+                sock.sendall(json.dumps({"command": ["observe_property", 2, "pause"]}).encode("utf-8") + b"\n")
+                sock.sendall(json.dumps({"command": ["observe_property", 3, "volume"]}).encode("utf-8") + b"\n")
+                sock.sendall(json.dumps({"command": ["observe_property", 4, "mute"]}).encode("utf-8") + b"\n")
+            except Exception:
+                sock = None
+
+        def redraw_tuner(elapsed_sec: int):
+            sys.stdout.write("\033[2J\033[H")  # Clear screen and move cursor to top-left
+            status_str = f"{Style.YELLOW}⏸ PAUSED{Style.RESET}" if is_paused else f"{Style.GREEN}● PLAYING{Style.RESET}"
+            mins, secs = divmod(elapsed_sec, 60)
+            dur_str = f"{mins:02d}:{secs:02d}"
+            vol_str = f"{Style.RED}MUTED{Style.RESET}" if is_mute else f"{int(vol)}%"
+
+            print(box_header(f"LIVE RADIO TUNER: {st['name']}", color=Style.CYAN))
+            print(f"  • {Style.BOLD}Category:{Style.RESET}     {st.get('category', 'Radio'):<20} {Style.BOLD}Genre:{Style.RESET} {st.get('genre', 'Music')}")
+            print(f"  • {Style.BOLD}Playback:{Style.RESET}     {status_str} ({dur_str})      {Style.BOLD}Volume:{Style.RESET} {vol_str}")
+            print(f"{Style.DARK_GRAY}{'─' * 64}{Style.RESET}")
+            print(f"  {Style.BOLD}🎵 CURRENTLY STREAMING SONG:{Style.RESET}")
+            if track_title and track_title != "Buffering stream...":
+                print(f"     {Style.GREEN}{Style.BOLD}{track_title}{Style.RESET}")
+            else:
+                print(f"     {Style.GRAY}Demuxing stream & awaiting track metadata...{Style.RESET}")
+            print(f"{Style.DARK_GRAY}{'─' * 64}{Style.RESET}")
+            print(f"  {Style.BOLD}HOTKEYS:{Style.RESET}")
+            print(f"  [q] Stop & Exit   [Space] Pause   [c] Copy Song   [-/+] Volume   [m] Mute")
+            if flash_msg and (time.time() - flash_time < 3.5):
+                print(f"{Style.DARK_GRAY}{'─' * 64}{Style.RESET}")
+                print(f"  {flash_msg}")
+            if recent_tracks:
+                print(f"{Style.DARK_GRAY}{'─' * 64}{Style.RESET}")
+                print(f"  {Style.BOLD}Track History (This Session):{Style.RESET}")
+                for t_time, t_name in recent_tracks[-5:]:
+                    print(f"   {Style.DARK_GRAY}• [{t_time}]{Style.RESET} {t_name}")
+            print(box_footer(color=Style.CYAN))
+            sys.stdout.flush()
+
+        start_time = time.time()
+        last_render = 0.0
+        buf = ""
+
+        sys.stdout.write(f"\033]0;🎵 Connecting... | {st['name']} - CoreX Radio\007")
+        sys.stdout.flush()
+
+        while proc.poll() is None:
+            now = time.time()
+            elapsed = int(now - start_time)
+
+            rlist = [sys.stdin]
+            if sock:
+                rlist.append(sock)
+
+            r, _, _ = select.select(rlist, [], [], 0.5)
+
+            if sock in r:
+                try:
+                    chunk = sock.recv(4096).decode("utf-8", errors="replace")
+                    if chunk:
+                        buf += chunk
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            if not line.strip():
+                                continue
+                            try:
+                                ev = json.loads(line.strip())
+                                if ev.get("event") == "property-change":
+                                    pname = ev.get("name")
+                                    pdata = ev.get("data")
+                                    if pname == "metadata" and isinstance(pdata, dict):
+                                        new_t = pdata.get("icy-title") or pdata.get("icy-name")
+                                        if new_t and new_t != track_title:
+                                            track_title = new_t
+                                            cur_clock = time.strftime("%H:%M:%S")
+                                            recent_tracks.append((cur_clock, new_t))
+                                            try:
+                                                cache = {}
+                                                if os.path.exists(RADIO_CACHE_FILE):
+                                                    with open(RADIO_CACHE_FILE, "r") as f:
+                                                        cache = json.load(f)
+                                                cache[st["url"]] = {"title": new_t, "ts": time.time()}
+                                                with open(RADIO_CACHE_FILE, "w") as f:
+                                                    json.dump(cache, f)
+                                            except Exception:
+                                                pass
+                                            sys.stdout.write(f"\033]0;🎵 {new_t} | {st['name']} - CoreX Radio\007")
+                                            sys.stdout.flush()
+                                            redraw_tuner(elapsed)
+                                    elif pname == "pause":
+                                        is_paused = bool(pdata)
+                                        redraw_tuner(elapsed)
+                                    elif pname == "volume":
+                                        vol = float(pdata) if pdata is not None else 100.0
+                                        redraw_tuner(elapsed)
+                                    elif pname == "mute":
+                                        is_mute = bool(pdata)
+                                        redraw_tuner(elapsed)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            if sys.stdin in r:
+                ch = sys.stdin.read(1)
+                if ch in ("q", "Q", "\x03", "\x04"):
+                    break
+                elif ch in (" ", "p", "P"):
+                    if sock:
+                        sock.sendall(json.dumps({"command": ["cycle", "pause"]}).encode("utf-8") + b"\n")
+                elif ch in ("c", "C", "y", "Y"):
+                    if track_title and track_title != "Buffering stream...":
+                        copy_to_clipboard(track_title)
+                        flash_msg = f"{Style.GREEN}✔ Copied to clipboard:{Style.RESET} '{track_title}'"
+                        flash_time = time.time()
+                        redraw_tuner(elapsed)
+                elif ch in ("-", "9", "_"):
+                    if sock:
+                        sock.sendall(json.dumps({"command": ["add", "volume", -5]}).encode("utf-8") + b"\n")
+                elif ch in ("+", "=", "0"):
+                    if sock:
+                        sock.sendall(json.dumps({"command": ["add", "volume", 5]}).encode("utf-8") + b"\n")
+                elif ch in ("m", "M"):
+                    if sock:
+                        sock.sendall(json.dumps({"command": ["cycle", "mute"]}).encode("utf-8") + b"\n")
+
+            if now - last_render >= 1.0:
+                last_render = now
+                redraw_tuner(elapsed)
+
     except KeyboardInterrupt:
-        print()
+        pass
     finally:
+        sys.stdout.write("\033]0;\007")
+        sys.stdout.flush()
+        if old_term is not None:
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_term)
+            except Exception:
+                pass
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.5)
+            except Exception:
+                proc.kill()
         if os.path.exists(RADIO_SOCK):
             try:
                 os.remove(RADIO_SOCK)
             except Exception:
                 pass
+        print(f"\n{Style.CYAN}Radio playback stopped. Thanks for listening!{Style.RESET}\n")
 
 
 def builtin_stream_radio(extra_args: Optional[List[str]] = None):
