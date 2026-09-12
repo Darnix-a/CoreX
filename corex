@@ -1,37 +1,47 @@
 #!/usr/bin/env python3
 """
-CoreX (cx) - 75+ Command Mission-Control Workstation Engine & Terminal Launcher
+CoreX (cx) - 150+ Operational Action Workstation Engine & Terminal Launcher
+Phase 3 Enterprise Edition with @category fuzzy filtering, hotkeys, and --bg daemon runner.
 Engineered for modern Linux power users (CachyOS/Arch, Hyprland, Fish/Bash/Zsh,
 Nvidia GPU, BTRFS/Snapper, Dev & AI workflows).
 """
 
-import argparse
-import dataclasses
-import datetime
-import json
-import math
 import os
 import re
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import time
 import tomllib
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
 DEFAULT_CONFIG_TEMPLATE = Path(__file__).resolve().parent / "config.default.toml"
 NOTES_DIR = Path.home() / ".local" / "share" / "corex" / "notes"
 TODO_FILE = Path.home() / ".local" / "share" / "corex" / "todo.json"
 
+CATEGORY_TAGS = {
+    "AI, CUDA & Deep Learning": "@ai",
+    "Media, Audio & PipeWire Power-Tools": "@audio",
+    "Gaming, Hardware & Display Orchestration": "@gpu",
+    "System Architecture & BTRFS Snapshotting": "@sys",
+    "Network, VPN & Remote Infrastructure": "@net",
+    "Git, Dev & Code Utilities": "@dev",
+    "Daily Driver Quality-of-Life & Crypto/Files": "@daily",
+    "Kernel Tracing, Interrupts & eBPF": "@kernel",
+    "Vulkan, 3D & Graphics Telemetry": "@vulkan",
+    "Memory, HugePages & Storage Forensics": "@mem",
+    "Network Traffic Analysis & Socket Forensics": "@netflow",
+    "Audio Synthesis, Signal Routing & Metrology": "@dsp",
+    "Container, Pod & Service Micro-Orchestration": "@docker",
+    "Local Development & Code Diagnostics": "@code",
+}
+
 # ---------------------------------------------------------------------------
-# ANSI Terminal Styling & Engine
+# ANSI Terminal Styling
 # ---------------------------------------------------------------------------
 class Style:
     RESET = "\033[0m"
@@ -53,24 +63,24 @@ class Style:
     PURPLE = "\033[38;5;141m"
     TEAL = "\033[38;5;44m"
 
-    BG_DARK = "\033[48;5;235m"
-    BG_BLUE = "\033[48;5;24m"
-    BG_RED = "\033[48;5;52m"
-    BG_GREEN = "\033[48;5;22m"
-
     @classmethod
     def strip(cls, text: str) -> str:
         return re.sub(r"\033\[[0-9;]*m", "", text)
 
 
-def print_banner(dry_run: bool = False):
-    dry_badge = f" {Style.YELLOW}[DRY-RUN MODE]{Style.RESET}" if dry_run else ""
+def print_banner(dry_run: bool = False, bg_run: bool = False):
+    badges = []
+    if dry_run:
+        badges.append(f"{Style.YELLOW}[DRY-RUN]{Style.RESET}")
+    if bg_run:
+        badges.append(f"{Style.PURPLE}[BG-DAEMON]{Style.RESET}")
+    badge_str = (" " + " ".join(badges)) if badges else ""
     banner = f"""
 {Style.CYAN}{Style.BOLD}   ______                     _  __
   / ____/____   _____ ___     | |/ /
  / /    / __ \\ / ___// _ \\    |   / 
 / /___ / /_/ // /   /  __/   /   |  
-\\____/ \\____//_/    \\___/   /_/|_|  {Style.GRAY}v{VERSION} WORKSTATION COCKPIT{dry_badge}
+\\____/ \\____//_/    \\___/   /_/|_|  {Style.GRAY}v{VERSION} WORKSTATION COCKPIT{badge_str}
 {Style.DARK_GRAY}──────────────────────────────────────────────────────────────────{Style.RESET}"""
     print(banner)
 
@@ -107,35 +117,56 @@ def box_footer(width: int = 70) -> str:
 # ---------------------------------------------------------------------------
 # Declarative Command Model & TOML Config Loader
 # ---------------------------------------------------------------------------
-@dataclasses.dataclass
 class CommandSpec:
-    id: str
-    category: str
-    description: str
-    command: str
-    preview_cmd: str = ""
-    requires_sudo: bool = False
-    confirm: bool = False
-    deps: List[str] = dataclasses.field(default_factory=list)
+    __slots__ = (
+        "id",
+        "category",
+        "description",
+        "command",
+        "preview_cmd",
+        "requires_sudo",
+        "confirm",
+        "deps",
+    )
+
+    def __init__(
+        self,
+        id: str,
+        category: str,
+        description: str,
+        command: str,
+        preview_cmd: str = "",
+        requires_sudo: bool = False,
+        confirm: bool = False,
+        deps: Optional[List[str]] = None,
+    ):
+        self.id = id
+        self.category = category
+        self.description = description
+        self.command = command
+        self.preview_cmd = preview_cmd
+        self.requires_sudo = requires_sudo
+        self.confirm = confirm
+        self.deps = deps if deps is not None else []
 
 
-@dataclasses.dataclass
 class CoreXConfig:
-    editor: str = ""
-    notes_dir: Path = NOTES_DIR
-    todo_file: Path = TODO_FILE
-    color: bool = True
-    comfyui_path: Path = Path.home() / "ComfyUI"
-    comfyui_venv: str = "venv"
-    comfyui_port: int = 8188
-    comfyui_host: str = "127.0.0.1"
-    vram_high_threshold_mb: int = 8192
-    vram_low_threshold_mb: int = 4096
-    comfyui_extra_flags: List[str] = dataclasses.field(default_factory=lambda: ["--preview-method", "auto"])
-    comfyui_auto_browser: bool = True
-    comfyui_notify: bool = True
-    ollama_url: str = "http://127.0.0.1:11434"
-    commands: Dict[str, CommandSpec] = dataclasses.field(default_factory=dict)
+    def __init__(self):
+        self.editor: str = ""
+        self.notes_dir: Path = NOTES_DIR
+        self.todo_file: Path = TODO_FILE
+        self.color: bool = True
+        self.comfyui_path: Path = Path.home() / "ComfyUI"
+        self.comfyui_venv: str = "venv"
+        self.comfyui_port: int = 8188
+        self.comfyui_host: str = "127.0.0.1"
+        self.vram_high_threshold_mb: int = 8192
+        self.vram_low_threshold_mb: int = 4096
+        self.comfyui_extra_flags: List[str] = ["--preview-method", "auto"]
+        self.comfyui_auto_browser: bool = True
+        self.comfyui_notify: bool = True
+        self.ollama_url: str = "http://127.0.0.1:11434"
+        self.commands: Dict[str, CommandSpec] = {}
 
 
 def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
@@ -265,7 +296,7 @@ def run_fzf(
 
 
 # ---------------------------------------------------------------------------
-# BUILT-IN POWER UTILITIES IMPLEMENTATION
+# BUILT-IN POWER UTILITIES
 # ---------------------------------------------------------------------------
 def get_nvidia_vram() -> Tuple[Optional[int], Optional[int]]:
     if not shutil.which("nvidia-smi"):
@@ -285,8 +316,8 @@ def get_nvidia_vram() -> Tuple[Optional[int], Optional[int]]:
 
 
 def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
+    import socket
     log_info("Inspecting ComfyUI workspace environment...")
-    # Port check
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.2)
         try:
@@ -310,7 +341,6 @@ def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Opti
         log_error(f"Could not locate ComfyUI at '{comfy_dir}'. Check ~/.config/corex/config.toml")
         return
 
-    # Venv detection
     python_bin = sys.executable
     for v in ["venv", ".venv", "env"]:
         p = comfy_dir / v / "bin" / "python"
@@ -353,6 +383,8 @@ def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Opti
 
 
 def builtin_ollama_ps(cfg: CoreXConfig):
+    import json
+    import urllib.request
     api_url = cfg.ollama_url.rstrip("/")
     try:
         req = urllib.request.Request(f"{api_url}/api/ps", headers={"User-Agent": "CoreX"})
@@ -376,6 +408,8 @@ def builtin_ollama_ps(cfg: CoreXConfig):
 
 
 def builtin_ollama_drop(cfg: CoreXConfig):
+    import json
+    import urllib.request
     api_url = cfg.ollama_url.rstrip("/")
     try:
         req = urllib.request.Request(f"{api_url}/api/ps", headers={"User-Agent": "CoreX"})
@@ -687,8 +721,9 @@ def builtin_snap_fzf():
 
 
 def builtin_my_ip():
+    import json
+    import urllib.request
     print(box_header("NETWORK INTERFACES & PUBLIC IP"))
-    # Local IP & Gateway
     try:
         res = subprocess.run(["ip", "-br", "addr", "show", "up"], capture_output=True, text=True)
         print(f" {Style.BOLD}Local Interfaces:{Style.RESET}")
@@ -700,7 +735,7 @@ def builtin_my_ip():
         pass
 
     try:
-        req = urllib.request.Request("https://ipapi.co/json/", headers={"User-Agent": "CoreX/2.0"})
+        req = urllib.request.Request("https://ipapi.co/json/", headers={"User-Agent": "CoreX/3.0"})
         with urllib.request.urlopen(req, timeout=3.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             pub_ip = data.get("ip", "Unknown")
@@ -741,7 +776,7 @@ def builtin_port_audit():
 
 
 def builtin_serve_dir():
-    # Detect local IP
+    import socket
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
@@ -798,6 +833,7 @@ def builtin_docker_fzf():
 
 
 def builtin_calc(expr: Optional[str] = None):
+    import math
     exp = expr
     if not exp:
         print(f"{Style.CYAN}Expression (supports sqrt, sin, cos, pi, log, etc.):{Style.RESET} ", end="", flush=True)
@@ -861,16 +897,12 @@ def builtin_timer(duration_str: Optional[str] = None):
 
 def builtin_stopwatch():
     print(box_header("PRECISION STOPWATCH"))
-    print(" [ENTER]: Lap / Split  |  [CTRL+C]: Stop")
+    print(" [CTRL+C]: Stop")
     print(box_footer())
     start = time.time()
-    lap_start = start
-    lap_num = 1
     try:
         while True:
-            # We poll stdin non-blockingly
-            now = time.time()
-            elapsed = now - start
+            elapsed = time.time() - start
             m, s = divmod(elapsed, 60)
             ms = int((elapsed - int(elapsed)) * 1000)
             print(f"\r {Style.CYAN}{Style.BOLD}⏱  {int(m):02d}:{int(s):02d}.{ms:03d}{Style.RESET}", end="", flush=True)
@@ -883,6 +915,7 @@ def builtin_stopwatch():
 
 
 def builtin_notes(cfg: CoreXConfig, title: Optional[str] = None):
+    import datetime
     cfg.notes_dir.mkdir(parents=True, exist_ok=True)
     ed = get_default_editor(cfg)
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -913,6 +946,8 @@ def builtin_notes(cfg: CoreXConfig, title: Optional[str] = None):
 
 
 def builtin_todo(cfg: CoreXConfig):
+    import datetime
+    import json
     cfg.todo_file.parent.mkdir(parents=True, exist_ok=True)
     tasks: List[Dict[str, Any]] = []
     if cfg.todo_file.exists():
@@ -988,19 +1023,291 @@ def builtin_sys_info():
     print(box_footer())
 
 
+# --- PHASE 3 BUILT-IN POWER UTILITIES ---
+def builtin_irq_top():
+    print(box_header("HARDWARE & SOFTWARE INTERRUPTS (TOP IRQs)"))
+    try:
+        lines = Path("/proc/interrupts").read_text().splitlines()
+        cpus = lines[0].split()
+        num_cpus = len(cpus)
+        print(f" {Style.BOLD}Online CPU Cores:{Style.RESET} {num_cpus}")
+        print(f"\n {Style.BOLD}{'IRQ':<6} {'TOTAL':<14} {'TYPE':<16} {'DEVICE / SUBSYSTEM'}{Style.RESET}")
+        print(f" {Style.DARK_GRAY}{'─' * 66}{Style.RESET}")
+        irq_data = []
+        for l in lines[1:]:
+            parts = l.split(None, num_cpus + 2)
+            if len(parts) >= num_cpus + 2:
+                irq_id = parts[0].replace(":", "")
+                counts = [int(x) for x in parts[1:num_cpus + 1] if x.isdigit()]
+                total = sum(counts)
+                irq_type = parts[num_cpus + 1] if len(parts) > num_cpus + 1 else ""
+                device = parts[num_cpus + 2] if len(parts) > num_cpus + 2 else ""
+                irq_data.append((total, irq_id, irq_type, device))
+        irq_data.sort(reverse=True, key=lambda x: x[0])
+        for tot, i_id, i_type, dev in irq_data[:20]:
+            print(f" {i_id:<6} {tot:<14} {i_type:<16} {Style.CYAN}{dev}{Style.RESET}")
+    except Exception as e:
+        log_error(f"Cannot read /proc/interrupts: {e}")
+    print(box_footer())
+
+
+def builtin_oom_score():
+    print(box_header("OUT-OF-MEMORY (OOM) KILLER BADNESS RANKING"))
+    procs = []
+    for pid_dir in Path("/proc").glob("[0-9]*"):
+        try:
+            pid = pid_dir.name
+            score_f = pid_dir / "oom_score"
+            cmd_f = pid_dir / "cmdline"
+            if score_f.exists() and cmd_f.exists():
+                score = int(score_f.read_text().strip())
+                cmd = cmd_f.read_text().replace("\0", " ").strip()
+                if not cmd:
+                    cmd = (pid_dir / "comm").read_text().strip()
+                procs.append((score, pid, cmd[:40]))
+        except Exception:
+            continue
+    procs.sort(reverse=True, key=lambda x: x[0])
+    print(f" {Style.BOLD}{'OOM SCORE':<12} {'PID':<8} {'COMMAND'}{Style.RESET}")
+    print(f" {Style.DARK_GRAY}{'─' * 66}{Style.RESET}")
+    for score, pid, cmd in procs[:25]:
+        color = Style.RED if score > 500 else (Style.YELLOW if score > 100 else Style.GREEN)
+        print(f" {color}{score:<12}{Style.RESET} {pid:<8} {cmd}")
+    print(box_footer())
+
+
+def builtin_ram_breakdown():
+    print(box_header("PHYSICAL RAM FORENSIC BREAKDOWN"))
+    try:
+        mem = Path("/proc/meminfo").read_text()
+        def get_kb(key: str) -> int:
+            m = re.search(rf"^{key}:\s+(\d+)", mem, re.M)
+            return int(m.group(1)) if m else 0
+
+        tot = get_kb("MemTotal") // 1024
+        free = get_kb("MemFree") // 1024
+        avail = get_kb("MemAvailable") // 1024
+        active = get_kb("Active") // 1024
+        inactive = get_kb("Inactive") // 1024
+        dirty = get_kb("Dirty") // 1024
+        wb = get_kb("Writeback") // 1024
+        anon = get_kb("AnonPages") // 1024
+        slab = get_kb("Slab") // 1024
+        s_rec = get_kb("SReclaimable") // 1024
+        s_unrec = get_kb("SUnreclaim") // 1024
+        zram_kb = get_kb("Zram")
+
+        print(f" {Style.BOLD}Total Physical RAM:{Style.RESET}  {tot} MiB")
+        print(f" {Style.BOLD}Available Memory:{Style.RESET}    {Style.GREEN}{avail} MiB{Style.RESET} ({avail/tot*100:.1f}%)")
+        print(f" {Style.BOLD}Active Working Set:{Style.RESET}  {active} MiB | {Style.BOLD}Inactive:{Style.RESET} {inactive} MiB")
+        print(f" {Style.BOLD}Anonymous Pages:{Style.RESET}     {anon} MiB")
+        print(f" {Style.BOLD}Dirty / Writeback:{Style.RESET}   {dirty} MiB / {wb} MiB")
+        print(f" {Style.BOLD}Kernel Slab Cache:{Style.RESET}   {slab} MiB (Reclaimable: {s_rec} MiB | Unreclaim: {s_unrec} MiB)")
+        if zram_kb:
+            print(f" {Style.BOLD}ZRAM In-Memory:{Style.RESET}      {zram_kb // 1024} MiB")
+    except Exception as e:
+        log_error(f"RAM breakdown failed: {e}")
+    print(box_footer())
+
+
+def builtin_hugepages_toggle():
+    p = Path("/sys/kernel/mm/transparent_hugepage/enabled")
+    if not p.exists():
+        log_warn("Transparent HugePages not supported on this kernel.")
+        return
+    cur = p.read_text().strip()
+    print(f"Current Transparent HugePages setting: {Style.BOLD}{cur}{Style.RESET}")
+    choice = run_fzf(["always", "madvise", "never"], prompt="Select Transparent HugePages state > ")
+    if choice:
+        st = choice[0]
+        subprocess.run(f"echo {st} | sudo tee {p}", shell=True)
+        log_success(f"HugePages state set to '{st}'")
+
+
+def builtin_socket_summary():
+    print(box_header("SOCKET CONNECTION SUMMARY"))
+    subprocess.run(["ss", "-s"])
+    print(box_footer())
+
+
+def builtin_kmod_fzf():
+    res = subprocess.run(["lsmod"], capture_output=True, text=True)
+    if res.returncode != 0:
+        return
+    lines = res.stdout.strip().splitlines()
+    header = lines[0]
+    data = lines[1:]
+    extra = [
+        "--header=ENTER: View Info (modinfo) | CTRL-U: Unload (modprobe -r) | ESC: Exit",
+        "--bind=enter:execute(modinfo {1} | less -R)",
+        "--bind=ctrl-u:execute(sudo modprobe -r {1})+reload(lsmod | tail -n +2)",
+    ]
+    run_fzf(data, prompt="kmod > ", header=header, extra_args=extra)
+
+
+def builtin_vk_layers():
+    import json
+    print(box_header("VULKAN VALIDATION & CAPTURE LAYERS"))
+    layer_dirs = [
+        Path("/usr/share/vulkan/explicit_layer.d"),
+        Path("/usr/share/vulkan/implicit_layer.d"),
+        Path.home() / ".local/share/vulkan/implicit_layer.d",
+    ]
+    found = False
+    for d in layer_dirs:
+        if d.exists():
+            files = list(d.glob("*.json"))
+            if files:
+                found = True
+                print(f" {Style.BOLD}{d}:{Style.RESET}")
+                for f in files:
+                    try:
+                        c = json.loads(f.read_text())
+                        l_info = c.get("layer", {})
+                        name = l_info.get("name", f.name)
+                        desc = l_info.get("description", "")
+                        print(f"   • {Style.CYAN}{name}{Style.RESET} - {desc}")
+                    except Exception:
+                        print(f"   • {f.name}")
+    if not found:
+        print(" No Vulkan layer manifests found in system search paths.")
+    print(box_footer())
+
+
+def builtin_regex_test():
+    print(f"{Style.CYAN}Enter Python Regex Pattern:{Style.RESET} ", end="", flush=True)
+    try:
+        pat = input().strip()
+        print(f"{Style.CYAN}Enter Sample Text:{Style.RESET} ", end="", flush=True)
+        text = input().strip()
+        if not pat or not text:
+            return
+        matches = list(re.finditer(pat, text))
+        print(f"\n{Style.BOLD}Found {len(matches)} match(es):{Style.RESET}")
+        highlighted = ""
+        last_idx = 0
+        for m in matches:
+            highlighted += text[last_idx:m.start()]
+            highlighted += f"{Style.YELLOW}{Style.BOLD}[{m.group()}]{Style.RESET}"
+            last_idx = m.end()
+        highlighted += text[last_idx:]
+        print(f" {highlighted}\n")
+    except Exception as e:
+        log_error(f"Regex error: {e}")
+
+
+def builtin_semver_bump():
+    files = ["pyproject.toml", "package.json", "Cargo.toml"]
+    target = None
+    for f in files:
+        if Path(f).exists():
+            target = Path(f)
+            break
+    if not target:
+        log_warn("No pyproject.toml, package.json, or Cargo.toml found in cwd.")
+        return
+
+    content = target.read_text()
+    m = re.search(r'(version\s*=\s*["\'])([\d\.]+)(["\'])', content)
+    if not m:
+        m = re.search(r'("version":\s*["\'])([\d\.]+)(["\'])', content)
+    if not m:
+        log_error("Could not find version string.")
+        return
+
+    cur_v = m.group(2)
+    parts = cur_v.split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+
+    v_patch = f"{major}.{minor}.{patch + 1}"
+    v_minor = f"{major}.{minor + 1}.0"
+    v_major = f"{major + 1}.0.0"
+
+    print(f"Current version in {target.name}: {Style.BOLD}{cur_v}{Style.RESET}")
+    choice = run_fzf([f"patch: {v_patch}", f"minor: {v_minor}", f"major: {v_major}"], prompt="Select version bump > ")
+    if not choice:
+        return
+    new_v = choice[0].split(":")[1].strip()
+    new_content = content.replace(m.group(0), f"{m.group(1)}{new_v}{m.group(3)}")
+    target.write_text(new_content)
+    log_success(f"Bumped version: {cur_v} -> {new_v} in {target.name}")
+
+
+def builtin_mtu_bench():
+    print(box_header("MTU / MSS PACKET SWEEP TEST"))
+    # Find default gateway
+    gw = "1.1.1.1"
+    try:
+        res = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True)
+        gw = res.stdout.split()[2]
+    except Exception:
+        pass
+    log_info(f"Probing target {gw} for maximum non-fragmented packet size...")
+    optimal = 1500
+    for size in [1500, 1492, 1472, 1464, 1448, 1400, 1360]:
+        # -M do means don't fragment
+        cmd = ["ping", "-c", "1", "-M", "do", "-s", str(size), "-W", "1", gw]
+        ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if ret.returncode == 0:
+            optimal = size + 28 # Add IP+ICMP header
+            print(f" {Style.GREEN}✔ Packet size {size} bytes passed (MTU = {optimal}){Style.RESET}")
+            break
+        else:
+            print(f" {Style.RED}✖ Packet size {size} bytes fragmented{Style.RESET}")
+    print(f"\n Recommended MTU for this interface: {Style.BOLD}{optimal}{Style.RESET}")
+    print(box_footer())
+
+
+def builtin_pw_link_fzf():
+    res = subprocess.run(["pw-link", "-io"], capture_output=True, text=True)
+    if res.returncode != 0:
+        log_error("pw-link unavailable or PipeWire not running.")
+        return
+    ports = [p.strip() for p in res.stdout.strip().splitlines() if p.strip()]
+    out_ports = [p for p in ports if ":output" in p or ":capture" in p]
+    in_ports = [p for p in ports if ":input" in p or ":playback" in p]
+    sel_out = run_fzf(out_ports, prompt="Select Output Source Port > ")
+    if not sel_out:
+        return
+    sel_in = run_fzf(in_ports, prompt=f"Connect '{sel_out[0]}' to Input Sink > ")
+    if not sel_in:
+        return
+    subprocess.run(["pw-link", sel_out[0], sel_in[0]])
+    log_success(f"Linked: {sel_out[0]} -> {sel_in[0]}")
+
+
+def builtin_port_forward():
+    print(f"{Style.CYAN}Port Forward Type [1] Local (-L) [2] Remote (-R):{Style.RESET} ", end="", flush=True)
+    t = input().strip()
+    flag = "-L" if t != "2" else "-R"
+    print(f"{Style.CYAN}Local Port (e.g. 8080):{Style.RESET} ", end="", flush=True)
+    lport = input().strip()
+    print(f"{Style.CYAN}Remote Host (e.g. localhost):{Style.RESET} ", end="", flush=True)
+    rhost = input().strip() or "localhost"
+    print(f"{Style.CYAN}Remote Port (e.g. 80):{Style.RESET} ", end="", flush=True)
+    rport = input().strip()
+    print(f"{Style.CYAN}SSH Server (e.g. user@myserver.com):{Style.RESET} ", end="", flush=True)
+    server = input().strip()
+    if not lport or not rport or not server:
+        return
+    cmd = ["ssh", "-N", flag, f"{lport}:{rhost}:{rport}", server]
+    log_info(f"Executing: {' '.join(cmd)}")
+    subprocess.run(cmd)
+
+
 # ---------------------------------------------------------------------------
 # DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
 def render_preview(cmd_id: str, cfg: CoreXConfig):
     spec = cfg.commands.get(cmd_id)
     if not spec:
-        # Fallback special previews
-        if cmd_id == "todo":
-            builtin_todo_preview(cfg)
         return
 
+    tag = CATEGORY_TAGS.get(spec.category, "@action")
     print(box_header(f"ACTION: {spec.id}"))
-    print(f" {Style.BOLD}Category:{Style.RESET}      {spec.category}")
+    print(f" {Style.BOLD}Category:{Style.RESET}      {Style.YELLOW}{tag}{Style.RESET} {spec.category}")
     print(f" {Style.BOLD}Description:{Style.RESET}   {spec.description}")
     sudo_tag = f"{Style.RED}{Style.BOLD}YES{Style.RESET}" if spec.requires_sudo else f"{Style.GRAY}NO{Style.RESET}"
     confirm_tag = f"{Style.YELLOW}{Style.BOLD}YES{Style.RESET}" if spec.confirm else f"{Style.GRAY}NO{Style.RESET}"
@@ -1025,7 +1332,7 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
             flag = "--highvram" if free >= cfg.vram_high_threshold_mb else ("--lowvram" if free < cfg.vram_low_threshold_mb else "--normalvram")
             print(f" {Style.BOLD}Calculated:{Style.RESET}    {Style.GREEN}{flag}{Style.RESET} ({free} MiB free VRAM / {tot} MiB total)")
 
-    cmd_preview = spec.command[:60] + ("..." if len(spec.command) > 60 else "")
+    cmd_preview = spec.command[:62] + ("..." if len(spec.command) > 62 else "")
     print(f" {Style.BOLD}Execution:{Style.RESET}     {Style.CYAN}{cmd_preview}{Style.RESET}")
     print(box_footer())
 
@@ -1039,98 +1346,61 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
             print(f"{Style.GRAY}[Preview error: {e}]{Style.RESET}")
 
 
-def builtin_todo_preview(cfg: CoreXConfig):
-    if not cfg.todo_file.exists():
-        print("No tasks created yet.")
-        return
-    try:
-        tasks = json.loads(cfg.todo_file.read_text())
-        print(f"Tasks: {len(tasks)} total")
-        for t in tasks[:10]:
-            chk = "✔" if t.get("done") else "○"
-            print(f" [{chk}] {t.get('task')}")
-    except Exception:
-        pass
-
-
 # ---------------------------------------------------------------------------
-# TWO-TIER INTERACTIVE NAVIGATION (Naked 'cx')
+# TWO-TIER & UNIFIED INTERACTIVE NAVIGATION (Naked 'cx')
 # ---------------------------------------------------------------------------
-def run_two_tier_menu(cfg: CoreXConfig, dry_run: bool = False):
-    categories = [
-        "1. [AI, CUDA & Deep Learning]              (12 commands)",
-        "2. [Media, Audio & PipeWire Power-Tools]     (13 commands)",
-        "3. [Gaming, Hardware & Display Orchestration] (8 commands)",
-        "4. [System Architecture & BTRFS Snapshotting] (9 commands)",
-        "5. [Network, VPN & Remote Infrastructure]    (9 commands)",
-        "6. [Git, Dev & Code Utilities]               (9 commands)",
-        "7. [Daily Driver Quality-of-Life & Crypto/Files] (15 commands)",
-        "★  [All Commands (Global Search)]            (75 commands)",
-    ]
-
-    cat_map = {
-        "1": "AI, CUDA & Deep Learning",
-        "2": "Media, Audio & PipeWire Power-Tools",
-        "3": "Gaming, Hardware & Display Orchestration",
-        "4": "System Architecture & BTRFS Snapshotting",
-        "5": "Network, VPN & Remote Infrastructure",
-        "6": "Git, Dev & Code Utilities",
-        "7": "Daily Driver Quality-of-Life & Crypto/Files",
-    }
-
+def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
+    """
+    Unified, lightning-fast cockpit with @category fuzzy filtering
+    and hotkey bindings (Ctrl+Y, Ctrl+E, Ctrl+D).
+    """
     self_exe = os.path.abspath(sys.argv[0])
-
-    # Tier 1: Category Selection
-    tier1_header = "MISSION CONTROL TIER 1: Select Category | ESC to exit"
-    tier1_sel = run_fzf(categories, prompt="Category > ", header=tier1_header)
-    if not tier1_sel:
-        return
-
-    chosen_cat_line = tier1_sel[0]
-    matched_cat = None
-    for k, v in cat_map.items():
-        if chosen_cat_line.startswith(k):
-            matched_cat = v
-            break
-
-    # Tier 2: Filter commands
-    if matched_cat:
-        target_cmds = [c for c in cfg.commands.values() if c.category == matched_cat]
-        t2_prompt = f"{matched_cat[:18]} > "
-    else:
-        target_cmds = list(cfg.commands.values())
-        t2_prompt = "all-commands > "
-
-    t2_items = []
-    for c in target_cmds:
-        # Check deps status badge
+    items = []
+    for c in cfg.commands.values():
+        tag = CATEGORY_TAGS.get(c.category, "@misc")
         has_missing = any(not shutil.which(d) for d in c.deps)
         badge = f"{Style.RED}[DEP MISSING]{Style.RESET}" if has_missing else f"{Style.GREEN}[READY]{Style.RESET}"
         if c.requires_sudo:
             badge += f" {Style.YELLOW}[SUDO]{Style.RESET}"
-        t2_items.append(f"{c.id}\t{Style.CYAN}{c.id:<18}{Style.RESET}\t{c.description}\t{badge}")
+        # Format line: id \t tag \t name \t description \t badge
+        items.append(f"{c.id}\t{Style.YELLOW}{tag:<9}{Style.RESET}\t{Style.CYAN}{c.id:<22}{Style.RESET}\t{c.description}\t{badge}")
 
     preview_call = f"python3 '{self_exe}' __preview {{1}}"
+    header = (
+        f"COREX MISSION CONTROL ({len(cfg.commands)} ACTIONS) | Type '@<tag>' to filter categories | ESC to exit\n"
+        "HOTKEYS: ENTER: Run | CTRL-D: Dry-Run | CTRL-Y: Copy Command | CTRL-E: Edit & Run"
+    )
+
     extra = [
         "--delimiter=\t",
-        "--with-nth=2,3,4",
-        "--header=TIER 2: Select Action | ENTER to run | ESC to return",
+        "--with-nth=2,3,4,5",
+        f"--header={header}",
+        # Hotkey: Ctrl+Y copies underlying command to clipboard
+        f"--bind=ctrl-y:execute-silent(python3 '{self_exe}' __get_cmd {{1}} | wl-copy 2>/dev/null || python3 '{self_exe}' __get_cmd {{1}} | xclip -selection clipboard 2>/dev/null)",
+        # Hotkey: Ctrl+D executes with dry-run
+        f"--bind=ctrl-d:execute(python3 '{self_exe}' --dry-run {{1}}; echo; read -n 1 -s -r -p 'Press any key to return...'; echo)",
+        # Hotkey: Ctrl+E opens command in editor
+        f"--bind=ctrl-e:execute(python3 '{self_exe}' __edit_run {{1}})",
     ]
 
-    t2_sel = run_fzf(t2_items, prompt=t2_prompt, preview_cmd=preview_call, extra_args=extra)
-    if not t2_sel:
-        # User cancelled Tier 2, return to Tier 1 loop or exit
+    sel = run_fzf(items, prompt="cx ⚡ > ", preview_cmd=preview_call, extra_args=extra)
+    if not sel:
         return
 
-    chosen_cmd_id = t2_sel[0].split("\t")[0].strip()
+    chosen_cmd_id = sel[0].split("\t")[0].strip()
     execute_command(chosen_cmd_id, cfg, dry_run=dry_run)
 
 
 # ---------------------------------------------------------------------------
 # COMMAND DISPATCHER & SUBSHELL EXECUTION
 # ---------------------------------------------------------------------------
-def execute_command(cmd_id: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
-    # Alias mapping for backward compatibility
+def execute_command(
+    cmd_id: str,
+    cfg: CoreXConfig,
+    dry_run: bool = False,
+    bg_run: bool = False,
+    extra_args: Optional[List[str]] = None,
+):
     alias_map = {
         "comfy": "comfy-boot",
         "comfyui": "comfy-boot",
@@ -1172,13 +1442,18 @@ def execute_command(cmd_id: str, cfg: CoreXConfig, dry_run: bool = False, extra_
     if spec.command.startswith("cx __builtin "):
         builtin_name = spec.command.replace("cx __builtin ", "").strip()
         args = extra_args or []
+        if bg_run:
+            # Wrap built-in in detached subshell
+            self_exe = os.path.abspath(sys.argv[0])
+            bg_cmd = f"python3 '{self_exe}' {actual_id} {' '.join(args)}"
+            detach_background(actual_id, bg_cmd, dry_run=dry_run)
+            return
         dispatch_builtin(builtin_name, cfg, dry_run=dry_run, extra_args=args)
         return
 
     # Shell execution
     final_cmd = spec.command
     if extra_args:
-        # Append quoted arguments
         quoted_args = " ".join([f"'{a}'" if " " in a else a for a in extra_args])
         final_cmd = f"{final_cmd} {quoted_args}"
 
@@ -1186,7 +1461,12 @@ def execute_command(cmd_id: str, cfg: CoreXConfig, dry_run: bool = False, extra_
         final_cmd = f"sudo {final_cmd}"
 
     if dry_run:
-        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {Style.BOLD}{final_cmd}{Style.RESET}")
+        prefix = "[DRY-RUN BG]" if bg_run else "[DRY-RUN]"
+        print(f"{Style.YELLOW}{prefix}{Style.RESET} {Style.BOLD}{final_cmd}{Style.RESET}")
+        return
+
+    if bg_run:
+        detach_background(actual_id, final_cmd)
         return
 
     try:
@@ -1194,6 +1474,34 @@ def execute_command(cmd_id: str, cfg: CoreXConfig, dry_run: bool = False, extra_
         sys.exit(ret.returncode)
     except KeyboardInterrupt:
         sys.exit(130)
+
+
+def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
+    """Detaches command into a systemd-run user service or background nohup subshell."""
+    ts = int(time.time())
+    unit_name = f"corex-{cmd_id}-{ts}"
+    has_systemd_run = shutil.which("systemd-run") is not None
+
+    if has_systemd_run:
+        full_cmd = ["systemd-run", "--user", f"--unit={unit_name}", "sh", "-c", shell_cmd]
+    else:
+        full_cmd = ["nohup", "sh", "-c", shell_cmd]
+
+    if dry_run:
+        print(f"{Style.YELLOW}[DRY-RUN BG]{Style.RESET} {' '.join(full_cmd)}")
+        return
+
+    log_info(f"Detaching '{cmd_id}' into background scope ({unit_name})...")
+    if has_systemd_run:
+        res = subprocess.run(full_cmd, capture_output=True, text=True)
+        if res.returncode == 0:
+            log_success(f"Command '{cmd_id}' running as systemd user unit: {unit_name}.service")
+        else:
+            subprocess.Popen(["nohup", "sh", "-c", shell_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
+            log_success(f"Command '{cmd_id}' detached via background subshell.")
+    else:
+        subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
+        log_success(f"Command '{cmd_id}' detached via background nohup.")
 
 
 def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
@@ -1257,6 +1565,32 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_todo(cfg)
     elif name == "sys-info":
         builtin_sys_info()
+    elif name == "irq-top":
+        builtin_irq_top()
+    elif name == "oom-score":
+        builtin_oom_score()
+    elif name == "ram-breakdown":
+        builtin_ram_breakdown()
+    elif name == "hugepages-toggle":
+        builtin_hugepages_toggle()
+    elif name == "socket-summary":
+        builtin_socket_summary()
+    elif name == "kmod-fzf":
+        builtin_kmod_fzf()
+    elif name == "vk-layers":
+        builtin_vk_layers()
+    elif name == "regex-test":
+        builtin_regex_test()
+    elif name == "semver-bump":
+        builtin_semver_bump()
+    elif name == "mtu-bench":
+        builtin_mtu_bench()
+    elif name == "pw-link-fzf":
+        builtin_pw_link_fzf()
+    elif name == "port-forward":
+        builtin_port_forward()
+    elif name == "get-editor":
+        print(get_default_editor(cfg))
     elif name == "sens-watch":
         subprocess.run(["watch", "-n", "1", "sensors 2>/dev/null; echo; nvidia-smi --query-gpu=temperature.gpu,power.draw --format=csv,noheader 2>/dev/null"])
     elif name == "gpu-clock":
@@ -1293,12 +1627,13 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
 # ---------------------------------------------------------------------------
 def generate_fish_completions(cfg: CoreXConfig) -> str:
     lines = [
-        "# Fish completions for CoreX (cx) - Auto-generated",
+        "# Fish completions for CoreX (cx) - Auto-generated Phase 3",
         "complete -c cx -f",
         "complete -c cx -s h -l help -d 'Show CoreX help message'",
         "complete -c cx -s v -l version -d 'Show CoreX version'",
         "complete -c cx -l list -d 'Output tab-delimited command list'",
         "complete -c cx -l dry-run -d 'Preview commands without executing them'",
+        "complete -c cx -l bg -d 'Detach command into background daemon scope'",
         "complete -c cx -l no-color -d 'Disable ANSI terminal styling'",
         "complete -c cx -l config -r -F -d 'Custom TOML configuration path'",
         "complete -c cx -s y -l yes -d 'Bypass confirmation prompts'",
@@ -1317,7 +1652,7 @@ _cx_completions() {{
     local cur prev words cword
     _init_completion || return
 
-    local commands="{cmds} --dry-run --help --version --list --yes"
+    local commands="{cmds} --dry-run --bg --help --version --list --yes"
 
     if [[ $cword -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -1344,6 +1679,7 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
         "        '(-h --help)'{-h,--help}'[Show help]' \\",
         "        '(-v --version)'{-v,--version}'[Show version]' \\",
         "        '--dry-run[Preview commands]' \\",
+        "        '--bg[Detach command in background]' \\",
         "        '--list[List all commands]' \\",
         "        '1: :->command' \\",
         "        '*:: :->args'",
@@ -1356,6 +1692,56 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
     return "\n".join(lines)
 
 
+class ParsedArgs:
+    __slots__ = ("command", "args", "help", "version", "dry_run", "bg", "yes", "list", "no_color", "config")
+
+    def __init__(self):
+        self.command: Optional[str] = None
+        self.args: List[str] = []
+        self.help: bool = False
+        self.version: bool = False
+        self.dry_run: bool = False
+        self.bg: bool = False
+        self.yes: bool = False
+        self.list: bool = False
+        self.no_color: bool = False
+        self.config: Optional[Path] = None
+
+
+def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
+    parsed = ParsedArgs()
+    unknown: List[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            parsed.help = True
+        elif arg in ("-v", "--version"):
+            parsed.version = True
+        elif arg == "--dry-run":
+            parsed.dry_run = True
+        elif arg == "--bg":
+            parsed.bg = True
+        elif arg in ("-y", "--yes"):
+            parsed.yes = True
+        elif arg == "--list":
+            parsed.list = True
+        elif arg == "--no-color":
+            parsed.no_color = True
+        elif arg == "--config":
+            if i + 1 < len(argv):
+                parsed.config = Path(argv[i + 1])
+                i += 1
+        elif not arg.startswith("-") and parsed.command is None:
+            parsed.command = arg
+            parsed.args = argv[i + 1:]
+            break
+        else:
+            unknown.append(arg)
+        i += 1
+    return parsed, unknown
+
+
 # ---------------------------------------------------------------------------
 # CLI ENTRYPOINT
 # ---------------------------------------------------------------------------
@@ -1364,33 +1750,53 @@ def main():
     if hasattr(signal, "SIGPIPE"):
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
-    parser = argparse.ArgumentParser(prog="cx", add_help=False)
-    parser.add_argument("command", nargs="?", help="Command to execute")
-    parser.add_argument("args", nargs=argparse.REMAINDER, help="Subcommand arguments")
-    parser.add_argument("-h", "--help", action="store_true")
-    parser.add_argument("-v", "--version", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("-y", "--yes", action="store_true")
-    parser.add_argument("--list", action="store_true")
-    parser.add_argument("--no-color", action="store_true")
-    parser.add_argument("--config", type=Path, default=None)
-
-    parsed, unknown = parser.parse_known_args()
-    cfg = load_config(parsed.config)
+    parsed, unknown = parse_cli_args(sys.argv[1:])
 
     if parsed.version:
-        print(f"CoreX (cx) v{VERSION} - 75+ Command Mission-Control Cockpit")
+        print(f"CoreX (cx) v{VERSION} - 150+ Action Workstation Engine")
         sys.exit(0)
+
+    cfg = load_config(parsed.config)
 
     if parsed.list:
         for cid, spec in sorted(cfg.commands.items()):
-            print(f"{cid}\t{spec.category}\t{spec.description}")
+            tag = CATEGORY_TAGS.get(spec.category, "@misc")
+            print(f"{cid}\t{tag}\t{spec.category}\t{spec.description}")
         sys.exit(0)
 
     # Internal preview callback for fzf
     if parsed.command == "__preview":
         target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
         render_preview(target, cfg)
+        sys.exit(0)
+
+    # Internal helper: get raw command string for Ctrl+Y clipboard
+    if parsed.command == "__get_cmd":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        spec = cfg.commands.get(target)
+        if spec:
+            print(spec.command, end="")
+        sys.exit(0)
+
+    # Internal helper: edit and run for Ctrl+E hotkey
+    if parsed.command == "__edit_run":
+        import tempfile
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        spec = cfg.commands.get(target)
+        if spec:
+            ed = get_default_editor(cfg)
+            with tempfile.NamedTemporaryFile("w+", suffix=".sh", delete=False) as tf:
+                tf.write(f"#!/usr/bin/env bash\n# Editing action: {spec.id}\n{spec.command}\n")
+                tmp_path = tf.name
+            subprocess.run([ed, tmp_path])
+            try:
+                mod_cmd = Path(tmp_path).read_text().splitlines()
+                exec_lines = [l for l in mod_cmd if l.strip() and not l.startswith("#")]
+                if exec_lines:
+                    log_info(f"Executing edited script for {spec.id}...")
+                    subprocess.run("\n".join(exec_lines), shell=True)
+            finally:
+                Path(tmp_path).unlink(missing_ok=True)
         sys.exit(0)
 
     # Completions generation
@@ -1405,41 +1811,56 @@ def main():
         sys.exit(0)
 
     if parsed.help:
-        print_banner(parsed.dry_run)
-        print("""
+        print_banner(parsed.dry_run, parsed.bg)
+        print(f"""
 USAGE:
-  cx                              Launch two-tier mission-control TUI
+  cx                              Launch 150+ action interactive Mission Control TUI
   cx <command> [args...]          Execute command directly with zero latency
   cx --dry-run <command> [args]   Preview command safely
-  cx --list                       Print all 75+ registered commands
+  cx --bg <command> [args...]     Detach command into background systemd user scope
+  cx --list                       Print all {len(cfg.commands)} registered commands and category tags
 
-CATEGORIES:
-  • [AI, CUDA & Deep Learning]              12 commands (comfy-*, ollama-*, vram-watch, etc.)
-  • [Media, Audio & PipeWire Power-Tools]     13 commands (stream-*, rip-*, pw-*, trim-video, etc.)
-  • [Gaming, Hardware & Display Orchestration] 8 commands (gpu-clock, cpu-gov, mon-*, sens-watch, etc.)
-  • [System Architecture & BTRFS Snapshotting] 9 commands (snap-*, fkill, disk-space, etc.)
-  • [Network, VPN & Remote Infrastructure]    9 commands (my-ip, vpn-*, port-audit, serve-dir, etc.)
-  • [Git, Dev & Code Utilities]               9 commands (git-*, docker-*, venv-init, cheat, etc.)
-  • [Daily Driver Quality-of-Life & Crypto] 15 commands (calc, timer, notes, todo, sys-info, etc.)
+CATEGORIES & FILTER TAGS:
+  • @kernel   Kernel Tracing, Interrupts & eBPF            (11 actions)
+  • @vulkan   Vulkan, 3D & Graphics Telemetry              (11 actions)
+  • @mem      Memory, HugePages & Storage Forensics        (11 actions)
+  • @netflow  Network Traffic Analysis & Socket Forensics  (11 actions)
+  • @dsp      Audio Synthesis, Signal Routing & Metrology  (10 actions)
+  • @docker   Container, Pod & Service Micro-Orchestration (10 actions)
+  • @code     Local Development & Code Diagnostics         (14 actions)
+  • @ai       AI, CUDA & Deep Learning                     (12 actions)
+  • @audio    Media, Audio & PipeWire Power-Tools          (13 actions)
+  • @gpu      Gaming, Hardware & Display Orchestration     (8 actions)
+  • @sys      System Architecture & BTRFS Snapshotting     (9 actions)
+  • @net      Network, VPN & Remote Infrastructure         (9 actions)
+  • @dev      Git, Dev & Code Utilities                    (9 actions)
+  • @daily    Daily Driver Quality-of-Life & Crypto/Files  (15 actions)
+
+TUI HOTKEYS:
+  • ENTER:   Execute action immediately
+  • CTRL-D:  Preview with --dry-run without leaving TUI
+  • CTRL-Y:  Copy underlying shell command to clipboard
+  • CTRL-E:  Open command in $EDITOR before running
 
 FLAGS:
   --dry-run                       Preview command execution without running
+  --bg                            Detach command in background (systemd-run / nohup)
   -y, --yes                       Bypass confirmation prompts
-  --list                          List all commands for scripting
+  --list                          List all commands for scripting / completion
   --config <path>                 Custom TOML config file
   -h, --help                      Show help
   -v, --version                   Show version
 """)
         sys.exit(0)
 
-    # Naked execution: launch two-tier interactive navigation
+    # Naked execution: launch interactive mission-control cockpit
     if not parsed.command:
-        run_two_tier_menu(cfg, dry_run=parsed.dry_run)
+        run_interactive_cockpit(cfg, dry_run=parsed.dry_run)
         sys.exit(0)
 
     # Direct subshell execution
     extra = (parsed.args or []) + unknown
-    execute_command(parsed.command, cfg, dry_run=parsed.dry_run, extra_args=extra)
+    execute_command(parsed.command, cfg, dry_run=parsed.dry_run, bg_run=parsed.bg, extra_args=extra)
 
 
 if __name__ == "__main__":

@@ -93,7 +93,7 @@ if [ -f "${CONFIG_DIR}/config.toml" ]; then
     echo -e "  [${GRAY}i${RESET}] Backed up existing config to ${CONFIG_DIR}/config.toml.bak"
 fi
 cp "${SCRIPT_DIR}/config.default.toml" "${CONFIG_DIR}/config.toml"
-echo -e "  [${GREEN}✔${RESET}] Updated 75+ command workstation config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
+echo -e "  [${GREEN}✔${RESET}] Updated 150+ command workstation config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
 
 # 4. Setup Fish Shell Integrations
 if command -v fish >/dev/null 2>&1; then
@@ -130,11 +130,12 @@ echo -e "  [${GREEN}✔${RESET}] CoreX execution: ${GREEN}${INSTALLED_VER}${RESE
 echo -e "  [${GREEN}✔${RESET}] Registered Commands: ${GREEN}${CMD_COUNT} actions loaded${RESET}"
 
 echo -e "\n${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}${BOLD}✔ CoreX (cx) 75+ Workstation Cockpit successfully deployed!${RESET}"
+echo -e "${GREEN}${BOLD}✔ CoreX (cx) 150+ Workstation Cockpit successfully deployed!${RESET}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
 echo -e "\nQuick Start:"
-echo -e "  • Run ${CYAN}${BOLD}cx${RESET} to open the 2-Tier interactive Mission Control TUI"
+echo -e "  • Run ${CYAN}${BOLD}cx${RESET} to open the interactive Mission Control TUI (type ${YELLOW}@tag${RESET} to filter)"
 echo -e "  • Run ${CYAN}${BOLD}cx <command>${RESET} for zero-latency direct execution (e.g. ${CYAN}cx comfy-boot${RESET}, ${CYAN}cx vram-watch${RESET})"
 echo -e "  • Run ${CYAN}${BOLD}cx --dry-run <command>${RESET} to preview actions safely"
+echo -e "  • Run ${CYAN}${BOLD}cx --bg <command>${RESET} to detach into a background systemd user scope"
 echo -e "  • Run ${CYAN}${BOLD}cx --list${RESET} to inspect all registered actions"
 echo -e "  • Run ${CYAN}${BOLD}cx --help${RESET} for full documentation\n"

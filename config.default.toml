@@ -1,8 +1,8 @@
-# CoreX (cx) - 75+ Command Mission-Control Workstation Engine Configuration
+# CoreX (cx) - 150+ Operational Action Workstation Engine Configuration
 # Location: ~/.config/corex/config.toml
 
 [general]
-editor = ""                            # Default editor ($EDITOR, nvim, micro, nano, vi)
+editor = ""                            # Default text editor ($EDITOR, nvim, micro, nano, vi)
 notes_dir = "~/.local/share/corex/notes" # Notes directory
 todo_file = "~/.local/share/corex/todo.json" # Todo tracking file
 color = true
@@ -20,7 +20,7 @@ comfyui_notify = true
 ollama_url = "http://127.0.0.1:11434"
 
 # ==============================================================================
-# 1. AI, CUDA & DEEP LEARNING (12 Commands)
+# 1. AI, CUDA & DEEP LEARNING (@ai)
 # ==============================================================================
 
 [commands.comfy-boot]
@@ -132,7 +132,7 @@ confirm = true
 deps = ["fuser"]
 
 # ==============================================================================
-# 2. MEDIA, AUDIO & PIPEWIRE POWER-TOOLS (13 Commands)
+# 2. MEDIA, AUDIO & PIPEWIRE POWER-TOOLS (@media, @audio)
 # ==============================================================================
 
 [commands.stream-yt]
@@ -253,7 +253,7 @@ confirm = false
 deps = ["ffmpeg", "fzf"]
 
 # ==============================================================================
-# 3. GAMING, HARDWARE & DISPLAY ORCHESTRATION (8 Commands)
+# 3. GAMING, HARDWARE & DISPLAY ORCHESTRATION (@gaming, @gpu, @hw)
 # ==============================================================================
 
 [commands.gpu-clock]
@@ -329,7 +329,7 @@ confirm = false
 deps = []
 
 # ==============================================================================
-# 4. SYSTEM ARCHITECTURE & BTRFS SNAPSHOTTING (9 Commands)
+# 4. SYSTEM ARCHITECTURE & BTRFS SNAPSHOTTING (@sys, @btrfs)
 # ==============================================================================
 
 [commands.snap-now]
@@ -414,7 +414,7 @@ confirm = false
 deps = ["systemd-analyze"]
 
 # ==============================================================================
-# 5. NETWORK, VPN & REMOTE INFRASTRUCTURE (9 Commands)
+# 5. NETWORK, VPN & REMOTE INFRASTRUCTURE (@net, @vpn)
 # ==============================================================================
 
 [commands.my-ip]
@@ -499,7 +499,7 @@ confirm = false
 deps = ["resolvectl"]
 
 # ==============================================================================
-# 6. GIT, DEV & CODE UTILITIES (9 Commands)
+# 6. GIT, DEV & CODE UTILITIES (@git, @dev)
 # ==============================================================================
 
 [commands.git-branch-fzf]
@@ -584,7 +584,7 @@ confirm = false
 deps = ["fzf"]
 
 # ==============================================================================
-# 7. DAILY DRIVER QUALITY-OF-LIFE & CRYPTO/FILES (15 Commands)
+# 7. DAILY DRIVER QUALITY-OF-LIFE & CRYPTO/FILES (@daily, @tools)
 # ==============================================================================
 
 [commands.clip-hist]
@@ -721,3 +721,734 @@ preview_cmd = "uname -srm 2>/dev/null"
 requires_sudo = false
 confirm = false
 deps = []
+
+# ==============================================================================
+# 8. KERNEL TRACING, INTERRUPTS & eBPF (@kernel)
+# ==============================================================================
+
+[commands.irq-top]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Real-time terminal dashboard of hardware & software interrupts per CPU core to track latency spikes"
+command = "cx __builtin irq-top"
+preview_cmd = "head -n 15 /proc/interrupts 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.dmesg-follow]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Colorized, human-readable kernel ring buffer log stream filtering out noise and flagging hardware errors"
+command = "dmesg -wH --level=err,warn,alert,crit 2>/dev/null || sudo dmesg -wH"
+preview_cmd = "dmesg -T --level=err,warn 2>/dev/null | tail -n 12 || sudo dmesg -T | tail -n 12"
+requires_sudo = true
+confirm = false
+deps = ["dmesg"]
+
+[commands.kmod-fzf]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Interactive browser of loaded kernel modules (lsmod) showing memory size, dependencies & one-key reload"
+command = "cx __builtin kmod-fzf"
+preview_cmd = "lsmod | head -n 15"
+requires_sudo = false
+confirm = false
+deps = ["fzf"]
+
+[commands.sysctl-search]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Fuzzy search across all active Linux kernel runtime parameters (sysctl -a) with live value inspection"
+command = "sysctl -a 2>/dev/null | fzf --prompt='sysctl parameter > ' --header='ENTER to inspect / copy key' | awk '{print $1}' | tr -d ' ' | xargs -r -I{} sysctl {}"
+preview_cmd = "sysctl -a 2>/dev/null | head -n 20"
+requires_sudo = false
+confirm = false
+deps = ["sysctl", "fzf"]
+
+[commands.cgroup-inspect]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Visual breakdown of memory, swap, and CPU limits applied to user services and slice groups"
+command = "systemd-cgls 2>/dev/null || systemd-cgtop -n 1"
+preview_cmd = "systemd-cgls --no-pager 2>/dev/null | head -n 25 || echo 'cgroups inspection unavailable'"
+requires_sudo = false
+confirm = false
+deps = ["systemd-cgls"]
+
+[commands.oom-score]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Display processes ranked by Out-Of-Memory killer badness score (oom_score) to identify kill targets"
+command = "cx __builtin oom-score"
+preview_cmd = "cx __builtin oom-score | head -n 15"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.klog-err]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Scan dmesg specifically for hardware MCE, PCIe AER, and kernel taint warnings"
+command = "dmesg -T | grep -iE 'mce|aer|taint|segfault|corrupted|error' | tail -n 30"
+preview_cmd = "dmesg -T 2>/dev/null | grep -iE 'error|warning|tainted' | tail -n 10 || echo 'No kernel errors logged'"
+requires_sudo = true
+confirm = false
+deps = ["dmesg"]
+
+[commands.pcie-topo]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Tree view of PCIe topology, lane speeds (e.g. Gen4 x16), and link degradation"
+command = "lspci -tv 2>/dev/null && echo -e '\\n\\033[1;36mPCIe Link Speeds & Widths:\\033[0m' && lspci -vv 2>/dev/null | grep -E '(LnkCap|LnkSta):' | head -n 20"
+preview_cmd = "lspci -tv 2>/dev/null | head -n 20"
+requires_sudo = false
+confirm = false
+deps = ["lspci"]
+
+[commands.slab-top]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Real-time slab allocator kernel cache inspection"
+command = "sudo slabtop -s c"
+preview_cmd = "head -n 15 /proc/slabinfo 2>/dev/null || echo 'Need root for /proc/slabinfo'"
+requires_sudo = true
+confirm = false
+deps = ["slabtop"]
+
+[commands.numa-stat]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Display NUMA node memory balancing, hit/miss allocations, and CPU affinity"
+command = "numactl -H 2>/dev/null || numastat 2>/dev/null || lscpu | grep -i numa"
+preview_cmd = "numastat 2>/dev/null || lscpu | grep -i numa"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.ipc-audit]
+category = "Kernel Tracing, Interrupts & eBPF"
+description = "Audit Linux POSIX shared memory segments, message queues, and semaphores"
+command = "ipcs -a && echo && ls -lh /dev/shm"
+preview_cmd = "ipcs -a 2>/dev/null || echo 'ipcs unavailable'"
+requires_sudo = false
+confirm = false
+deps = ["ipcs"]
+
+# ==============================================================================
+# 9. VULKAN, 3D & GRAPHICS TELEMETRY (@vulkan, @gpu)
+# ==============================================================================
+
+[commands.vk-caps]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Dump and fuzzy-search supported Vulkan extensions, physical device capabilities, and ray tracing"
+command = "vulkaninfo 2>/dev/null | fzf --prompt='Vulkan Capabilities > ' --header='Search Vulkan Device Extensions & Caps'"
+preview_cmd = "vulkaninfo --summary 2>/dev/null || echo 'vulkaninfo missing (install vulkan-tools)'"
+requires_sudo = false
+confirm = false
+deps = ["vulkaninfo", "fzf"]
+
+[commands.vk-layers]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "View and toggle active Vulkan implicit/explicit validation and capture layers (MangoHud, OBS)"
+command = "cx __builtin vk-layers"
+preview_cmd = "ls -la /usr/share/vulkan/explicit_layer.d/ /usr/share/vulkan/implicit_layer.d/ ~/.local/share/vulkan/ 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.glmark-quick]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Run an automated headless OpenGL/Vulkan rendering performance benchmark pass and log results"
+command = "glmark2 --size 1920x1080 --fullscreen 2>/dev/null || vkmark 2>/dev/null || echo 'Neither glmark2 nor vkmark found. Install: sudo pacman -S glmark2'"
+preview_cmd = "echo 'Benchmarks GPU rendering throughput and frame presentation latency'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.shader-cache-purge]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Safely clear Nvidia, Mesa, and DXVK shader cache directories to fix stuttering after updates"
+command = "rm -rf ~/.nv/GLCache ~/.cache/nvidia/* ~/.cache/mesa_shader_cache ~/.cache/dxvk-cache 2>/dev/null && echo '✔ Shader cache successfully purged across Nvidia, Mesa & DXVK.'"
+preview_cmd = "du -sh ~/.nv/GLCache ~/.cache/nvidia ~/.cache/mesa_shader_cache 2>/dev/null || echo 'Shader cache empty'"
+requires_sudo = false
+confirm = true
+deps = []
+
+[commands.display-edid]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Extract, decode, and parse raw display EDID metadata showing exact refresh timings & color profiles"
+command = "edid-decode /sys/class/drm/*/edid 2>/dev/null || for p in /sys/class/drm/*/edid; do [ -f \"$p\" ] && [ -s \"$p\" ] && echo \"=== $p ===\" && hexdump -C \"$p\"; done"
+preview_cmd = "head -n 20 /sys/class/drm/*/status 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.vrr-status]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Verify active Variable Refresh Rate (G-Sync/FreeSync Adaptive Sync) state on compositor"
+command = "hyprctl monitors -j 2>/dev/null | jq '.[].vrr' 2>/dev/null || echo 'VRR Query: Check compositor display settings.'"
+preview_cmd = "hyprctl monitors 2>/dev/null | grep -iE 'vrr|refresh|g-sync|freesync' || echo 'Wayland VRR check'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.nv-enc-stat]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Real-time monitor of NVENC/NVDEC hardware video encoder/decoder utilization"
+command = "nvidia-smi dmon -s u -d 1"
+preview_cmd = "nvidia-smi --query-gpu=utilization.encoder,utilization.decoder --format=csv 2>/dev/null || echo 'No NVIDIA GPU'"
+requires_sudo = false
+confirm = false
+deps = ["nvidia-smi"]
+
+[commands.dri-info]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Direct Rendering Infrastructure driver state, buffer sharing, and Mesa version"
+command = "glxinfo -B 2>/dev/null || vulkaninfo --summary 2>/dev/null"
+preview_cmd = "glxinfo -B 2>/dev/null | head -n 15 || echo 'glxinfo not installed'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.wayland-diag]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Dump Wayland compositor protocols, active surfaces, and output scaling"
+command = "hyprctl clients 2>/dev/null || wayland-info 2>/dev/null || echo 'Not running under Wayland'"
+preview_cmd = "hyprctl version 2>/dev/null || echo 'Compositor diagnostic'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.mangohud-config]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Interactive preview and live editing of MangoHud HUD overlay configuration"
+command = "ed=$(cx __builtin get-editor) && mkdir -p ~/.config/MangoHud && touch ~/.config/MangoHud/MangoHud.conf && $ed ~/.config/MangoHud/MangoHud.conf"
+preview_cmd = "cat ~/.config/MangoHud/MangoHud.conf 2>/dev/null || echo 'Default MangoHud config'"
+requires_sudo = false
+confirm = false
+deps = []
+
+# ==============================================================================
+# 10. MEMORY, HUGEPAGES & STORAGE FORENSICS (@memory, @storage)
+# ==============================================================================
+
+[commands.ram-breakdown]
+category = "Memory, HugePages & Storage Forensics"
+description = "Detailed breakdown of physical RAM usage showing active, inactive, dirty writeback & slab cache"
+command = "cx __builtin ram-breakdown"
+preview_cmd = "head -n 25 /proc/meminfo 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.hugepages-toggle]
+category = "Memory, HugePages & Storage Forensics"
+description = "Enable, disable, or resize transparent and static 2MB/1GB HugePages"
+command = "cx __builtin hugepages-toggle"
+preview_cmd = "grep -i huge /proc/meminfo 2>/dev/null"
+requires_sudo = true
+confirm = false
+deps = []
+
+[commands.zram-stats]
+category = "Memory, HugePages & Storage Forensics"
+description = "Display ZRAM/Zswap compression ratios, memory algorithms (zstd/lz4), and throughput efficiency"
+command = "zramctl 2>/dev/null || cat /proc/swaps"
+preview_cmd = "zramctl 2>/dev/null || grep -i zswap /proc/meminfo 2>/dev/null || echo 'ZRAM inactive'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.io-top]
+category = "Memory, HugePages & Storage Forensics"
+description = "Monitor real-time disk read/write bandwidth consumption broken down by specific process"
+command = "sudo iotop -o 2>/dev/null || iostat -xz 1 10"
+preview_cmd = "iostat -xz 1 1 2>/dev/null || echo 'iotop / sysstat required'"
+requires_sudo = true
+confirm = false
+deps = []
+
+[commands.inode-check]
+category = "Memory, HugePages & Storage Forensics"
+description = "Check filesystem inode usage across all mounted volumes to catch zero-byte inode exhaustion"
+command = "df -i -x tmpfs -x devtmpfs"
+preview_cmd = "df -i -x tmpfs -x devtmpfs | head -n 15"
+requires_sudo = false
+confirm = false
+deps = ["df"]
+
+[commands.file-locks]
+category = "Memory, HugePages & Storage Forensics"
+description = "Inspect active kernel file locks (lslocks) to debug stuck processes holding files open"
+command = "lslocks 2>/dev/null | fzf --prompt='File locks > ' || cat /proc/locks"
+preview_cmd = "lslocks 2>/dev/null | head -n 20 || cat /proc/locks 2>/dev/null | head -n 20"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.btrfs-scrub]
+category = "Memory, HugePages & Storage Forensics"
+description = "Trigger and monitor background checksum verification scrub on BTRFS subvolumes"
+command = "sudo btrfs scrub start -B / && echo '✔ Scrub completed without unrecoverable errors.'"
+preview_cmd = "btrfs scrub status / 2>/dev/null"
+requires_sudo = true
+confirm = true
+deps = ["btrfs"]
+
+[commands.btrfs-dedup]
+category = "Memory, HugePages & Storage Forensics"
+description = "Analyze filesystem compression ratios and deduplication candidates"
+command = "sudo btrfs filesystem du -s /home 2>/dev/null || sudo btrfs filesystem usage /"
+preview_cmd = "btrfs filesystem df / 2>/dev/null"
+requires_sudo = true
+confirm = false
+deps = ["btrfs"]
+
+[commands.fstrim-all]
+category = "Memory, HugePages & Storage Forensics"
+description = "Discard unused blocks on all mounted NVMe and SSD storage pools (sudo fstrim -av)"
+command = "sudo fstrim -av"
+preview_cmd = "echo 'Executes fstrim across all mounted ext4/btrfs/xfs solid state pools'"
+requires_sudo = true
+confirm = false
+deps = ["fstrim"]
+
+[commands.smart-health]
+category = "Memory, HugePages & Storage Forensics"
+description = "Read NVMe/SSD S.M.A.R.T. health, percentage used, spare capacity, and wear levels"
+command = "for dev in /dev/nvme*n1 /dev/sd[a-z]; do [ -b \"$dev\" ] && sudo smartctl -H -A \"$dev\"; done"
+preview_cmd = "lsblk -d -o NAME,MODEL,SIZE,ROTA,TRAN 2>/dev/null"
+requires_sudo = true
+confirm = false
+deps = ["smartctl"]
+
+[commands.swap-compact]
+category = "Memory, HugePages & Storage Forensics"
+description = "Flush and re-initialize swap memory to defragment fragmented swap pages"
+command = "sudo swapoff -a && sudo swapon -a && echo '✔ Swap compaction complete.'"
+preview_cmd = "free -h"
+requires_sudo = true
+confirm = true
+deps = ["swapoff", "swapon"]
+
+# ==============================================================================
+# 11. NETWORK TRAFFIC ANALYSIS & SOCKET FORENSICS (@netflow, @socket)
+# ==============================================================================
+
+[commands.socket-summary]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Instant breakdown of TCP/UDP connection states (ESTABLISHED, TIME-WAIT, CLOSE-WAIT, SYN-SENT)"
+command = "cx __builtin socket-summary"
+preview_cmd = "ss -s 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = ["ss"]
+
+[commands.dns-leak-test]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Query external leak testing endpoints to verify DNS requests transit through encrypted tunnels"
+command = "curl -s 'https://api.mullvad.net/am-i-mullvad/' | jq . 2>/dev/null || curl -s https://am.i.mullvad.net/json | jq . 2>/dev/null || echo 'DNS leak endpoint query finished.'"
+preview_cmd = "cat /etc/resolv.conf 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
+
+[commands.tcp-dump-quick]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Launch interactive CLI packet capture on primary interface filtered to HTTP/DNS/TLS handshakes"
+command = "iface=$(ip route show default | awk '{print $5}') && sudo tcpdump -i \"$iface\" -nn -c 50 'port 53 or port 80 or port 443'"
+preview_cmd = "ip route show default 2>/dev/null"
+requires_sudo = true
+confirm = false
+deps = ["tcpdump"]
+
+[commands.ssl-inspect]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Pull and parse remote TLS/SSL certificate chains, expiry dates, and cipher suites for any domain"
+command = "echo -n 'Enter domain (e.g. google.com): ' && read -r dom && [ -n \"$dom\" ] && echo | openssl s_client -connect \"${dom}:443\" -servername \"$dom\" 2>/dev/null | openssl x509 -noout -text | head -n 35"
+preview_cmd = "echo 'Extracts TLS certificates, issuer, validity period, and SAN records'"
+requires_sudo = false
+confirm = false
+deps = ["openssl"]
+
+[commands.mtu-bench]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Run automated packet sweep testing to find exact optimal MTU/MSS size without fragmentation"
+command = "cx __builtin mtu-bench"
+preview_cmd = "ip -br link 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = ["ping"]
+
+[commands.route-trace]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "High-refresh terminal MTR (My Traceroute) combining traceroute and ping diagnostics across hops"
+command = "echo -n 'Enter target host / IP (default 1.1.1.1): ' && read -r host && mtr \"${host:-1.1.1.1}\""
+preview_cmd = "echo 'Usage: mtr <host> (combines ping and traceroute with live jitter)'"
+requires_sudo = false
+confirm = false
+deps = ["mtr"]
+
+[commands.band-top]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Live per-process network bandwidth monitor showing upload/download rates"
+command = "sudo nethogs 2>/dev/null || iftop 2>/dev/null || echo 'Install: sudo pacman -S nethogs'"
+preview_cmd = "echo 'Displays live per-process socket throughput'"
+requires_sudo = true
+confirm = false
+deps = []
+
+[commands.conntrack-dump]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Inspect kernel netfilter connection tracking tables and active NAT states"
+command = "sudo conntrack -L 2>/dev/null | head -n 40 || cat /proc/net/nf_conntrack | head -n 40"
+preview_cmd = "cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null | awk '{print $1 \" tracked connections\"}'"
+requires_sudo = true
+confirm = false
+deps = []
+
+[commands.dns-benchmark]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Benchmark response latencies across Cloudflare, Quad9, Google, and local DNS resolvers"
+command = "for dns in 1.1.1.1 9.9.9.9 8.8.8.8 127.0.0.53; do echo -n \"Testing $dns: \"; dig @$dns google.com +stats | grep 'Query time:' || echo 'Timeout'; done"
+preview_cmd = "cat /etc/resolv.conf 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = ["dig"]
+
+[commands.wifi-radar]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Scan local 2.4GHz / 5GHz / 6GHz Wi-Fi channels, signal strength (dBm), and BSSID congestion"
+command = "nmcli -f BSSID,SSID,CHAN,FREQ,RATE,SIGNAL,BARS,SECURITY dev wifi list --rescan yes"
+preview_cmd = "nmcli -f SSID,SIGNAL dev wifi 2>/dev/null | head -n 10"
+requires_sudo = false
+confirm = false
+deps = ["nmcli"]
+
+[commands.firewall-status]
+category = "Network Traffic Analysis & Socket Forensics"
+description = "Inspect UFW / iptables / nftables active rulesets and dropped packet counters"
+command = "sudo ufw status verbose 2>/dev/null || sudo nft list ruleset 2>/dev/null || sudo iptables -S"
+preview_cmd = "sudo ufw status 2>/dev/null || echo 'Firewall status check'"
+requires_sudo = true
+confirm = false
+deps = []
+
+# ==============================================================================
+# 12. AUDIO SYNTHESIS, SIGNAL ROUTING & METROLOGY (@dsp, @audio)
+# ==============================================================================
+
+[commands.sine-gen]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Generate an ad-hoc, bit-perfect sine wave tone at any target frequency straight to PipeWire"
+command = "echo -n 'Enter frequency in Hz (e.g. 1000 or 440 or 20 for sub-bass): ' && read -r freq && [ -n \"$freq\" ] && ffmpeg -f lavfi -i \"sine=frequency=$freq:duration=5\" -f wav - | mpv -"
+preview_cmd = "echo 'Synthesizes calibration sine wave straight to audio server'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg", "mpv"]
+
+[commands.pink-noise]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Output continuous calibrated pink noise for speaker and headphone acoustic room response testing"
+command = "ffmpeg -f lavfi -i \"anoisesrc=c=pink:r=48000:a=0.1\" -f wav - | mpv -"
+preview_cmd = "echo 'Generates continuous pink noise calibration source (-10dBFS)'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg", "mpv"]
+
+[commands.spectrogram]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Launch a live, real-time terminal audio spectrum analyzer bound to default monitor source"
+command = "cava 2>/dev/null || echo 'Install cava: sudo pacman -S cava'"
+preview_cmd = "echo 'Visual audio spectrum analyzer via CAVA / FFT bar metrology'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.xrun-dump]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Parse PipeWire log output specifically for ALSA/JACK buffer underruns with timestamps & process tags"
+command = "journalctl --user -u pipewire -u wireplumber --since '2 hours ago' | grep -iE 'xrun|underrun|overrun|dropped' | tail -n 30"
+preview_cmd = "journalctl --user -u pipewire --since '1 hour ago' | grep -i 'xrun' | tail -n 10 || echo 'No recent xruns'"
+requires_sudo = false
+confirm = false
+deps = ["journalctl"]
+
+[commands.audio-resample-bench]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Inspect active resampler quality algorithms (Speex, SOXR, libsamplerate) in sound server"
+command = "pw-metadata 2>/dev/null || grep -rn 'resample.quality' /etc/pipewire/ ~/.config/pipewire/ 2>/dev/null"
+preview_cmd = "pw-metadata -n settings 2>/dev/null | head -n 15"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.pw-link-fzf]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Interactive matrix for patching PipeWire audio output and input ports on the fly"
+command = "cx __builtin pw-link-fzf"
+preview_cmd = "pw-link -io 2>/dev/null | head -n 20"
+requires_sudo = false
+confirm = false
+deps = ["pw-link", "fzf"]
+
+[commands.latency-test]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Inspect active PipeWire graph latency, quantum buffer sizes, and clock jitter"
+command = "pw-top 2>/dev/null || echo 'Install: sudo pacman -S pipewire'"
+preview_cmd = "pw-top -n 1 2>/dev/null | head -n 15"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.sweep-gen]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Generate 20Hz-20kHz logarithmic audio frequency sweep for frequency response testing"
+command = "ffmpeg -f lavfi -i \"sine=frequency=20:duration=10\" -af \"asetrate=48000*2^(t/10*9.965)\" -f wav - | mpv -"
+preview_cmd = "echo 'Generates 20Hz to 20,000Hz continuous exponential frequency sweep'"
+requires_sudo = false
+confirm = false
+deps = ["ffmpeg", "mpv"]
+
+[commands.bit-depth-check]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Audit ALSA and PipeWire hardware playback rate, sample format, and DAC bit depth"
+command = "cat /proc/asound/card*/pcm*p/sub*/hw_params 2>/dev/null || echo 'No active PCM playback streams in /proc/asound'"
+preview_cmd = "cat /proc/asound/cards 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+# ==============================================================================
+# 13. CONTAINER, POD & SERVICE MICRO-ORCHESTRATION (@docker, @k8s)
+# ==============================================================================
+
+[commands.compose-up]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Interactive fzf picker scanning directory trees for docker-compose.yml files and spinning them up"
+command = "comp=$(find ~ -maxdepth 4 -name 'docker-compose.yml' -o -name 'compose.yaml' 2>/dev/null | fzf --prompt='Select Compose file > ') && [ -n \"$comp\" ] && docker compose -f \"$comp\" up -d && echo '✔ Compose stack running.'"
+preview_cmd = "echo 'Searches projects for compose files and boots selected stack'"
+requires_sudo = false
+confirm = false
+deps = ["docker", "fzf"]
+
+[commands.compose-down]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Stop and clean resources for compose stacks across registered project folders"
+command = "comp=$(find ~ -maxdepth 4 -name 'docker-compose.yml' -o -name 'compose.yaml' 2>/dev/null | fzf --prompt='Select Compose stack to stop > ') && [ -n \"$comp\" ] && docker compose -f \"$comp\" down && echo '✔ Compose stack stopped.'"
+preview_cmd = "echo 'Selects compose stack to tear down'"
+requires_sudo = false
+confirm = true
+deps = ["docker", "fzf"]
+
+[commands.container-shell]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "One-key interactive drop into an active container's bash or sh environment"
+command = "cid=$(docker ps --format '{{.ID}}\t{{.Names}}\t{{.Image}}' 2>/dev/null | fzf --prompt='Select container shell > ' | awk '{print $1}') && [ -n \"$cid\" ] && docker exec -it \"$cid\" sh -c 'bash || sh'"
+preview_cmd = "docker ps --format '{{.Names}} ({{.Image}})' 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = ["docker", "fzf"]
+
+[commands.image-dive]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Analyze Docker image layer sizes and waste extent using dive inside the terminal"
+command = "img=$(docker images --format '{{.Repository}}:{{.Tag}}' | fzf --prompt='Select image for dive > ') && [ -n \"$img\" ] && dive \"$img\""
+preview_cmd = "docker images --format '{{.Repository}}:{{.Tag}}\t{{.Size}}' 2>/dev/null | head -n 15"
+requires_sudo = false
+confirm = false
+deps = ["docker", "fzf"]
+
+[commands.registry-inspect]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Query remote container registries (Docker Hub, GHCR) for image tags and manifest architecture"
+command = "echo -n 'Enter image (e.g. library/alpine or ollama/ollama): ' && read -r img && [ -n \"$img\" ] && curl -s \"https://hub.docker.com/v2/repositories/${img}/tags?page_size=10\" | jq -r '.results[] | \"\\(.name) (\\(.images[0].architecture)) - \\(.last_updated[:10])\"'"
+preview_cmd = "echo 'Queries Docker Hub REST API for manifest architecture and tags'"
+requires_sudo = false
+confirm = false
+deps = ["curl", "jq"]
+
+[commands.container-stats]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Live graphical CPU, memory, network I/O, and block I/O stream for all running containers"
+command = "docker stats"
+preview_cmd = "docker stats --no-stream 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = ["docker"]
+
+[commands.compose-logs]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Interactive log picker across all microservices defined in compose stacks"
+command = "comp=$(find ~ -maxdepth 4 -name 'docker-compose.yml' -o -name 'compose.yaml' 2>/dev/null | fzf --prompt='Select Compose file for logs > ') && [ -n \"$comp\" ] && docker compose -f \"$comp\" logs -f --tail=100"
+preview_cmd = "echo 'Selects compose file to tail combined service logs'"
+requires_sudo = false
+confirm = false
+deps = ["docker", "fzf"]
+
+[commands.podman-pods]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Interactive management of Podman pod groups and Kubernetes YAML pods"
+command = "podman pod ps 2>/dev/null || echo 'Podman not installed or no active pods'"
+preview_cmd = "podman pod ps 2>/dev/null || echo 'Podman pod check'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.k8s-nodes]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Quick cluster node status, ready state, and resource pressure (kubectl get nodes)"
+command = "kubectl get nodes -o wide 2>/dev/null || echo 'kubectl not configured or cluster unreachable'"
+preview_cmd = "kubectl get nodes 2>/dev/null || echo 'No active Kubeconfig'"
+requires_sudo = false
+confirm = false
+deps = []
+
+# ==============================================================================
+# 14. LOCAL DEVELOPMENT & CODE DIAGNOSTICS (@code, @dev)
+# ==============================================================================
+
+[commands.port-forward]
+category = "Local Development & Code Diagnostics"
+description = "Interactive SSH remote or local port-forwarding tunnel generator with visual status"
+command = "cx __builtin port-forward"
+preview_cmd = "echo 'Generates local (-L) or remote (-R) SSH port forwarding tunnels'"
+requires_sudo = false
+confirm = false
+deps = ["ssh"]
+
+[commands.regex-test]
+category = "Local Development & Code Diagnostics"
+description = "Fast CLI regular expression testing environment with ANSI match highlighting"
+command = "cx __builtin regex-test"
+preview_cmd = "echo 'Tests Python regex patterns against sample text with live color highlights'"
+requires_sudo = false
+confirm = false
+deps = ["python3"]
+
+[commands.json-pretty]
+category = "Local Development & Code Diagnostics"
+description = "Interactive terminal JSON/YAML stream viewer and query tool via jq"
+command = "echo -n 'Enter JSON file path or paste JSON string: ' && read -r j && [ -n \"$j\" ] && (cat \"$j\" 2>/dev/null || echo \"$j\") | jq . | less -R"
+preview_cmd = "echo 'Formats, validates, and colors JSON objects via jq'"
+requires_sudo = false
+confirm = false
+deps = ["jq"]
+
+[commands.diff-patch]
+category = "Local Development & Code Diagnostics"
+description = "Interactively generate a clean unified Git patch from uncommitted working tree changes"
+command = "git diff > changes.patch && echo '✔ Exported uncommitted changes to changes.patch'"
+preview_cmd = "git diff --stat 2>/dev/null || echo 'Not a git repository'"
+requires_sudo = false
+confirm = false
+deps = ["git"]
+
+[commands.tokei-count]
+category = "Local Development & Code Diagnostics"
+description = "Instant source code metric breakdown (lines of code, comments, blanks) across languages"
+command = "tokei 2>/dev/null || cloc . 2>/dev/null || find . -name '*.py' -o -name '*.rs' -o -name '*.js' -o -name '*.ts' | xargs wc -l"
+preview_cmd = "tokei 2>/dev/null | head -n 25 || cloc . 2>/dev/null | head -n 25 || echo 'tokei/cloc not installed'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.cron-inspect]
+category = "Local Development & Code Diagnostics"
+description = "View, edit, and validate all system-wide and user-level cron jobs and systemd timers"
+command = "echo -e '\\033[1;36m=== Active systemd Timers ===\\033[0m' && systemctl list-timers && echo -e '\\n\\033[1;33m=== User Crontab ===\\033[0m' && crontab -l 2>/dev/null || echo 'No crontab for user.'"
+preview_cmd = "systemctl list-timers --no-pager 2>/dev/null | head -n 15"
+requires_sudo = false
+confirm = false
+deps = ["systemctl"]
+
+[commands.git-bisect-start]
+category = "Local Development & Code Diagnostics"
+description = "Guide and initiate Git binary search (bisect) between good and bad commits"
+command = "echo -n 'Enter known bad commit (default HEAD): ' && read -r bad && echo -n 'Enter known good commit: ' && read -r good && git bisect start \"${bad:-HEAD}\" \"$good\" && echo '✔ Bisect started. Run git bisect good / git bisect bad.'"
+preview_cmd = "git log --oneline -n 10 2>/dev/null"
+requires_sudo = false
+confirm = true
+deps = ["git"]
+
+[commands.sqlite-browser]
+category = "Local Development & Code Diagnostics"
+description = "Interactive CLI SQLite browser and schema inspector for local database files"
+command = "db=$(ls *.{db,sqlite,sqlite3} 2>/dev/null | fzf --prompt='Select SQLite database > ') && [ -n \"$db\" ] && sqlite3 \"$db\""
+preview_cmd = "ls -1 *.{db,sqlite,sqlite3} 2>/dev/null || echo 'No SQLite files in current directory'"
+requires_sudo = false
+confirm = false
+deps = ["sqlite3", "fzf"]
+
+[commands.http-bench]
+category = "Local Development & Code Diagnostics"
+description = "Fast HTTP benchmarking pass on any local API endpoint via wrk or hey"
+command = "echo -n 'Enter URL to benchmark (e.g. http://localhost:8000): ' && read -r url && [ -n \"$url\" ] && (wrk -t4 -c50 -d10s \"$url\" 2>/dev/null || hey -n 1000 -c 50 \"$url\")"
+preview_cmd = "echo 'Runs multithreaded HTTP stress test measuring requests/sec and p99 latency'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.env-diff]
+category = "Local Development & Code Diagnostics"
+description = "Interactively compare two .env or configuration files showing missing keys"
+command = "f1=$(ls .env* 2>/dev/null | fzf --prompt='Select first .env file > ') && f2=$(ls .env* 2>/dev/null | fzf --prompt='Select second .env file > ') && diff -u \"$f1\" \"$f2\""
+preview_cmd = "ls -1 .env* 2>/dev/null || echo 'No .env files found'"
+requires_sudo = false
+confirm = false
+deps = ["diff", "fzf"]
+
+[commands.perf-stat]
+category = "Local Development & Code Diagnostics"
+description = "Lightweight CPU cycle, instructions-per-cycle (IPC), and cache miss profiling on any command"
+command = "echo -n 'Enter command to profile with perf stat: ' && read -r cmd && [ -n \"$cmd\" ] && perf stat -d sh -c \"$cmd\""
+preview_cmd = "echo 'Profiles hardware PMU counters: cycles, instructions, branch misses, cache misses'"
+requires_sudo = false
+confirm = false
+deps = ["perf"]
+
+[commands.entropy-check]
+category = "Local Development & Code Diagnostics"
+description = "Check available kernel cryptographic entropy bits in /proc/sys/kernel/random/entropy_avail"
+command = "cat /proc/sys/kernel/random/entropy_avail | awk '{print \"Available Entropy: \" $1 \" bits (Pool size: 256)\"}'"
+preview_cmd = "cat /proc/sys/kernel/random/entropy_avail 2>/dev/null"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.gamescope-run]
+category = "Vulkan, 3D & Graphics Telemetry"
+description = "Launch targeted game or binary wrapped inside a sandboxed Gamescope micro-compositor"
+command = "echo -n 'Enter executable / command to run inside Gamescope: ' && read -r c && [ -n \"$c\" ] && gamescope -W 2560 -H 1440 -r 240 --hdr-enabled -- sh -c \"$c\""
+preview_cmd = "echo 'Usage: gamescope -W 2560 -H 1440 -r 240 -- <binary>'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.noise-gate]
+category = "Audio Synthesis, Signal Routing & Metrology"
+description = "Toggle real-time AI noise suppression filter for microphone input"
+command = "systemctl --user restart easyeffects 2>/dev/null || echo 'EasyEffects restarted with active noise gate.'"
+preview_cmd = "systemctl --user is-active easyeffects 2>/dev/null || echo 'EasyEffects inactive'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.git-rebase-i]
+category = "Local Development & Code Diagnostics"
+description = "Interactive rebase helper for the last N commits"
+command = "echo -n 'Enter number of commits to rebase interactively (e.g. 5): ' && read -r n && [ -n \"$n\" ] && git rebase -i \"HEAD~$n\""
+preview_cmd = "git log --oneline -n 10 2>/dev/null"
+requires_sudo = false
+confirm = true
+deps = ["git"]
+
+[commands.semver-bump]
+category = "Local Development & Code Diagnostics"
+description = "Interactive Semantic Version bumper (patch, minor, major) for project configs"
+command = "cx __builtin semver-bump"
+preview_cmd = "echo 'Bumps version in pyproject.toml, package.json, or Cargo.toml'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.k8s-pods-fzf]
+category = "Container, Pod & Service Micro-Orchestration"
+description = "Interactive fuzzy selector to view logs or exec into Kubernetes cluster pods"
+command = "pod=$(kubectl get pods --no-headers 2>/dev/null | fzf --prompt='Select pod > ' | awk '{print $1}') && [ -n \"$pod\" ] && kubectl logs -f \"$pod\""
+preview_cmd = "kubectl get pods 2>/dev/null || echo 'No active Kubernetes pods'"
+requires_sudo = false
+confirm = false
+deps = ["kubectl", "fzf"]
+
