@@ -341,6 +341,23 @@ def run_fzf(
         return []
 
 
+def copy_to_clipboard(text: str) -> bool:
+    """Copies text to system clipboard using wl-copy (Wayland) or xclip (X11)."""
+    if shutil.which("wl-copy"):
+        try:
+            subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=True, timeout=2.0)
+            return True
+        except Exception:
+            pass
+    if shutil.which("xclip"):
+        try:
+            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=True, timeout=2.0)
+            return True
+        except Exception:
+            pass
+    return False
+
+
 # ---------------------------------------------------------------------------
 # BUILT-IN POWER UTILITIES
 # ---------------------------------------------------------------------------
@@ -1480,24 +1497,533 @@ def builtin_stream_yt(video: bool = False, query: Optional[str] = None, dry_run:
         subprocess.run(cmd)
 
 
-def builtin_stream_radio():
-    stations = [
-        ("Lofi Girl - Relaxing Beats", "https://play.streamafrica.net/lofigirl"),
-        ("Nightwave Plaza - 24/7 Vaporwave", "https://radio.plaza.one/mp3"),
-        ("SomaFM - Groove Salad (Ambient/Chill)", "https://ice1.somafm.com/groovesalad-128-mp3"),
-        ("SomaFM - Drone Zone (Atmospheric)", "https://ice1.somafm.com/dronezone-128-mp3"),
-        ("SomaFM - DEF CON Radio", "https://ice1.somafm.com/defcon-128-mp3"),
-        ("SomaFM - Vaporwaves", "https://ice1.somafm.com/vaporwaves-128-mp3"),
-        ("RetroSynth - Synthwave 24/7", "https://stream.zeno.fm/f3wvbbqmdg8uv"),
-    ]
-    items = [f"{s[0]}\t{s[1]}" for s in stations]
-    selected = run_fzf(items, prompt="Radio Station > ", extra_args=["--delimiter=\t", "--with-nth=1"])
+# ---------------------------------------------------------------------------
+# 24/7 COMMERCIAL-FREE LIVE RADIO STATIONS (48 CURATED CHANNELS)
+# ---------------------------------------------------------------------------
+RADIO_STATIONS: List[Dict[str, str]] = [
+    # Lo-Fi, Study & Chill Beats
+    {
+        "name": "Lofi Girl - Relaxing Beats",
+        "category": "Lo-Fi / Chill",
+        "genre": "Lofi Hip-Hop",
+        "url": "https://play.streamafrica.net/lofigirl",
+        "desc": "24/7 relaxing lofi hip hop beats to study, code and chill",
+    },
+    {
+        "name": "SomaFM - Groove Salad",
+        "category": "Lo-Fi / Chill",
+        "genre": "Downtempo / Ambient",
+        "url": "https://ice1.somafm.com/groovesalad-128-mp3",
+        "desc": "A nicely chilled plate of ambient/downtempo beats & grooves",
+    },
+    {
+        "name": "SomaFM - Lush",
+        "category": "Lo-Fi / Chill",
+        "genre": "Sensuous Chill",
+        "url": "https://ice1.somafm.com/lush-128-mp3",
+        "desc": "Sensuous and mellow vocals with acoustic & electronic chill",
+    },
+    {
+        "name": "SomaFM - Fluid",
+        "category": "Lo-Fi / Chill",
+        "genre": "Instrumental Soul",
+        "url": "https://ice1.somafm.com/fluid-128-mp3",
+        "desc": "Downtempo instrumental hip-hop, future soul & nu-jazz",
+    },
+    {
+        "name": "SomaFM - Beat Blender",
+        "category": "Lo-Fi / Chill",
+        "genre": "Deep House",
+        "url": "https://ice1.somafm.com/beatblender-128-mp3",
+        "desc": "A late night blend of deep house, tech-house & chilled electronic grooves",
+    },
+
+    # Synthwave, Vaporwave & Cyberpunk
+    {
+        "name": "Nightwave Plaza",
+        "category": "Vaporwave",
+        "genre": "Vaporwave / Future Funk",
+        "url": "https://radio.plaza.one/mp3",
+        "desc": "The premier 24/7 aesthetic vaporwave & future funk broadcast from Tokyo",
+    },
+    {
+        "name": "RetroSynth Radio",
+        "category": "Synthwave",
+        "genre": "Synthwave / Outrun",
+        "url": "https://stream.zeno.fm/f3wvbbqmdg8uv",
+        "desc": "Nonstop 80s inspired retro synth, darksynth, synthpop and outrun",
+    },
+    {
+        "name": "SomaFM - DEF CON Radio",
+        "category": "Cyberpunk",
+        "genre": "Cyber / Hacker Beats",
+        "url": "https://ice1.somafm.com/defcon-128-mp3",
+        "desc": "Music for hacking, security auditing, phreaking & cyber culture",
+    },
+    {
+        "name": "SomaFM - Vaporwaves",
+        "category": "Vaporwave",
+        "genre": "Dreampunk / Ambient",
+        "url": "https://ice1.somafm.com/vaporwaves-128-mp3",
+        "desc": "All vaporwave, dream catalogue, and nostalgic digital aesthetics",
+    },
+    {
+        "name": "SomaFM - Underground 80s",
+        "category": "Synthwave",
+        "genre": "New Wave / Synthpop",
+        "url": "https://ice1.somafm.com/u80s-128-mp3",
+        "desc": "Early 80s UK/US synthpop, post-punk & alternative underground new wave",
+    },
+
+    # Ambient, Space & Deep Focus
+    {
+        "name": "SomaFM - Drone Zone",
+        "category": "Ambient / Focus",
+        "genre": "Atmospheric Drone",
+        "url": "https://ice1.somafm.com/dronezone-128-mp3",
+        "desc": "Atmospheric ambient drone for deep concentration and mental flow",
+    },
+    {
+        "name": "SomaFM - Deep Space One",
+        "category": "Ambient / Focus",
+        "genre": "Deep Space Ambient",
+        "url": "https://ice1.somafm.com/deepspaceone-128-mp3",
+        "desc": "Deep ambient electronic and space music for exploration and meditation",
+    },
+    {
+        "name": "SomaFM - Mission Control",
+        "category": "Ambient / Focus",
+        "genre": "Space / NASA Comms",
+        "url": "https://ice1.somafm.com/missioncontrol-128-mp3",
+        "desc": "Ambient electronica celebrating space exploration mixed with live NASA comms",
+    },
+    {
+        "name": "SomaFM - Synphaera",
+        "category": "Ambient / Focus",
+        "genre": "Space Electronic",
+        "url": "https://ice1.somafm.com/synphaera-128-mp3",
+        "desc": "Space ambient and modern electronic soundscapes from Synphaera Records",
+    },
+    {
+        "name": "SomaFM - Space Station Soma",
+        "category": "Ambient / Focus",
+        "genre": "Electronica",
+        "url": "https://ice1.somafm.com/spacestation-128-mp3",
+        "desc": "Tune in, turn on, space out. Spacewalk-worthy mid-tempo electronica",
+    },
+    {
+        "name": "SomaFM - SF 10-33",
+        "category": "Ambient / Focus",
+        "genre": "Ambient / Scanner",
+        "url": "https://ice1.somafm.com/sf1033-128-mp3",
+        "desc": "Ambient electronic beats layered with live San Francisco emergency radio",
+    },
+
+    # Electronic, Club & Drum & Bass
+    {
+        "name": "Bassdrive",
+        "category": "Electronic",
+        "genre": "Drum & Bass",
+        "url": "https://bassdrive.radioca.st/stream",
+        "desc": "Worldwide 24/7 Drum & Bass live community radio station",
+    },
+    {
+        "name": "SomaFM - cliqhop idm",
+        "category": "Electronic",
+        "genre": "IDM / Glitch",
+        "url": "https://ice1.somafm.com/cliqhop-128-mp3",
+        "desc": "Blips, bleeps & intelligent dance music. Algorithmic brainfood",
+    },
+    {
+        "name": "SomaFM - Dub Step Beyond",
+        "category": "Electronic",
+        "genre": "Dubstep / Deep Bass",
+        "url": "https://ice1.somafm.com/dubstep-128-mp3",
+        "desc": "Dubstep, dub and deep sub-bass roots music to rumble your headphones",
+    },
+    {
+        "name": "SomaFM - PopTron",
+        "category": "Electronic",
+        "genre": "Electropop / Dance",
+        "url": "https://ice1.somafm.com/poptron-128-mp3",
+        "desc": "Electropop and dance-oriented indie pop with modern polish",
+    },
+    {
+        "name": "Sunshine Live",
+        "category": "Electronic",
+        "genre": "Techno / Club",
+        "url": "https://stream.sunshine-live.de/live/mp3-128",
+        "desc": "Germany's legendary electronic music, techno, trance & club broadcast",
+    },
+    {
+        "name": "FIP Electro",
+        "category": "Electronic",
+        "genre": "Downtempo / Electro",
+        "url": "https://icecast.radiofrance.fr/fipelectro-midfi.mp3",
+        "desc": "Eclectic electronic, nu-disco, ambient house & French touch",
+    },
+
+    # Rock, Metal & Alternative
+    {
+        "name": "Radio Paradise - Rock Mix",
+        "category": "Rock / Metal",
+        "genre": "Modern / Classic Rock",
+        "url": "https://stream.radioparadise.com/rock-320",
+        "desc": "High-fidelity 320k commercial-free modern and classic rock blend",
+    },
+    {
+        "name": "SomaFM - Metal Detector",
+        "category": "Rock / Metal",
+        "genre": "Hard Rock / Metal",
+        "url": "https://ice1.somafm.com/metal-128-mp3",
+        "desc": "From black to doom, progressive to thrash. Hard rock and heavy metal",
+    },
+    {
+        "name": "SomaFM - Indie Pop Rocks!",
+        "category": "Rock / Metal",
+        "genre": "Indie Rock",
+        "url": "https://ice1.somafm.com/indiepop-128-mp3",
+        "desc": "New and classic indie pop and rock from underground artists",
+    },
+    {
+        "name": "FIP Rock",
+        "category": "Rock / Metal",
+        "genre": "Alternative / Rock",
+        "url": "https://icecast.radiofrance.fr/fiprock-midfi.mp3",
+        "desc": "Curated Parisian rock selection: indie, punk, garage & classic",
+    },
+    {
+        "name": "KEXP 90.3 Seattle",
+        "category": "Rock / Metal",
+        "genre": "Indie Alternative",
+        "url": "https://kexp.streamguys1.com/kexp128.mp3",
+        "desc": "World-renowned Seattle independent music station featuring live sessions",
+    },
+    {
+        "name": "SomaFM - Secret Agent",
+        "category": "Rock / Metal",
+        "genre": "Spy Lounge / Surf",
+        "url": "https://ice1.somafm.com/secretagent-128-mp3",
+        "desc": "The soundtrack for your stylish, mysterious, and dangerous life",
+    },
+
+    # Jazz, Soul, Roots & World
+    {
+        "name": "Swiss Jazz",
+        "category": "Jazz / Soul",
+        "genre": "Jazz / Swing / Blues",
+        "url": "http://stream.srg-ssr.ch/m/rsj/mp3_128",
+        "desc": "Commercial-free Swiss public radio: classic jazz, soul, blues and swing",
+    },
+    {
+        "name": "FIP Jazz",
+        "category": "Jazz / Soul",
+        "genre": "Jazz / Nu-Jazz",
+        "url": "https://icecast.radiofrance.fr/fipjazz-midfi.mp3",
+        "desc": "From Miles Davis to contemporary European nu-jazz and bebop",
+    },
+    {
+        "name": "SomaFM - Heavyweight Reggae",
+        "category": "Jazz / Soul",
+        "genre": "Reggae / Dub Roots",
+        "url": "https://ice1.somafm.com/reggae-128-mp3",
+        "desc": "Reggae, ska, dub and rocksteady from the island of Jamaica",
+    },
+    {
+        "name": "SomaFM - Suburbs of Goa",
+        "category": "Jazz / Soul",
+        "genre": "World Chill / Asian",
+        "url": "https://ice1.somafm.com/suburbsofgoa-128-mp3",
+        "desc": "Desi-influenced world chill, Asian underground grooves & sitar fusion",
+    },
+    {
+        "name": "SomaFM - Boot Liquor",
+        "category": "Jazz / Soul",
+        "genre": "Americana / Cowpunk",
+        "url": "https://ice1.somafm.com/bootliquor-128-mp3",
+        "desc": "Americana, outlaw country, honky-tonk and roots cowpunk",
+    },
+    {
+        "name": "SomaFM - Folk Forward",
+        "category": "Jazz / Soul",
+        "genre": "Contemporary Folk",
+        "url": "https://ice1.somafm.com/folkfwd-128-mp3",
+        "desc": "Indie folk, acoustic songwriter, and modern traditional folk roots",
+    },
+
+    # Audiophile & Classical
+    {
+        "name": "Radio Paradise - Main Mix",
+        "category": "Audiophile / Chill",
+        "genre": "Eclectic Audiophile (320k)",
+        "url": "https://stream.radioparadise.com/mp3-320",
+        "desc": "Listener-funded commercial-free audiophile mix of rock, world & electronica",
+    },
+    {
+        "name": "Radio Paradise - Mellow Mix",
+        "category": "Audiophile / Chill",
+        "genre": "Acoustic / Mellow (320k)",
+        "url": "https://stream.radioparadise.com/mellow-320",
+        "desc": "Gentle, soothing blend of acoustic, ambient and mellow rock in 320k",
+    },
+    {
+        "name": "Radio Paradise - Global Mix",
+        "category": "Audiophile / Chill",
+        "genre": "World / Fusion (320k)",
+        "url": "https://stream.radioparadise.com/global-320",
+        "desc": "Global sounds, tribal rhythms, Celtic and world-fusion melodies in 320k",
+    },
+    {
+        "name": "Swiss Classic",
+        "category": "Classical",
+        "genre": "Concert Classical",
+        "url": "http://stream.srg-ssr.ch/m/rsc_de/mp3_128",
+        "desc": "Swiss public classical radio featuring concert halls, symphonies & opera",
+    },
+    {
+        "name": "Classical King FM",
+        "category": "Classical",
+        "genre": "Classical Symphony",
+        "url": "https://classicalking.streamguys1.com/king-fm-mp3",
+        "desc": "Seattle 24/7 world-class classical symphony, concerto and baroque masterworks",
+    },
+    {
+        "name": "WQXR 105.9 FM New York",
+        "category": "Classical",
+        "genre": "Classical Symphony",
+        "url": "https://stream.wqxr.org/wqxr",
+        "desc": "New York's premier classical music station broadcasting from Lincoln Center",
+    },
+    {
+        "name": "SomaFM - Covers",
+        "category": "Audiophile / Chill",
+        "genre": "Cover Songs Only",
+        "url": "https://ice1.somafm.com/covers-128-mp3",
+        "desc": "Just covers. Familiar tunes cleverly re-imagined and recorded by other artists",
+    },
+
+    # Anime & Underground
+    {
+        "name": "Listen.moe - J-Pop",
+        "category": "Anime / Asian",
+        "genre": "Anime OST / J-Pop",
+        "url": "https://listen.moe/stream",
+        "desc": "24/7 Japanese Pop, anime theme soundtracks & Vocaloid in pristine audio",
+    },
+    {
+        "name": "Listen.moe - K-Pop",
+        "category": "Anime / Asian",
+        "genre": "K-Pop / Korean Indie",
+        "url": "https://listen.moe/kpop/stream",
+        "desc": "24/7 Korean Pop, K-Drama OSTs, and modern Korean indie broadcasts",
+    },
+    {
+        "name": "NTS Radio 1",
+        "category": "Underground",
+        "genre": "London Underground",
+        "url": "https://stream-relay-geo.ntslive.net/stream",
+        "desc": "Global underground music broadcasting live from London with artist resident sets",
+    },
+    {
+        "name": "NTS Radio 2",
+        "category": "Underground",
+        "genre": "Global Underground",
+        "url": "https://stream-relay-geo.ntslive.net/stream2",
+        "desc": "Alternative underground sound experiments, field recordings and ambient live sets",
+    },
+    {
+        "name": "FIP Radio Paris",
+        "category": "Underground",
+        "genre": "French Eclectic",
+        "url": "https://icecast.radiofrance.fr/fip-midfi.mp3",
+        "desc": "Parisian genre-fluid musical continuum without DJ interruptions or commercials",
+    },
+
+    # News & Public Radio
+    {
+        "name": "BBC World Service",
+        "category": "News / Talk",
+        "genre": "International News",
+        "url": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service",
+        "desc": "24/7 international news analysis, tech briefings & world documentaries",
+    },
+    {
+        "name": "NPR 24 Hour Stream",
+        "category": "News / Talk",
+        "genre": "Public Radio / Talk",
+        "url": "https://npr-ice.streamguys1.com/live.mp3",
+        "desc": "Morning Edition, All Things Considered, Fresh Air & investigative journalism",
+    },
+]
+
+
+def load_custom_radio_stations() -> List[Dict[str, str]]:
+    """Loads optional user-defined radio stations from ~/.config/corex/config.toml under [radio.stations]."""
+    if not CONFIG_FILE.exists():
+        return []
+    try:
+        import tomllib
+        with open(CONFIG_FILE, "rb") as f:
+            data = tomllib.load(f)
+        custom = data.get("radio", {}).get("stations", [])
+        res = []
+        for s in custom:
+            if isinstance(s, dict) and "name" in s and "url" in s:
+                res.append({
+                    "name": str(s.get("name", "Custom Station")),
+                    "category": str(s.get("category", "Custom")),
+                    "genre": str(s.get("genre", "Custom Stream")),
+                    "url": str(s["url"]),
+                    "desc": str(s.get("desc", "User-configured radio stream")),
+                })
+        return res
+    except Exception:
+        return []
+
+
+def render_radio_preview(target: str, cfg: CoreXConfig):
+    """Renders ANSI preview card for the FZF stream radio chooser."""
+    all_stations = list(RADIO_STATIONS) + load_custom_radio_stations()
+    raw = target.strip()
+    st = next((s for s in all_stations if s["name"].lower() == raw.lower() or s["url"] == raw or raw.lower() in s["name"].lower()), None)
+    if not st:
+        print(f"\n{box_header('RADIO STATION PREVIEW', color=Style.CYAN)}")
+        print(f" Station:  {raw}")
+        print(box_footer(color=Style.CYAN))
+        return
+
+    cat_colors = {
+        "Lo-Fi / Chill": Style.CYAN,
+        "Vaporwave": Style.MAGENTA,
+        "Synthwave": Style.MAGENTA,
+        "Cyberpunk": Style.GREEN,
+        "Ambient / Focus": Style.BLUE,
+        "Electronic": Style.YELLOW,
+        "Rock / Metal": Style.RED,
+        "Jazz / Soul": Style.YELLOW,
+        "Audiophile / Chill": Style.CYAN,
+        "Classical": Style.BLUE,
+        "Anime / Asian": Style.MAGENTA,
+        "Underground": Style.CYAN,
+        "News / Talk": Style.WHITE,
+    }
+    col = cat_colors.get(st["category"], Style.CYAN)
+
+    print(box_header(f"STATION: {st['name']}", color=col))
+    print(f" {Style.BOLD}Category:{Style.RESET}       {col}{st['category']}{Style.RESET}")
+    print(f" {Style.BOLD}Genre / Style:{Style.RESET}  {st['genre']}")
+    print(f" {Style.BOLD}Description:{Style.RESET}    {st['desc']}")
+    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+    print(f" {Style.BOLD}STREAM TELEMETRY & AUDIO ENGINE:{Style.RESET}")
+    print(f"  • {Style.BOLD}Protocol:{Style.RESET}     Direct HTTPS/HTTP Icecast/Shoutcast Stream")
+    print(f"  • {Style.BOLD}Playback:{Style.RESET}     mpv --no-video (Minimal RAM & CPU footprint)")
+    print(f"  • {Style.BOLD}Audio Subsys:{Style.RESET} PipeWire / WirePlumber Low-Latency Audio")
+    print(f"  • {Style.BOLD}Metadata:{Style.RESET}     Live Stream Icy-Title (Artist & Track OSD)")
+    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+    print(f" {Style.BOLD}HOTKEYS:{Style.RESET}")
+    print(f"  • {Style.BOLD}ENTER:{Style.RESET}        Tune in immediately")
+    print(f"  • {Style.BOLD}CTRL-Y:{Style.RESET}       Copy stream URL to clipboard")
+    print(f"  • {Style.BOLD}q in mpv:{Style.RESET}     Stop playback cleanly")
+    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+    print(f" {Style.BOLD}Direct URL:{Style.RESET}     {Style.GRAY}{st['url']}{Style.RESET}")
+    print(box_footer(color=col))
+
+
+def _play_radio_stream(st: Dict[str, Any]):
+    print(f"\n{box_header('LIVE RADIO TUNER', color=Style.CYAN)}")
+    print(f" Station:       {Style.BOLD}{st['name']}{Style.RESET}")
+    print(f" Category:      {st.get('category', 'Radio')}")
+    print(f" Genre / Style: {st.get('genre', 'Music')}")
+    print(f" Stream URL:    {st['url']}")
+    print(f" Audio Engine:  mpv --no-video (PipeWire)")
+    print(f" Control:       Press {Style.BOLD}'q'{Style.RESET} in terminal to stop playback")
+    print(box_footer(color=Style.CYAN))
+    log_step("Tuning in", f"Connecting to {st['name']}...")
+    cmd = ["mpv", "--no-video", "--term-osd-bar", st["url"]]
+    try:
+        subprocess.run(cmd)
+    except KeyboardInterrupt:
+        print()
+
+
+def builtin_stream_radio(extra_args: Optional[List[str]] = None):
+    stations = list(RADIO_STATIONS)
+    custom_stations = load_custom_radio_stations()
+    if custom_stations:
+        stations = custom_stations + stations
+
+    query = " ".join(extra_args).strip() if extra_args else ""
+
+    # If direct query was given and matches exactly 1 station, play it immediately
+    if query:
+        direct_matches = [
+            s for s in stations
+            if query.lower() in s["name"].lower() or query.lower() in s["genre"].lower() or query.lower() in s["category"].lower()
+        ]
+        if len(direct_matches) == 1:
+            st = direct_matches[0]
+            _play_radio_stream(st)
+            return
+
+    items = []
+    for s in stations:
+        tag = f"[{s['category']}]"
+        line = f"{tag:<20} {s['name']:<30} {s['genre']:<24} {s['desc']}\t{s['url']}\t{s['name']}"
+        items.append(line)
+
+    self_exe = os.path.abspath(sys.argv[0])
+    preview_cmd = f"python3 '{self_exe}' __preview_radio {{3}}"
+
+    fzf_extra = ["--delimiter=\t", "--with-nth=1", "--expect=ctrl-y"]
+    if query:
+        fzf_extra.append(f"--query={query}")
+
+    header = (
+        f"CoreX Live Radio Hub ({len(stations)} Curated Commercial-Free Streams)\n"
+        "ENTER: Tune In   |   CTRL-Y: Copy Stream URL   |   Type to filter by genre or name"
+    )
+
+    selected = run_fzf(
+        items,
+        prompt="Radio Station > ",
+        preview_cmd=preview_cmd,
+        header=header,
+        extra_args=fzf_extra,
+    )
+
     if not selected:
         return
 
-    st_name, st_url = selected[0].split("\t")
-    log_success(f"Tuning into: {st_name}")
-    subprocess.run(["mpv", "--no-video", st_url])
+    if len(selected) >= 2:
+        key = selected[0].strip()
+        chosen_line = selected[1].strip()
+    else:
+        key = ""
+        chosen_line = selected[0].strip()
+
+    parts = chosen_line.split("\t")
+    if len(parts) < 3:
+        return
+    st_url = parts[1].strip()
+    st_name = parts[2].strip()
+
+    st_obj = next((s for s in stations if s["url"] == st_url), None) or {
+        "name": st_name,
+        "category": "Radio",
+        "genre": "Live Stream",
+        "url": st_url,
+        "desc": "",
+    }
+
+    if key == "ctrl-y":
+        copied = copy_to_clipboard(st_url)
+        if copied:
+            log_success(f"Stream URL copied to clipboard: {st_url}")
+        else:
+            print(f"\n{Style.CYAN}Stream URL:{Style.RESET} {st_url}\n")
+        return
+
+    _play_radio_stream(st_obj)
 
 
 def builtin_rip_audio(fmt: str = "flac", dry_run: bool = False):
@@ -3398,7 +3924,7 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         q = " ".join(args) if args else None
         builtin_stream_yt(video=True, query=q, dry_run=dry_run)
     elif name == "stream-radio":
-        builtin_stream_radio()
+        builtin_stream_radio(extra_args=extra_args)
     elif name.startswith("rip-audio"):
         fmt = "opus" if "opus" in name else "flac"
         builtin_rip_audio(fmt=fmt, dry_run=dry_run)
@@ -3663,6 +4189,12 @@ def main():
     if parsed.command == "__preview_model":
         target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
         render_model_preview(target, cfg)
+        sys.exit(0)
+
+    # Internal preview callback for radio station chooser
+    if parsed.command == "__preview_radio":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        render_radio_preview(target, cfg)
         sys.exit(0)
 
     # Internal helper: get raw command string for Ctrl+Y clipboard

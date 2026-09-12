@@ -175,9 +175,9 @@ deps = ["yt-dlp", "mpv", "fzf"]
 
 [commands.stream-radio]
 category = "Media, Audio & PipeWire Power-Tools"
-description = "Background endless ambient/lo-fi/synthwave stream player with minimal CPU footprint"
+description = "48+ curated commercial-free radio streams (Lo-Fi, Synthwave, Cyberpunk, Ambient, DnB, Metal, Jazz, Classical)"
 command = "cx __builtin stream-radio"
-preview_cmd = "echo 'Curated high-quality audio streams: Lofi Girl, Nightwave Plaza, SomaFM Groove Salad'"
+preview_cmd = "echo '48+ commercial-free streams: Lo-Fi, DEF CON Radio, Nightwave Plaza, Bassdrive, SomaFM, Radio Paradise 320k'"
 requires_sudo = false
 confirm = false
 deps = ["mpv", "fzf"]
