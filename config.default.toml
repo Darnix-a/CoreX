@@ -18,10 +18,21 @@ comfyui_extra_flags = ["--preview-method", "auto"]
 comfyui_auto_browser = true
 comfyui_notify = true
 ollama_url = "http://127.0.0.1:11434"
+model = "qwen2.5-coder:1.5b"
+auto_boot = true
 
 # ==============================================================================
 # 1. AI, CUDA & DEEP LEARNING (@ai)
 # ==============================================================================
+
+[commands.ask]
+category = "AI, CUDA & Deep Learning"
+description = "Ask local AI copilot any Linux/coding question with auto-start and execution prompt"
+command = "cx __builtin ask"
+preview_cmd = "echo 'Offline AI terminal copilot: auto-boots Ollama & streams command solutions'"
+requires_sudo = false
+confirm = false
+deps = []
 
 [commands.comfy-boot]
 category = "AI, CUDA & Deep Learning"

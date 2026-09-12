@@ -188,6 +188,8 @@ class CoreXConfig:
         self.comfyui_auto_browser: bool = True
         self.comfyui_notify: bool = True
         self.ollama_url: str = "http://127.0.0.1:11434"
+        self.ollama_model: str = "qwen2.5-coder:1.5b"
+        self.ollama_auto_boot: bool = True
         self.commands: Dict[str, CommandSpec] = {}
 
 
@@ -223,6 +225,8 @@ def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
         cfg.comfyui_auto_browser = ai.get("comfyui_auto_browser", True)
         cfg.comfyui_notify = ai.get("comfyui_notify", True)
         cfg.ollama_url = ai.get("ollama_url", "http://127.0.0.1:11434")
+        cfg.ollama_model = str(ai.get("model", "qwen2.5-coder:1.5b"))
+        cfg.ollama_auto_boot = bool(ai.get("auto_boot", True))
 
         raw_cmds = data.get("commands", {})
         if DEFAULT_CONFIG_TEMPLATE.exists() and path != DEFAULT_CONFIG_TEMPLATE:
@@ -457,6 +461,357 @@ def builtin_ollama_drop(cfg: CoreXConfig):
                     log_success(f"Evicted '{name}' from GPU VRAM.")
     except Exception as e:
         log_error(f"Failed evicting models: {e}")
+
+
+def ensure_ollama_ready(cfg: CoreXConfig) -> Tuple[bool, str]:
+    """Ensures Ollama binary is installed, daemon is running, and an AI model is pulled.
+    Returns (success, active_model_name)."""
+    import json
+    import time
+    import urllib.request
+    import urllib.error
+
+    api_url = cfg.ollama_url.rstrip("/")
+
+    # 1. Check binary existence
+    if not shutil.which("ollama"):
+        print(f"\n{box_header('OLLAMA AI SUBSYSTEM SETUP REQUIRED', color=Style.YELLOW)}")
+        print(f" {Style.BOLD}Ollama was not found in your system PATH.{Style.RESET}")
+        print(f" CoreX requires Ollama to run offline AI models locally.")
+
+        pm = "paru" if shutil.which("paru") else ("yay" if shutil.which("yay") else ("sudo pacman" if shutil.which("pacman") else None))
+        if not pm:
+            print(f" {Style.RED}No supported Arch package manager found. Install 'ollama' manually.{Style.RESET}")
+            print(box_footer(color=Style.YELLOW))
+            return False, ""
+
+        install_cmd = f"{pm} -Sy --needed ollama"
+        print(f" Automated install command: {Style.CYAN}{install_cmd}{Style.RESET}")
+        print(box_footer(color=Style.YELLOW))
+
+        try:
+            ans = input(f" {Style.BOLD}Install Ollama now? [Y/n]: {Style.RESET}").strip().lower()
+            if ans not in ("", "y", "yes"):
+                log_warn("Ollama installation aborted.")
+                return False, ""
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return False, ""
+
+        log_info(f"Installing Ollama via: {install_cmd} ...")
+        res = subprocess.run(install_cmd, shell=True)
+        if res.returncode != 0 or not shutil.which("ollama"):
+            log_error("Ollama installation failed or binary still not in PATH.")
+            return False, ""
+        log_success("Ollama binary installed successfully!")
+
+    # 2. Check daemon health & auto-boot
+    def probe_daemon() -> bool:
+        try:
+            req = urllib.request.Request(f"{api_url}/api/tags", headers={"User-Agent": "CoreX"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                return resp.status == 200
+        except Exception:
+            return False
+
+    if not probe_daemon():
+        if not cfg.ollama_auto_boot:
+            log_error(f"Ollama daemon is not reachable at {api_url} and auto_boot is disabled.")
+            return False, ""
+
+        log_info("Ollama daemon is inactive. Booting background service...")
+
+        started = False
+        if shutil.which("systemd-run"):
+            res = subprocess.run(
+                ["systemd-run", "--user", "--unit=corex-ollama", "ollama", "serve"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            if res.returncode == 0:
+                started = True
+
+        if not started:
+            log_dir = Path.home() / ".local" / "share" / "corex"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / "ollama.log"
+            with open(log_file, "a") as lf:
+                subprocess.Popen(
+                    ["ollama", "serve"],
+                    stdout=lf,
+                    stderr=lf,
+                    preexec_fn=os.setpgrp
+                )
+            started = True
+
+        # Wait for daemon to become ready (up to 12s with spinner)
+        sys.stdout.write(" Connecting to Ollama daemon ")
+        sys.stdout.flush()
+        spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        spin_idx = 0
+        live = False
+        t_start = time.time()
+        while time.time() - t_start < 12.0:
+            if probe_daemon():
+                live = True
+                break
+            sys.stdout.write(f"\b{spinner[spin_idx % len(spinner)]}")
+            sys.stdout.flush()
+            spin_idx += 1
+            time.sleep(0.3)
+
+        sys.stdout.write("\b ")
+        if live:
+            sys.stdout.write(f"{Style.GREEN}✔ Connected!{Style.RESET}\n")
+        else:
+            sys.stdout.write(f"{Style.RED}✖ Timed out waiting for Ollama on port 11434.{Style.RESET}\n")
+            log_error(f"Failed to start or connect to Ollama server at {api_url}.")
+            return False, ""
+
+    # 3. Model availability & auto-pull
+    models = []
+    try:
+        req = urllib.request.Request(f"{api_url}/api/tags", headers={"User-Agent": "CoreX"})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+    except Exception as e:
+        log_error(f"Failed to query Ollama models: {e}")
+        return False, ""
+
+    target_model = cfg.ollama_model or "qwen2.5-coder:1.5b"
+    found_model = None
+    for m in models:
+        if m == target_model or m.startswith(target_model.split(":")[0]):
+            found_model = m
+            break
+
+    if found_model:
+        return True, found_model
+
+    if models:
+        # User already has another model installed, use it!
+        log_info(f"Target model '{target_model}' not found, using installed model '{models[0]}'.")
+        return True, models[0]
+
+    # No models installed at all
+    print(f"\n{box_header('INITIAL AI MODEL SETUP', color=Style.CYAN)}")
+    print(f" {Style.BOLD}No local AI models are currently downloaded.{Style.RESET}")
+    print(f" Recommended: {Style.GREEN}{Style.BOLD}{target_model}{Style.RESET} (~980MB, fast, state-of-the-art for Linux CLI & code)")
+    print(f" Storage directory: ~/.ollama/models")
+    print(box_footer(color=Style.CYAN))
+
+    try:
+        ans = input(f" {Style.BOLD}Pull '{target_model}' now? [Y/n]: {Style.RESET}").strip().lower()
+        if ans not in ("", "y", "yes"):
+            log_warn("Model download skipped. CoreX AI cannot run without a model.")
+            return False, ""
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return False, ""
+
+    log_info(f"Downloading model '{target_model}' via Ollama...")
+    res = subprocess.run(["ollama", "pull", target_model])
+    if res.returncode != 0:
+        log_error(f"Failed to pull model '{target_model}'.")
+        return False, ""
+
+    log_success(f"Model '{target_model}' downloaded and ready!")
+    return True, target_model
+
+
+def builtin_ai_ask(query: Optional[str], cfg: CoreXConfig):
+    """Interactive AI Terminal Copilot: queries local Ollama, streams response,
+    and provides one-key command execution, clipboard copy, or editor modification."""
+    import json
+    import re
+    import urllib.request
+    import urllib.error
+
+    ready, model = ensure_ollama_ready(cfg)
+    if not ready or not model:
+        return
+
+    prompt_text = (query or "").strip()
+    if not prompt_text:
+        try:
+            print(f"\n{Style.BOLD}╭─ COREX AI TERMINAL COPILOT ────────────────────────────────────────╮{Style.RESET}")
+            print(f" {Style.GRAY}Active Model:{Style.RESET} {Style.CYAN}{model}{Style.RESET} | {Style.GRAY}Host:{Style.RESET} {cfg.ollama_url}")
+            print(f"{Style.BOLD}╰────────────────────────────────────────────────────────────────────╯{Style.RESET}")
+            prompt_text = input(f" {Style.BOLD}Ask CoreX AI > {Style.RESET}").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return
+
+    if not prompt_text:
+        log_warn("No prompt provided.")
+        return
+
+    # Detect local system context
+    distro = "Linux"
+    try:
+        if Path("/etc/os-release").exists():
+            for line in Path("/etc/os-release").read_text().splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    distro = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except Exception:
+        pass
+
+    shell_name = os.environ.get("SHELL", "bash").split("/")[-1]
+    cwd = os.getcwd()
+    user = os.environ.get("USER", "user")
+
+    system_prompt = (
+        f"You are CoreX AI, an elite, minimalist Linux terminal copilot and systems hacker. "
+        f"The user is running {distro}, shell: {shell_name}, user: {user}, cwd: {cwd}. "
+        "Your task is to provide the exact, optimal terminal command to solve their request.\n"
+        "Rules:\n"
+        "1. Put the primary runnable command inside a single ```bash code block.\n"
+        "2. Keep explanations ultra-concise (1-3 sentences maximum).\n"
+        "3. No pleasantries, greetings, or conversational fluff.\n"
+        "4. If flags or arguments are dangerous, add a brief warning."
+    )
+
+    api_url = cfg.ollama_url.rstrip("/")
+    payload = json.dumps({
+        "model": model,
+        "prompt": prompt_text,
+        "system": system_prompt,
+        "stream": True,
+    }).encode("utf-8")
+
+    print(f"\n{Style.BOLD}◈ Generating solution using {Style.CYAN}{model}{Style.RESET}...\n")
+
+    full_response = []
+    try:
+        req = urllib.request.Request(
+            f"{api_url}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "CoreX/3.0"}
+        )
+        with urllib.request.urlopen(req, timeout=120.0) as resp:
+            for raw_line in resp:
+                if not raw_line:
+                    continue
+                try:
+                    chunk = json.loads(raw_line.decode("utf-8"))
+                    token = chunk.get("response", "")
+                    sys.stdout.write(token)
+                    sys.stdout.flush()
+                    full_response.append(token)
+                    if chunk.get("done"):
+                        break
+                except Exception:
+                    continue
+    except urllib.error.URLError as e:
+        log_error(f"Inference stream failed: {e}")
+        return
+    except KeyboardInterrupt:
+        print(f"\n{Style.YELLOW}[Interrupted]{Style.RESET}")
+        return
+
+    print()
+    response_text = "".join(full_response)
+
+    # Extract command from code block if present
+    match = re.search(r"```(?:bash|sh)?\s*\n(.*?)\n```", response_text, re.DOTALL)
+    detected_cmd = ""
+    if match:
+        detected_cmd = match.group(1).strip()
+    else:
+        inline_match = re.search(r"`([^`]+)`", response_text)
+        if inline_match and "\n" not in inline_match.group(1):
+            detected_cmd = inline_match.group(1).strip()
+
+    if not detected_cmd:
+        return
+
+    # Render interactive execution cockpit
+    print(f"\n{box_header('ACTION COCKPIT', color=Style.GREEN)}")
+    print(f" {Style.BOLD}Detected Shell Command:{Style.RESET}")
+    for line in detected_cmd.splitlines():
+        print(f"   {Style.CYAN}{Style.BOLD}{line}{Style.RESET}")
+    print(f"{Style.DARK_GRAY}{'─' * 70}{Style.RESET}")
+    print(f" {Style.BOLD}[ENTER]{Style.RESET} Execute now   {Style.BOLD}[Y]{Style.RESET} Copy to clipboard   {Style.BOLD}[E]{Style.RESET} Edit in $EDITOR   {Style.BOLD}[Esc/Q]{Style.RESET} Dismiss")
+    print(box_footer(color=Style.GREEN))
+
+    # Read keystroke
+    action = None
+    if sys.stdin.isatty():
+        try:
+            import termios
+            import tty
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                ch = sys.stdin.read(1)
+                if ch in ("\r", "\n"):
+                    action = "execute"
+                elif ch.lower() in ("y", "c"):
+                    action = "copy"
+                elif ch.lower() == "e":
+                    action = "edit"
+                elif ch.lower() in ("q", "\x03", "\x1b"):
+                    action = "quit"
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
+
+    if not action:
+        try:
+            val = input(f" Action [Enter:run / y:copy / e:edit / q:cancel]: ").strip().lower()
+            if val in ("", "run", "r"):
+                action = "execute"
+            elif val in ("y", "c", "copy"):
+                action = "copy"
+            elif val in ("e", "edit"):
+                action = "edit"
+            else:
+                action = "quit"
+        except (KeyboardInterrupt, EOFError):
+            action = "quit"
+
+    if action == "execute":
+        print(f"\n{Style.BOLD}Executing:{Style.RESET} {detected_cmd}\n")
+        subprocess.run(detected_cmd, shell=True)
+    elif action == "copy":
+        copied = False
+        if shutil.which("wl-copy"):
+            try:
+                subprocess.run(["wl-copy"], input=detected_cmd.encode("utf-8"), check=True, timeout=2.0)
+                copied = True
+            except Exception:
+                pass
+        if not copied and shutil.which("xclip"):
+            try:
+                subprocess.run(["xclip", "-selection", "clipboard"], input=detected_cmd.encode("utf-8"), check=True, timeout=2.0)
+                copied = True
+            except Exception:
+                pass
+        if copied:
+            log_success("Command copied to system clipboard!")
+        else:
+            log_warn("Clipboard utility (wl-copy or xclip) not found.")
+    elif action == "edit":
+        import tempfile
+        ed = get_default_editor(cfg)
+        with tempfile.NamedTemporaryFile("w+", suffix=".sh", delete=False) as tf:
+            tf.write(f"#!/usr/bin/env bash\n# Edit CoreX AI Command:\n{detected_cmd}\n")
+            tmp_path = tf.name
+        try:
+            subprocess.run([ed, tmp_path])
+            mod_lines = [l for l in Path(tmp_path).read_text().splitlines() if l.strip() and not l.startswith("#")]
+            if mod_lines:
+                edited_cmd = "\n".join(mod_lines)
+                print(f"\n{Style.BOLD}Executing edited command:{Style.RESET}\n{edited_cmd}\n")
+                subprocess.run(edited_cmd, shell=True)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+    else:
+        print()
 
 
 def builtin_model_symlink(cfg: CoreXConfig):
@@ -1566,7 +1921,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
-        "url-short"
+        "url-short", "ask"
     }
 
     for cid, spec in cfg.commands.items():
@@ -2328,7 +2683,9 @@ def execute_command(
         "snap": "snap-now",
         "snapshot": "snap-now",
         "scratch": "notes",
-        "ai": "ollama-ps",
+        "ai": "ask",
+        "ask": "ask",
+        "copilot": "ask",
         "docker": "docker-fzf",
         "doctor": "doctor",
         "test-all": "doctor",
@@ -2450,7 +2807,10 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx __builtin {name} {' '.join(args)}".strip())
         return
 
-    if name == "comfy-boot":
+    if name in ("ask", "ai", "ai-copilot", "copilot"):
+        q = " ".join(args) if args else None
+        builtin_ai_ask(q, cfg)
+    elif name == "comfy-boot":
         builtin_comfy_boot(cfg, dry_run=dry_run, extra_args=args)
     elif name == "ollama-ps":
         builtin_ollama_ps(cfg)
