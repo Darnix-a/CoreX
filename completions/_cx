@@ -1,0 +1,59 @@
+#compdef cx corex
+
+_cx() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    local -a commands
+    commands=(
+        'comfy:One-click ComfyUI launcher with smart VRAM detection'
+        'comfyui:One-click ComfyUI launcher with smart VRAM detection'
+        'ai:Inspect & manage local LLMs and Ollama daemon'
+        'ollama:Inspect & manage local LLMs and Ollama daemon'
+        'docker:Interactive container manager (logs, restart, kill)'
+        'stream:Fuzzy-search YouTube/SoundCloud & stream in mpv'
+        'rip:Extract audio from video files to 24-bit FLAC / Opus'
+        'play:Instant fuzzy local music player with tag preview'
+        'kill:Interactive process manager and multi-killer'
+        'fkill:Interactive process manager and multi-killer'
+        'vram:Nvidia VRAM breakdown & zombie process killer'
+        'snap:BTRFS / Snapper system snapshot helper'
+        'snapshot:BTRFS / Snapper system snapshot helper'
+        'scratch:Instant markdown scratchpad notes in $EDITOR'
+        'completions:Generate shell completion code'
+    )
+
+    _arguments -C \
+        '(-h --help)'{-h,--help}'[Show help message]' \
+        '(-v --version)'{-v,--version}'[Show version]' \
+        '--dry-run[Preview commands without executing them]' \
+        '--no-color[Disable terminal ANSI styling]' \
+        '--config[Path to custom config.toml]:file:_files' \
+        '1: :->command' \
+        '*:: :->args'
+
+    case $state in
+        command)
+            _describe -t commands 'cx commands' commands
+            ;;
+        args)
+            case $line[1] in
+                rip)
+                    _files -g '*.(mp4|mkv|webm|avi|mov|flv)'
+                    ;;
+                play)
+                    _files -g '*.(flac|opus|mp3|m4a|ogg|wav)'
+                    ;;
+                scratch)
+                    ;;
+                completions)
+                    local -a shells
+                    shells=('fish:Fish shell' 'bash:Bash shell' 'zsh:Zsh shell')
+                    _describe -t shells 'shells' shells
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_cx "$@"

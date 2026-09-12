@@ -1,0 +1,78 @@
+# CoreX (cx) - Configuration File
+# Location: ~/.config/corex/config.toml
+
+[general]
+# Default text editor for scratchpad notes (falls back to $EDITOR, nvim, micro, nano, or vi)
+editor = ""
+# Notes / scratchpad directory
+notes_dir = "~/.local/share/corex/notes"
+# Enable rich ANSI color output
+color = true
+
+[ai]
+# ComfyUI installation root directory (leave empty for auto-detection in ~/ComfyUI or current dir)
+comfyui_path = "~/ComfyUI"
+# Virtual environment directory name inside comfyui_path (e.g. "venv", ".venv", "env")
+comfyui_venv = "venv"
+# ComfyUI listen port and address
+comfyui_port = 8188
+comfyui_host = "127.0.0.1"
+# VRAM threshold in MiB to activate --highvram (otherwise --normalvram or --lowvram)
+vram_high_threshold_mb = 8192
+vram_low_threshold_mb = 4096
+# Custom extra launch arguments for ComfyUI
+comfyui_extra_flags = ["--preview-method", "auto"]
+# Auto-open browser when ComfyUI starts
+comfyui_auto_browser = true
+# Send desktop notification on server readiness
+comfyui_notify = true
+
+# Ollama API URL
+ollama_url = "http://127.0.0.1:11434"
+
+[media]
+# Local music directory for fuzzy player
+music_dir = "~/Music"
+# Default yt-dlp search provider (ytsearch or scsearch for SoundCloud)
+stream_provider = "ytsearch"
+# Maximum search results to query from yt-dlp
+stream_results_count = 25
+# Hardware acceleration flag for mpv video streaming
+mpv_hwdec = "auto"
+# Audio rip default format ("flac" or "opus")
+rip_format = "flac"
+# Audio rip quality: for opus (bitrate in kbps e.g. "256k", "320k"), for flac (compression 0-12, sample_fmt)
+rip_flac_bits = "24"
+rip_opus_bitrate = "256k"
+
+[system]
+# Snapshot manager: "auto", "snapper", or "btrfs"
+snapshot_backend = "auto"
+# Snapper configuration name (usually "root" or "home")
+snapper_config = "root"
+# Default BTRFS subvolume root mount path
+btrfs_mount = "/"
+
+# Custom user-defined sub-commands
+# You can add as many custom commands as you want!
+# They will automatically appear in the interactive 'cx' menu and can be run via 'cx <id>'
+[custom_commands.update]
+name = "System Update"
+category = "System & GPU"
+description = "Fast system package upgrade via pacman / cachyos-rate-mirrors"
+command = "sudo pacman -Syu"
+preview = "echo 'Performs full Arch / CachyOS system package synchronization and upgrade.'"
+
+[custom_commands.hypr_reload]
+name = "Reload Hyprland"
+category = "Quick Tools"
+description = "Reload Hyprland compositor configuration"
+command = "hyprctl reload"
+preview = "echo 'Sends reload signal to Hyprland compositor.'"
+
+[custom_commands.git_status]
+name = "Git Repository Status"
+category = "Quick Tools"
+description = "Quick status and recent commits of current git repository"
+command = "git status -sb && git log -n 5 --oneline"
+preview = "git status 2>/dev/null || echo 'Not inside a git repository'"

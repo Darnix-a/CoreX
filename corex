@@ -1,0 +1,1462 @@
+#!/usr/bin/env python3
+"""
+CoreX (cx) - Elite Linux Systems Multitool & Interactive Launcher CLI
+Engineered for modern Linux power users (CachyOS/Arch, Hyprland, Fish/Bash/Zsh,
+Nvidia GPU, BTRFS/Snapper, Dev/AI local workflows).
+"""
+
+import argparse
+import dataclasses
+import datetime
+import json
+import os
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tomllib
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+VERSION = "1.0.0"
+DEFAULT_CONFIG_PATH = Path.home() / ".config" / "corex" / "config.toml"
+DEFAULT_NOTES_DIR = Path.home() / ".local" / "share" / "corex" / "notes"
+
+# ---------------------------------------------------------------------------
+# ANSI Terminal Styling & Rendering Engine
+# ---------------------------------------------------------------------------
+class Style:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    ITALIC = "\033[3m"
+    UNDERLINE = "\033[4m"
+
+    # Foreground colors (24-bit / 256 / 16 color compatible)
+    RED = "\033[38;5;196m"
+    GREEN = "\033[38;5;46m"
+    YELLOW = "\033[38;5;220m"
+    BLUE = "\033[38;5;39m"
+    MAGENTA = "\033[38;5;201m"
+    CYAN = "\033[38;5;51m"
+    WHITE = "\033[38;5;231m"
+    GRAY = "\033[38;5;244m"
+    DARK_GRAY = "\033[38;5;238m"
+    ORANGE = "\033[38;5;208m"
+    PURPLE = "\033[38;5;141m"
+    TEAL = "\033[38;5;44m"
+
+    # Background colors
+    BG_DARK = "\033[48;5;235m"
+    BG_BLUE = "\033[48;5;24m"
+    BG_RED = "\033[48;5;52m"
+    BG_GREEN = "\033[48;5;22m"
+
+    @classmethod
+    def strip(cls, text: str) -> str:
+        """Remove ANSI escape sequences."""
+        return re.sub(r"\033\[[0-9;]*m", "", text)
+
+
+def print_banner(dry_run: bool = False):
+    dry_badge = f" {Style.YELLOW}[DRY-RUN MODE]{Style.RESET}" if dry_run else ""
+    banner = f"""
+{Style.CYAN}{Style.BOLD}   ______                     _  __
+  / ____/____   _____ ___     | |/ /
+ / /    / __ \\ / ___// _ \\    |   / 
+/ /___ / /_/ // /   /  __/   /   |  
+\\____/ \\____//_/    \\___/   /_/|_|  {Style.GRAY}v{VERSION}{dry_badge}
+{Style.DARK_GRAY}─────────────────────────────────────────────────────{Style.RESET}"""
+    print(banner)
+
+
+def log_info(msg: str):
+    print(f"{Style.BLUE}{Style.BOLD}◈{Style.RESET} {msg}")
+
+
+def log_success(msg: str):
+    print(f"{Style.GREEN}{Style.BOLD}✔{Style.RESET} {msg}")
+
+
+def log_warn(msg: str):
+    print(f"{Style.YELLOW}{Style.BOLD}▲{Style.RESET} {msg}")
+
+
+def log_error(msg: str):
+    print(f"{Style.RED}{Style.BOLD}✖{Style.RESET} {msg}", file=sys.stderr)
+
+
+def log_step(step: str, detail: str):
+    print(f"{Style.CYAN}{Style.BOLD}λ{Style.RESET} {Style.BOLD}{step}:{Style.RESET} {Style.GRAY}{detail}{Style.RESET}")
+
+
+def box_header(title: str, width: int = 68) -> str:
+    line = "═" * max(0, width - len(title) - 4)
+    return f"{Style.CYAN}╔═ {Style.BOLD}{Style.WHITE}{title}{Style.RESET}{Style.CYAN} {line}╗{Style.RESET}"
+
+
+def box_footer(width: int = 68) -> str:
+    return f"{Style.CYAN}╚{'═' * max(0, width - 2)}╝{Style.RESET}"
+
+
+# ---------------------------------------------------------------------------
+# Configuration Engine
+# ---------------------------------------------------------------------------
+@dataclasses.dataclass
+class CoreXConfig:
+    editor: str = ""
+    notes_dir: Path = DEFAULT_NOTES_DIR
+    color: bool = True
+    comfyui_path: Path = Path.home() / "ComfyUI"
+    comfyui_venv: str = "venv"
+    comfyui_port: int = 8188
+    comfyui_host: str = "127.0.0.1"
+    vram_high_threshold_mb: int = 8192
+    vram_low_threshold_mb: int = 4096
+    comfyui_extra_flags: List[str] = dataclasses.field(default_factory=lambda: ["--preview-method", "auto"])
+    comfyui_auto_browser: bool = True
+    comfyui_notify: bool = True
+    ollama_url: str = "http://127.0.0.1:11434"
+    music_dir: Path = Path.home() / "Music"
+    stream_provider: str = "ytsearch"
+    stream_results_count: int = 25
+    mpv_hwdec: str = "auto"
+    rip_format: str = "flac"
+    rip_flac_bits: str = "24"
+    rip_opus_bitrate: str = "256k"
+    snapshot_backend: str = "auto"
+    snapper_config: str = "root"
+    btrfs_mount: str = "/"
+    custom_commands: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
+
+
+def load_config(config_path: Optional[Path] = None) -> CoreXConfig:
+    path = config_path or DEFAULT_CONFIG_PATH
+    cfg = CoreXConfig()
+    if not path.exists():
+        return cfg
+
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+
+        gen = data.get("general", {})
+        cfg.editor = gen.get("editor", "")
+        cfg.notes_dir = Path(os.path.expanduser(gen.get("notes_dir", str(DEFAULT_NOTES_DIR))))
+        cfg.color = gen.get("color", True)
+
+        ai = data.get("ai", {})
+        cfg.comfyui_path = Path(os.path.expanduser(ai.get("comfyui_path", "~/ComfyUI")))
+        cfg.comfyui_venv = ai.get("comfyui_venv", "venv")
+        cfg.comfyui_port = int(ai.get("comfyui_port", 8188))
+        cfg.comfyui_host = str(ai.get("comfyui_host", "127.0.0.1"))
+        cfg.vram_high_threshold_mb = int(ai.get("vram_high_threshold_mb", 8192))
+        cfg.vram_low_threshold_mb = int(ai.get("vram_low_threshold_mb", 4096))
+        cfg.comfyui_extra_flags = ai.get("comfyui_extra_flags", ["--preview-method", "auto"])
+        cfg.comfyui_auto_browser = ai.get("comfyui_auto_browser", True)
+        cfg.comfyui_notify = ai.get("comfyui_notify", True)
+        cfg.ollama_url = ai.get("ollama_url", "http://127.0.0.1:11434")
+
+        med = data.get("media", {})
+        cfg.music_dir = Path(os.path.expanduser(med.get("music_dir", "~/Music")))
+        cfg.stream_provider = med.get("stream_provider", "ytsearch")
+        cfg.stream_results_count = int(med.get("stream_results_count", 25))
+        cfg.mpv_hwdec = med.get("mpv_hwdec", "auto")
+        cfg.rip_format = med.get("rip_format", "flac")
+        cfg.rip_flac_bits = str(med.get("rip_flac_bits", "24"))
+        cfg.rip_opus_bitrate = str(med.get("rip_opus_bitrate", "256k"))
+
+        sys_sec = data.get("system", {})
+        cfg.snapshot_backend = sys_sec.get("snapshot_backend", "auto")
+        cfg.snapper_config = sys_sec.get("snapper_config", "root")
+        cfg.btrfs_mount = sys_sec.get("btrfs_mount", "/")
+
+        cfg.custom_commands = data.get("custom_commands", {})
+    except Exception as e:
+        log_warn(f"Failed to load config {path}: {e}. Using defaults.")
+
+    return cfg
+
+
+def get_default_editor(cfg: CoreXConfig) -> str:
+    if cfg.editor and shutil.which(cfg.editor):
+        return cfg.editor
+    env_editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if env_editor and shutil.which(env_editor):
+        return env_editor
+    for cand in ["nvim", "micro", "helix", "nano", "vi"]:
+        if shutil.which(cand):
+            return cand
+    return "nano"
+
+
+# ---------------------------------------------------------------------------
+# Process Execution & Signal Management
+# ---------------------------------------------------------------------------
+def run_cmd(
+    cmd: List[str] | str,
+    shell: bool = False,
+    dry_run: bool = False,
+    cwd: Optional[Path | str] = None,
+    capture_output: bool = False,
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[int, str, str]:
+    """Execute command with clean signal handling and dry-run support."""
+    cmd_str = cmd if isinstance(cmd, str) else " ".join(cmd)
+    if dry_run:
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {Style.BOLD}{cmd_str}{Style.RESET}" + (f" (cwd: {cwd})" if cwd else ""))
+        return 0, "", ""
+
+    effective_env = os.environ.copy()
+    if env:
+        effective_env.update(env)
+
+    try:
+        if capture_output:
+            res = subprocess.run(
+                cmd,
+                shell=shell,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                env=effective_env,
+            )
+            return res.returncode, res.stdout, res.stderr
+        else:
+            res = subprocess.run(
+                cmd,
+                shell=shell,
+                cwd=cwd,
+                env=effective_env,
+            )
+            return res.returncode, "", ""
+    except KeyboardInterrupt:
+        return 130, "", ""
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def check_tool(tool_name: str) -> bool:
+    return shutil.which(tool_name) is not None
+
+
+def is_port_in_use(host: str, port: int) -> Tuple[bool, Optional[int]]:
+    """Check if TCP port is active and attempt to discover the listening PID."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        try:
+            s.connect((host, port))
+            ret, out, _ = run_cmd(["ss", "-tulpn", f"sport = :{port}"], capture_output=True)
+            match = re.search(r"pid=(\d+)", out)
+            pid = int(match.group(1)) if match else None
+            return True, pid
+        except (ConnectionRefusedError, TimeoutError, OSError):
+            return False, None
+
+
+# ---------------------------------------------------------------------------
+# FZF Integration Helper
+# ---------------------------------------------------------------------------
+def run_fzf(
+    items: List[str],
+    prompt: str = "cx > ",
+    preview_cmd: Optional[str] = None,
+    multi: bool = False,
+    header: Optional[str] = None,
+    preview_window: str = "right:55%:border-left:wrap",
+    extra_args: Optional[List[str]] = None,
+) -> List[str]:
+    """Invoke fzf with customized styling, previews, and keybindings."""
+    if not check_tool("fzf"):
+        log_error("'fzf' is not installed! CoreX interactive interface requires fzf.")
+        log_info("Install fzf via your package manager: sudo pacman -S fzf")
+        sys.exit(1)
+
+    # If stdin/stdout is not a tty, don't hang
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        if items:
+            return [items[0]]
+        return []
+
+    fzf_args = [
+        "fzf",
+        "--ansi",
+        f"--prompt={prompt}",
+        "--height=85%",
+        "--layout=reverse",
+        "--border=rounded",
+        "--color=bg+:#1e1e2e,bg:#181825,spinner:#f5e0dc,hl:#f38ba8",
+        "--color=fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc",
+        "--color=marker:#b4befe,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8",
+    ]
+
+    if multi:
+        fzf_args.append("--multi")
+    if header:
+        fzf_args.extend(["--header", header])
+    if preview_cmd:
+        fzf_args.extend(["--preview", preview_cmd, f"--preview-window={preview_window}"])
+    if extra_args:
+        fzf_args.extend(extra_args)
+
+    try:
+        proc = subprocess.Popen(
+            fzf_args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, _ = proc.communicate(input="\n".join(items))
+        if proc.returncode != 0:
+            return []
+        selected = [line.strip() for line in stdout.strip().split("\n") if line.strip()]
+        return selected
+    except KeyboardInterrupt:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# MODULE A: DEV & AI STACK AUTOMATION
+# ---------------------------------------------------------------------------
+def get_nvidia_vram() -> Tuple[Optional[int], Optional[int]]:
+    """Returns (total_mib, free_mib) or (None, None)."""
+    if not check_tool("nvidia-smi"):
+        return None, None
+    ret, out, _ = run_cmd(
+        ["nvidia-smi", "--query-gpu=memory.total,memory.free", "--format=csv,noheader,nounits"],
+        capture_output=True,
+    )
+    if ret != 0 or not out.strip():
+        return None, None
+    try:
+        first_line = out.strip().splitlines()[0]
+        total_str, free_str = [x.strip() for x in first_line.split(",")]
+        return int(total_str), int(free_str)
+    except Exception:
+        return None, None
+
+
+def cmd_comfyui(cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
+    """One-click launcher for ComfyUI with smart VRAM detection, venv boot, and collision check."""
+    log_info("Inspecting ComfyUI workspace environment...")
+
+    # Check if ComfyUI is already running on the configured port
+    in_use, existing_pid = is_port_in_use(cfg.comfyui_host, cfg.comfyui_port)
+    url = f"http://{cfg.comfyui_host}:{cfg.comfyui_port}"
+    if in_use:
+        log_success(f"ComfyUI is ALREADY RUNNING on {url} (PID: {existing_pid or 'active'})!")
+        if dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} ComfyUI active instance detected on port {cfg.comfyui_port}")
+            return
+        if cfg.comfyui_auto_browser:
+            log_info(f"Opening browser at {url}...")
+            subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if cfg.comfyui_notify and check_tool("notify-send"):
+            run_cmd(["notify-send", "ComfyUI Active", f"ComfyUI already running at {url}"])
+        return
+
+    # Locate ComfyUI directory
+    comfy_dir = cfg.comfyui_path
+    if not comfy_dir.exists():
+        candidates = [
+            Path.home() / "ComfyUI",
+            Path.home() / "comfyui",
+            Path.home() / "ai" / "ComfyUI",
+            Path.cwd(),
+        ]
+        for c in candidates:
+            if (c / "main.py").exists():
+                comfy_dir = c
+                break
+
+    if not (comfy_dir / "main.py").exists():
+        log_error(f"Could not locate ComfyUI at '{comfy_dir}'.")
+        log_info("Please verify 'comfyui_path' in ~/.config/corex/config.toml")
+        return
+
+    log_step("ComfyUI Root", str(comfy_dir))
+
+    # Detect Virtual Environment
+    python_bin = sys.executable
+    venv_candidates = [
+        comfy_dir / cfg.comfyui_venv / "bin" / "python",
+        comfy_dir / "venv" / "bin" / "python",
+        comfy_dir / ".venv" / "bin" / "python",
+        comfy_dir / "env" / "bin" / "python",
+    ]
+    detected_venv = None
+    for cand in venv_candidates:
+        if cand.exists() and os.access(cand, os.X_OK):
+            detected_venv = cand
+            python_bin = str(cand)
+            break
+
+    if detected_venv:
+        log_step("Virtualenv", f"{Style.GREEN}Active{Style.RESET} ({detected_venv})")
+    else:
+        log_warn("No dedicated virtualenv detected; falling back to system Python.")
+
+    # GPU VRAM inspection and flag calculation
+    total_vram, free_vram = get_nvidia_vram()
+    vram_flag = "--normalvram"
+    if free_vram is not None and total_vram is not None:
+        log_step("GPU VRAM Free", f"{free_vram} MiB / {total_vram} MiB")
+        if free_vram >= cfg.vram_high_threshold_mb:
+            vram_flag = "--highvram"
+            log_step("Memory Profile", f"{Style.GREEN}{Style.BOLD}HIGH VRAM{Style.RESET} (Flag: --highvram)")
+        elif free_vram < cfg.vram_low_threshold_mb:
+            vram_flag = "--lowvram"
+            log_step("Memory Profile", f"{Style.YELLOW}{Style.BOLD}LOW VRAM{Style.RESET} (Flag: --lowvram)")
+        else:
+            vram_flag = "--normalvram"
+            log_step("Memory Profile", f"{Style.CYAN}NORMAL VRAM{Style.RESET} (Flag: --normalvram)")
+    else:
+        log_warn("NVIDIA GPU / nvidia-smi not detected or querying failed. Using default VRAM handling.")
+
+    # Build launch command
+    launch_cmd = [
+        python_bin,
+        "main.py",
+        "--listen",
+        cfg.comfyui_host,
+        "--port",
+        str(cfg.comfyui_port),
+        vram_flag,
+    ]
+    if cfg.comfyui_extra_flags:
+        launch_cmd.extend(cfg.comfyui_extra_flags)
+    if extra_args:
+        launch_cmd.extend(extra_args)
+
+    log_step("Boot Command", " ".join(launch_cmd))
+
+    if dry_run:
+        run_cmd(launch_cmd, cwd=comfy_dir, dry_run=True)
+        return
+
+    # Notification & auto-browser spawn if enabled
+    if cfg.comfyui_notify and check_tool("notify-send"):
+        run_cmd(["notify-send", "CoreX AI Launcher", f"Booting ComfyUI on {url} (Profile: {vram_flag})"])
+
+    if cfg.comfyui_auto_browser:
+        log_info(f"Opening browser at {url}...")
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    log_success(f"Spinning up ComfyUI server at {url} (Press Ctrl+C to stop)...")
+    run_cmd(launch_cmd, cwd=comfy_dir)
+
+
+def cmd_ai_models(cfg: CoreXConfig, dry_run: bool = False):
+    """Inspect and manage loaded Ollama/vLLM models and daemon status."""
+    api_url = cfg.ollama_url.rstrip("/")
+
+    # Query running models via Ollama API
+    running_models: List[Dict[str, Any]] = []
+    service_alive = False
+    try:
+        req = urllib.request.Request(f"{api_url}/api/ps", headers={"User-Agent": "CoreX-CLI"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            running_models = data.get("models", [])
+            service_alive = True
+    except Exception:
+        pass
+
+    if not sys.stdin.isatty() or dry_run:
+        print_banner(dry_run)
+        print(box_header("OLLAMA / vLLM INFERENCE ENGINE"))
+        status_txt = f"{Style.GREEN}Active{Style.RESET}" if service_alive else f"{Style.RED}Unreachable / Inactive{Style.RESET}"
+        print(f" {Style.BOLD}Endpoint:{Style.RESET}   {api_url}")
+        print(f" {Style.BOLD}Status:{Style.RESET}     {status_txt}")
+        if running_models:
+            print(f" {Style.BOLD}Models in VRAM:{Style.RESET}")
+            for m in running_models:
+                name = m.get("name", "unknown")
+                vram_mb = m.get("size_vram", 0) / (1024 * 1024)
+                print(f"   • {Style.CYAN}{name}{Style.RESET} ({vram_mb:.0f} MiB)")
+        else:
+            print(f" {Style.BOLD}Models in VRAM:{Style.RESET} None")
+        print(box_footer())
+        return
+
+    # Interactive Sub-menu
+    options = []
+    if service_alive:
+        options.append(f"● [Status] Ollama Server Active at {api_url}")
+        if running_models:
+            for m in running_models:
+                name = m.get("name", "unknown")
+                size_vram = m.get("size_vram", 0) / (1024 * 1024)
+                options.append(f"⚡ [Loaded Model] {name} ({size_vram:.0f} MiB in VRAM) -> Unload")
+        else:
+            options.append("○ [Models] No models currently loaded in VRAM")
+    else:
+        options.append(f"▲ [Status] Ollama Server unreachable at {api_url}")
+
+    options.append("▶ Start Ollama Background Daemon")
+    options.append("■ Stop Ollama Service")
+    options.append("🔄 Restart Ollama Daemon")
+
+    selected = run_fzf(
+        options,
+        prompt="cx ai > ",
+        header="Ollama / vLLM Model & Daemon Controller",
+    )
+    if not selected:
+        return
+
+    choice = selected[0]
+    if "Unload" in choice:
+        match = re.search(r"\[Loaded Model\]\s+([^\s]+)", choice)
+        if match:
+            model_name = match.group(1)
+            log_info(f"Evicting model '{model_name}' from GPU memory...")
+            if dry_run:
+                print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Post keep_alive=0 to {api_url}/api/generate for model {model_name}")
+                return
+            try:
+                payload = json.dumps({"model": model_name, "keep_alive": 0}).encode("utf-8")
+                req = urllib.request.Request(
+                    f"{api_url}/api/generate",
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    log_success(f"Model '{model_name}' evicted from VRAM.")
+            except Exception as e:
+                log_error(f"Failed to unload model: {e}")
+    elif "Start Ollama" in choice:
+        log_info("Starting Ollama service...")
+        cmd = ["systemctl", "--user", "start", "ollama"]
+        ret, _, _ = run_cmd(cmd, dry_run=dry_run)
+        if ret != 0 and not dry_run:
+            log_info("Trying system service start...")
+            run_cmd(["sudo", "systemctl", "start", "ollama"])
+    elif "Stop Ollama" in choice:
+        log_info("Stopping Ollama service...")
+        run_cmd(["systemctl", "--user", "stop", "ollama"], dry_run=dry_run)
+    elif "Restart Ollama" in choice:
+        log_info("Restarting Ollama service...")
+        run_cmd(["systemctl", "--user", "restart", "ollama"], dry_run=dry_run)
+
+
+def cmd_docker(dry_run: bool = False):
+    """Fuzzy-select containers to restart, view live trailing logs, or kill."""
+    engine = "docker" if check_tool("docker") else ("podman" if check_tool("podman") else None)
+    if not engine:
+        log_error("Neither 'docker' nor 'podman' found on this system.")
+        return
+
+    ret, out, _ = run_cmd(
+        [engine, "ps", "-a", "--format", "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"],
+        capture_output=True,
+    )
+    if ret != 0:
+        log_error(f"Failed to query {engine}. Ensure daemon is running.")
+        return
+
+    lines = [l.strip() for l in out.strip().splitlines() if l.strip()]
+    if not lines:
+        log_info(f"No {engine} containers found.")
+        return
+
+    if not sys.stdin.isatty() or dry_run:
+        print(f"{Style.BOLD}{'ID':<12} {'NAME':<20} {'STATUS':<20} {'IMAGE'}{Style.RESET}")
+        print("─" * 70)
+        for line in lines:
+            parts = line.split("\t")
+            cid = parts[0]
+            name = parts[1] if len(parts) > 1 else ""
+            st = parts[2] if len(parts) > 2 else ""
+            img = parts[3] if len(parts) > 3 else ""
+            print(f"{cid:<12} {name:<20} {st:<20} {img}")
+        return
+
+    items = []
+    for line in lines:
+        parts = line.split("\t")
+        cid, name, status, img = parts[0], parts[1], parts[2], parts[3] if len(parts) > 3 else ""
+        icon = f"{Style.GREEN}●{Style.RESET}" if "Up" in status else f"{Style.RED}○{Style.RESET}"
+        items.append(f"{cid}\t{icon} {name:<20}\t{status:<20}\t{img}")
+
+    preview = f"{engine} logs --tail 40 {{1}}"
+    extra = [
+        "--delimiter=\t",
+        "--with-nth=2,3,4",
+        "--header=ENTER: Tail Logs | CTRL-R: Restart | CTRL-K: Kill/Stop | CTRL-E: Exec Shell",
+        f"--bind=ctrl-r:execute({engine} restart {{1}} >/dev/null)+reload({engine} ps -a --format '{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Status}}}}\t{{{{.Image}}}}')",
+        f"--bind=ctrl-k:execute({engine} stop {{1}} >/dev/null)+reload({engine} ps -a --format '{{{{.ID}}}}\t{{{{.Names}}}}\t{{{{.Status}}}}\t{{{{.Image}}}}')",
+        f"--bind=ctrl-e:execute({engine} exec -it {{1}} sh -c 'bash || sh')",
+    ]
+
+    selected = run_fzf(
+        items,
+        prompt=f"cx {engine} > ",
+        preview_cmd=preview,
+        extra_args=extra,
+    )
+    if not selected:
+        return
+
+    chosen_id = selected[0].split("\t")[0].strip()
+    log_info(f"Connecting to container {chosen_id} live logs (Ctrl+C to exit)...")
+    run_cmd([engine, "logs", "-f", "--tail", "100", chosen_id], dry_run=dry_run)
+
+
+# ---------------------------------------------------------------------------
+# MODULE B: MEDIA ENGINE
+# ---------------------------------------------------------------------------
+def cmd_stream(cfg: CoreXConfig, query: Optional[str] = None, dry_run: bool = False, video: bool = False):
+    """Fuzzy-search YouTube/SoundCloud via yt-dlp metadata cache and stream via mpv."""
+    if not check_tool("yt-dlp"):
+        log_error("'yt-dlp' is required for stream functionality.")
+        log_info("Install yt-dlp via: sudo pacman -S yt-dlp")
+        return
+    if not check_tool("mpv"):
+        log_error("'mpv' is required for stream playback.")
+        log_info("Install mpv via: sudo pacman -S mpv")
+        return
+
+    search_query = query
+    if not search_query:
+        if not sys.stdin.isatty():
+            log_error("No search query provided.")
+            return
+        print(f"{Style.CYAN}{Style.BOLD}Enter search query for YouTube / SoundCloud:{Style.RESET} ", end="", flush=True)
+        try:
+            search_query = input().strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            return
+        if not search_query:
+            return
+
+    # Direct URL detection
+    if search_query.startswith("http://") or search_query.startswith("https://"):
+        url = search_query
+        mode = "Video" if video else "Audio"
+        log_info(f"Direct stream URL recognized: {url} (Mode: {mode})")
+        mpv_cmd = ["mpv"]
+        if not video:
+            mpv_cmd.extend(["--no-video", "--ytdl-format=bestaudio/best"])
+        else:
+            mpv_cmd.extend([f"--hwdec={cfg.mpv_hwdec}"])
+        mpv_cmd.append(url)
+        run_cmd(mpv_cmd, dry_run=dry_run)
+        return
+
+    log_info(f"Querying {cfg.stream_provider} for: '{search_query}'...")
+    ytdl_search_spec = f"{cfg.stream_provider}{cfg.stream_results_count}:{search_query}"
+
+    if dry_run:
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Query yt-dlp: yt-dlp --flat-playlist --print ... {ytdl_search_spec}")
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Stream selection into mpv --no-video --ytdl-format=bestaudio/best")
+        return
+
+    ret, out, _ = run_cmd(
+        [
+            "yt-dlp",
+            "--flat-playlist",
+            "--default-search",
+            cfg.stream_provider,
+            "--print",
+            "%(id)s\t%(duration_string)s\t%(uploader)s\t%(title)s",
+            ytdl_search_spec,
+        ],
+        capture_output=True,
+    )
+    if ret != 0 or not out.strip():
+        log_warn("No search results found or query timed out.")
+        return
+
+    raw_results = [line.strip() for line in out.strip().splitlines() if line.strip()]
+    fzf_items = []
+    for r in raw_results:
+        parts = r.split("\t")
+        vid_id = parts[0]
+        duration = parts[1] if len(parts) > 1 and parts[1] != "NA" else "--:--"
+        uploader = parts[2] if len(parts) > 2 else "Unknown"
+        title = parts[3] if len(parts) > 3 else "Untitled"
+        fzf_items.append(f"https://www.youtube.com/watch?v={vid_id}\t{duration:<8}\t{uploader:<22}\t{title}")
+
+    extra = [
+        "--delimiter=\t",
+        "--with-nth=2,3,4",
+        "--header=ENTER: Play Audio | CTRL-V: Play Video (HW-Acc) | CTRL-Y: Copy URL",
+        "--bind=ctrl-y:execute-silent(echo -n {1} | wl-copy || echo -n {1} | xclip -selection clipboard)",
+    ]
+
+    selected = run_fzf(
+        fzf_items,
+        prompt="cx stream > ",
+        extra_args=extra,
+    )
+    if not selected:
+        return
+
+    selected_line = selected[0]
+    stream_url = selected_line.split("\t")[0]
+    title_text = selected_line.split("\t")[-1]
+
+    log_success(f"Streaming: {Style.BOLD}{title_text}{Style.RESET}")
+    mpv_cmd = ["mpv"]
+    if not video:
+        mpv_cmd.extend(["--no-video", "--ytdl-format=bestaudio/best"])
+    else:
+        mpv_cmd.extend([f"--hwdec={cfg.mpv_hwdec}"])
+    mpv_cmd.append(stream_url)
+
+    run_cmd(mpv_cmd, dry_run=dry_run)
+
+
+def cmd_rip_audio(cfg: CoreXConfig, target_dir: Optional[str] = None, dry_run: bool = False):
+    """Extract audio from local video files to pristine 24-bit FLAC or Opus with multithreading."""
+    if not check_tool("ffmpeg"):
+        log_error("'ffmpeg' is required to rip audio.")
+        log_info("Install ffmpeg via: sudo pacman -S ffmpeg")
+        return
+
+    work_dir = Path(target_dir or os.getcwd()).resolve()
+    video_extensions = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".ts", ".m4v"}
+    video_files = [f for f in work_dir.iterdir() if f.is_file() and f.suffix.lower() in video_extensions]
+
+    if not video_files:
+        log_warn(f"No video files ({', '.join(video_extensions)}) found in '{work_dir}'.")
+        return
+
+    if not sys.stdin.isatty() or dry_run:
+        print(f"Found {len(video_files)} video file(s) in {work_dir}:")
+        for vf in video_files:
+            flac_cmd = f"ffmpeg -i {vf.name} -vn -c:a flac -sample_fmt s32 -threads 0 {vf.stem}.flac"
+            print(f" • {vf.name} -> {flac_cmd}")
+        return
+
+    items = [f.name for f in video_files]
+    selected_files = run_fzf(
+        items,
+        prompt="cx rip [TAB to multi-select] > ",
+        multi=True,
+        header=f"Select video files in {work_dir.name} to extract audio:",
+    )
+    if not selected_files:
+        return
+
+    format_choices = [
+        f"flac  - Pristine {cfg.rip_flac_bits}-bit Lossless FLAC Master",
+        f"opus  - High Efficiency Opus ({cfg.rip_opus_bitrate})",
+        "opus320 - Maximum Fidelity Opus (320 kbps)",
+    ]
+    selected_fmt = run_fzf(format_choices, prompt="Select output codec > ")
+    if not selected_fmt:
+        return
+
+    codec_choice = selected_fmt[0].split()[0]
+
+    log_info(f"Processing {len(selected_files)} file(s) into {codec_choice.upper()}...")
+
+    for fname in selected_files:
+        src_path = work_dir / fname
+        if codec_choice == "flac":
+            out_path = src_path.with_suffix(".flac")
+            ffmpeg_args = [
+                "ffmpeg", "-y", "-i", str(src_path),
+                "-vn", "-c:a", "flac",
+                "-sample_fmt", "s32",
+                "-threads", "0",
+                str(out_path),
+            ]
+        elif codec_choice == "opus320":
+            out_path = src_path.with_suffix(".opus")
+            ffmpeg_args = [
+                "ffmpeg", "-y", "-i", str(src_path),
+                "-vn", "-c:a", "libopus",
+                "-b:a", "320k",
+                "-threads", "0",
+                str(out_path),
+            ]
+        else:
+            out_path = src_path.with_suffix(".opus")
+            ffmpeg_args = [
+                "ffmpeg", "-y", "-i", str(src_path),
+                "-vn", "-c:a", "libopus",
+                "-b:a", cfg.rip_opus_bitrate,
+                "-threads", "0",
+                str(out_path),
+            ]
+
+        log_step("Extracting", f"{src_path.name} -> {out_path.name}")
+        ret, _, err = run_cmd(ffmpeg_args, dry_run=dry_run)
+        if ret == 0 and not dry_run:
+            log_success(f"Exported: {out_path.name}")
+        elif ret != 0:
+            log_error(f"Failed extracting {src_path.name}: {err}")
+
+
+def cmd_local_player(cfg: CoreXConfig, music_path: Optional[str] = None, dry_run: bool = False):
+    """Instant fuzzy-browsing of the local Music library with ffprobe live tag preview."""
+    if not check_tool("mpv"):
+        log_error("'mpv' is required for local playback.")
+        return
+
+    search_root = Path(music_path or cfg.music_dir).expanduser().resolve()
+    if not search_root.exists():
+        search_root = Path.cwd()
+
+    log_info(f"Scanning music library at '{search_root}'...")
+    audio_extensions = {".flac", ".opus", ".mp3", ".m4a", ".ogg", ".wav", ".alac", ".aac"}
+    audio_files: List[Path] = []
+    for root, _, files in os.walk(search_root):
+        for f in files:
+            p = Path(root) / f
+            if p.suffix.lower() in audio_extensions:
+                audio_files.append(p)
+
+    if not audio_files:
+        log_warn(f"No audio files found under '{search_root}'.")
+        return
+
+    if not sys.stdin.isatty() or dry_run:
+        print(f"Found {len(audio_files)} audio tracks in {search_root}:")
+        for af in audio_files[:15]:
+            print(f" • {af.relative_to(search_root)}")
+        if len(audio_files) > 15:
+            print(f" ... and {len(audio_files) - 15} more.")
+        return
+
+    items = [str(f.relative_to(search_root)) for f in audio_files]
+
+    preview_script = f"ffprobe -v error -show_entries format=duration,bit_rate:format_tags=artist,title,album -of default=noprint_wrappers=1 '{search_root}/'{{1}} 2>/dev/null || file '{search_root}/'{{1}}"
+
+    selected = run_fzf(
+        items,
+        prompt="cx music > ",
+        preview_cmd=preview_script,
+        header=f"Library: {search_root} ({len(audio_files)} tracks)",
+    )
+    if not selected:
+        return
+
+    chosen_file = search_root / selected[0]
+    log_success(f"Playing track: {chosen_file.name}")
+    run_cmd(["mpv", str(chosen_file)], dry_run=dry_run)
+
+
+# ---------------------------------------------------------------------------
+# MODULE C: SYSTEM HEALTH & PROCESS KILLER
+# ---------------------------------------------------------------------------
+def cmd_fkill(filter_term: Optional[str] = None, dry_run: bool = False):
+    """Interactive process manager via fzf showing PID, User, CPU%, MEM%, and Command."""
+    ret, out, _ = run_cmd(
+        ["ps", "-eo", "pid,user,%cpu,%mem,stat,comm", "--sort=-%cpu"],
+        capture_output=True,
+    )
+    if ret != 0:
+        log_error("Failed to query running processes.")
+        return
+
+    raw_lines = out.strip().splitlines()
+    if len(raw_lines) <= 1:
+        return
+
+    body_lines = raw_lines[1:]
+
+    items = []
+    for line in body_lines:
+        parts = line.split(None, 5)
+        if len(parts) >= 6:
+            pid, user, cpu, mem, stat, comm = parts
+            if filter_term and filter_term.lower() not in comm.lower():
+                continue
+            items.append(f"{pid:<8}\t{user:<10}\t{cpu:<6}%\t{mem:<6}%\t{stat:<5}\t{comm}")
+
+    if not sys.stdin.isatty() or dry_run:
+        print(f"{Style.BOLD}{'PID':<8} {'USER':<10} {'CPU':<7} {'MEM':<7} {'STAT':<5} {'COMMAND'}{Style.RESET}")
+        print("─" * 65)
+        for it in items[:25]:
+            p = it.split("\t")
+            print(f"{p[0]} {p[1]} {p[2]} {p[3]} {p[4]} {p[5]}")
+        return
+
+    preview = "cat /proc/{1}/status 2>/dev/null | grep -E 'Name|State|VmSize|VmRSS|Threads' || echo 'Process terminated'"
+    extra = [
+        "--delimiter=\t",
+        "--header=ENTER: SIGTERM (-15) | CTRL-X: SIGKILL (-9) | CTRL-H: SIGHUP (-1) | TAB: Multi-select",
+        "--bind=ctrl-x:execute(kill -9 {+1} 2>/dev/null)+reload(ps -eo pid,user,%cpu,%mem,stat,comm --sort=-%cpu | tail -n +2 | awk '{printf \"%-8s\\t%-10s\\t%-6s%%\\t%-6s%%\\t%-5s\\t%s\\n\", $1,$2,$3,$4,$5,$6}')",
+        "--bind=ctrl-h:execute(kill -1 {+1} 2>/dev/null)",
+    ]
+    if filter_term:
+        extra.extend(["--query", filter_term])
+
+    selected = run_fzf(
+        items,
+        prompt="cx kill > ",
+        preview_cmd=preview,
+        multi=True,
+        extra_args=extra,
+    )
+    if not selected:
+        return
+
+    pids_to_kill = [s.split("\t")[0].strip() for s in selected]
+    log_warn(f"Sending SIGTERM to PIDs: {', '.join(pids_to_kill)}")
+    for pid in pids_to_kill:
+        run_cmd(["kill", "-15", pid], dry_run=dry_run)
+    log_success("SIGTERM signals dispatched.")
+
+
+def cmd_vram(dry_run: bool = False):
+    """Real-time visual breakdown of Nvidia VRAM usage, identifying rogue zombie processes."""
+    if not check_tool("nvidia-smi"):
+        log_error("'nvidia-smi' is not installed or no NVIDIA GPU detected.")
+        return
+
+    # Query general GPU status
+    ret, out, _ = run_cmd(
+        ["nvidia-smi", "--query-gpu=gpu_name,driver_version,temperature.gpu,memory.total,memory.used,memory.free,power.draw", "--format=csv,noheader,nounits"],
+        capture_output=True,
+    )
+    if ret != 0 or not out.strip():
+        log_error("Could not query GPU metrics from nvidia-smi.")
+        return
+
+    gpu_line = out.strip().splitlines()[0]
+    g_name, driver, temp, total, used, free, power = [x.strip() for x in gpu_line.split(",")]
+    total_mb = int(total)
+    used_mb = int(used)
+    free_mb = int(free)
+    pct = (used_mb / total_mb) * 100 if total_mb > 0 else 0
+
+    print_banner(dry_run)
+    print(box_header("NVIDIA GPU & VRAM METRICS"))
+    print(f" {Style.BOLD}Device:{Style.RESET}       {g_name} (Driver {driver})")
+    print(f" {Style.BOLD}Temp/Power:{Style.RESET}   {temp}°C | {power} W")
+    
+    bar_width = 32
+    filled = int((pct / 100) * bar_width)
+    bar_color = Style.GREEN if pct < 60 else (Style.YELLOW if pct < 85 else Style.RED)
+    bar = f"{bar_color}{'█' * filled}{Style.DARK_GRAY}{'░' * (bar_width - filled)}{Style.RESET}"
+    print(f" {Style.BOLD}VRAM Usage:{Style.RESET}   [{bar}] {pct:.1f}% ({used_mb} MiB / {total_mb} MiB)")
+    print(box_footer())
+
+    # Query Compute / Graphics processes occupying VRAM
+    ret2, out2, _ = run_cmd(
+        ["nvidia-smi", "--query-compute-apps=pid,process_name,used_memory", "--format=csv,noheader,nounits"],
+        capture_output=True,
+    )
+    
+    proc_lines = [l.strip() for l in out2.strip().splitlines() if l.strip()] if ret2 == 0 else []
+
+    if not proc_lines:
+        log_success("No active compute processes occupying GPU memory buffers.")
+        return
+
+    parsed_procs = []
+    fzf_items = []
+    for line in proc_lines:
+        parts = [p.strip() for p in line.split(",")]
+        pid = parts[0]
+        raw_pname = parts[1] if len(parts) > 1 else "unknown"
+        clean_pname = Path(raw_pname.split()[0]).name if raw_pname else "unknown"
+        vram_used = parts[2] if len(parts) > 2 else "0"
+
+        is_zombie = False
+        proc_status_path = Path(f"/proc/{pid}/status")
+        cmdline = ""
+        if not proc_status_path.exists():
+            is_zombie = True
+        else:
+            try:
+                status_txt = proc_status_path.read_text()
+                if "State:\tZ" in status_txt:
+                    is_zombie = True
+                cmdline = Path(f"/proc/{pid}/cmdline").read_text().replace("\0", " ").strip()
+            except Exception:
+                is_zombie = True
+
+        status_tag = f"{Style.RED}{Style.BOLD}[ZOMBIE/ORPHAN]{Style.RESET}" if is_zombie else f"{Style.GREEN}[ACTIVE]{Style.RESET}"
+        parsed_procs.append({
+            "pid": pid,
+            "status_badge": status_tag,
+            "vram": vram_used,
+            "name": clean_pname,
+            "cmdline": cmdline,
+            "is_zombie": is_zombie,
+        })
+        fzf_items.append(f"{pid:<8}\t{status_tag}\t{vram_used:>6} MiB\t{clean_pname}")
+
+    # Print clean table
+    print(f"\n {Style.BOLD}{'PID':<8} {'STATUS':<20} {'VRAM':<12} {'PROCESS':<20} {'COMMAND'}{Style.RESET}")
+    print(f" {Style.DARK_GRAY}{'─' * 75}{Style.RESET}")
+    for p in parsed_procs:
+        cmd_snippet = p["cmdline"][:30] + ("..." if len(p["cmdline"]) > 30 else "")
+        print(f" {p['pid']:<8} {p['status_badge']:<29} {p['vram']:>6} MiB   {p['name']:<20} {Style.GRAY}{cmd_snippet}{Style.RESET}")
+    print()
+
+    # If non-interactive or dry-run, stop here cleanly
+    if not sys.stdin.isatty() or dry_run:
+        return
+
+    preview = "cat /proc/{1}/cmdline 2>/dev/null | tr '\\0' ' ' || echo 'Process unreachable in /proc'"
+    extra = [
+        "--delimiter=\t",
+        "--header=SELECT TO KILL | ENTER / CTRL-X: Force Kill (-9) | TAB: Multi-select | ESC: Exit",
+    ]
+
+    selected = run_fzf(
+        fzf_items,
+        prompt="cx vram-kill > ",
+        preview_cmd=preview,
+        multi=True,
+        extra_args=extra,
+    )
+    if not selected:
+        return
+
+    pids_to_kill = [s.split("\t")[0].strip() for s in selected]
+    log_warn(f"Force-killing GPU memory hog process(es): {', '.join(pids_to_kill)}")
+    for pid in pids_to_kill:
+        run_cmd(["kill", "-9", pid], dry_run=dry_run)
+    log_success("Kill signals sent.")
+
+
+def cmd_snapshot(cfg: CoreXConfig, label: Optional[str] = None, dry_run: bool = False):
+    """One-command BTRFS / Snapper system snapshot helper with customizable label tags."""
+    has_snapper = check_tool("snapper")
+    has_btrfs = check_tool("btrfs")
+
+    if not has_snapper and not has_btrfs:
+        log_error("Neither 'snapper' nor 'btrfs-progs' found on this system.")
+        return
+
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    snap_label = label or f"corex_{timestamp}"
+
+    # Determine backend
+    backend = cfg.snapshot_backend
+    if backend == "auto":
+        backend = "snapper" if has_snapper else "btrfs"
+
+    if backend == "snapper":
+        log_info(f"Creating Snapper snapshot (config: '{cfg.snapper_config}', description: '{snap_label}')...")
+        snap_cmd = ["sudo", "snapper", "-c", cfg.snapper_config, "create", "-d", snap_label, "-t", "single"]
+        ret, _, err = run_cmd(snap_cmd, dry_run=dry_run)
+        if ret == 0:
+            log_success(f"Snapper snapshot created: {snap_label}")
+            if not dry_run and sys.stdin.isatty():
+                run_cmd(["snapper", "-c", cfg.snapper_config, "list"])
+        else:
+            log_error(f"Snapper snapshot failed: {err}")
+    else:
+        dest_dir = Path(cfg.btrfs_mount) / ".snapshots"
+        dest_path = dest_dir / f"{timestamp}_{snap_label}"
+        log_info(f"Creating read-only BTRFS snapshot of {cfg.btrfs_mount} at {dest_path}...")
+        snap_cmd = ["sudo", "btrfs", "subvolume", "snapshot", "-r", cfg.btrfs_mount, str(dest_path)]
+        ret, _, err = run_cmd(snap_cmd, dry_run=dry_run)
+        if ret == 0:
+            log_success(f"BTRFS snapshot created: {dest_path}")
+        else:
+            log_error(f"BTRFS snapshot failed: {err}")
+
+
+# ---------------------------------------------------------------------------
+# MODULE D: QUICK SCRATCHPAD & NOTES
+# ---------------------------------------------------------------------------
+def cmd_scratch(cfg: CoreXConfig, title: Optional[str] = None, dry_run: bool = False):
+    """Instant temporary markdown scratchpad opened in $EDITOR with timestamp."""
+    notes_dir = cfg.notes_dir
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    editor = get_default_editor(cfg)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    if title:
+        sanitized_title = re.sub(r"[^\w\-]", "_", title.strip())
+        note_file = notes_dir / f"{timestamp}_{sanitized_title}.md"
+        if not note_file.exists() and not dry_run:
+            note_file.write_text(f"# {title.strip()}\nDate: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        log_info(f"Opening scratchpad {note_file.name} in {editor}...")
+        run_cmd([editor, str(note_file)], dry_run=dry_run)
+        return
+
+    existing_notes = sorted(list(notes_dir.glob("*.md")), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not existing_notes:
+        # Create first scratch note
+        note_file = notes_dir / f"{timestamp}_scratch.md"
+        if not dry_run:
+            note_file.write_text(f"# Scratchpad Note\nDate: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        log_info(f"Created scratchpad note: {note_file.name}")
+        run_cmd([editor, str(note_file)], dry_run=dry_run)
+        return
+
+    if not sys.stdin.isatty() or dry_run:
+        print(f"Scratchpad directory: {notes_dir}")
+        print(f"Found {len(existing_notes)} note(s):")
+        for n in existing_notes[:10]:
+            mtime = datetime.datetime.fromtimestamp(n.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            print(f" • {n.name} ({mtime})")
+        return
+
+    items = []
+    for p in existing_notes:
+        mtime = datetime.datetime.fromtimestamp(p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        items.append(f"{p.name}\t{mtime}")
+
+    preview_tool = "glow" if check_tool("glow") else ("bat" if check_tool("bat") else "cat")
+    preview_cmd = f"{preview_tool} '{notes_dir}/'{{1}}"
+
+    extra = [
+        "--delimiter=\t",
+        "--header=ENTER: Open Note | CTRL-N: New Note | CTRL-D: Delete Note",
+        f"--bind=ctrl-d:execute(rm -f '{notes_dir}/'{{1}})+reload(ls -1t '{notes_dir}' | awk '{{print $1}}')",
+    ]
+
+    selected = run_fzf(
+        items,
+        prompt="cx notes > ",
+        preview_cmd=preview_cmd,
+        extra_args=extra,
+    )
+
+    if not selected:
+        return
+
+    chosen = selected[0].split("\t")[0]
+    note_path = notes_dir / chosen
+    run_cmd([editor, str(note_path)], dry_run=dry_run)
+
+
+# ---------------------------------------------------------------------------
+# SHELL COMPLETION GENERATOR
+# ---------------------------------------------------------------------------
+def generate_fish_completions() -> str:
+    return """# Fish completions for CoreX (cx)
+complete -c cx -f
+
+# Global flags
+complete -c cx -s h -l help -d "Show CoreX help message"
+complete -c cx -s v -l version -d "Show CoreX version"
+complete -c cx -l dry-run -d "Preview commands without executing them"
+complete -c cx -l no-color -d "Disable ANSI color formatting"
+
+# Subcommands
+complete -c cx -n "__fish_use_subcommand" -a comfy -d "Launch ComfyUI with smart VRAM detection"
+complete -c cx -n "__fish_use_subcommand" -a ai -d "Inspect & manage Ollama / vLLM models"
+complete -c cx -n "__fish_use_subcommand" -a docker -d "Interactive Docker / Podman manager"
+complete -c cx -n "__fish_use_subcommand" -a stream -d "Fuzzy-search YouTube/SoundCloud & stream in mpv"
+complete -c cx -n "__fish_use_subcommand" -a rip -d "Extract audio from videos to 24-bit FLAC / Opus"
+complete -c cx -n "__fish_use_subcommand" -a play -d "Instant fuzzy local music player"
+complete -c cx -n "__fish_use_subcommand" -a kill -d "Interactive process manager and killer"
+complete -c cx -n "__fish_use_subcommand" -a vram -d "Nvidia VRAM breakdown and zombie process killer"
+complete -c cx -n "__fish_use_subcommand" -a snap -d "BTRFS / Snapper system snapshot helper"
+complete -c cx -n "__fish_use_subcommand" -a scratch -d "Quick timestamped markdown scratchpad notes"
+complete -c cx -n "__fish_use_subcommand" -a completions -d "Generate shell completion scripts"
+"""
+
+
+def generate_bash_completions() -> str:
+    return """# Bash completions for CoreX (cx)
+_cx_completions() {
+    local cur prev words cword
+    _init_completion || return
+
+    local commands="comfy ai docker stream rip play kill vram snap scratch completions --dry-run --help --version"
+
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+    fi
+}
+complete -F _cx_completions cx
+complete -F _cx_completions corex
+"""
+
+
+# ---------------------------------------------------------------------------
+# PREVIEW HELPER (Internal Callback for FZF Side-by-Side Preview)
+# ---------------------------------------------------------------------------
+def handle_preview(action_id: str, cfg: CoreXConfig):
+    """Generates dynamic live preview text when highlighted in fzf."""
+    if action_id == "comfyui":
+        print(f"{Style.BOLD}{Style.CYAN}=== ComfyUI Dev & AI Launcher ==={Style.RESET}")
+        print(f"Path: {cfg.comfyui_path} (Exists: {cfg.comfyui_path.exists()})")
+        venv_p = cfg.comfyui_path / cfg.comfyui_venv
+        print(f"Virtualenv: {venv_p} (Exists: {venv_p.exists()})")
+        in_use, pid = is_port_in_use(cfg.comfyui_host, cfg.comfyui_port)
+        if in_use:
+            print(f"Status: {Style.GREEN}ALREADY RUNNING{Style.RESET} (Port: {cfg.comfyui_port}, PID: {pid})")
+        else:
+            print(f"Status: Ready to launch on port {cfg.comfyui_port}")
+        tot, free = get_nvidia_vram()
+        if free is not None:
+            flag = "--highvram" if free >= cfg.vram_high_threshold_mb else ("--lowvram" if free < cfg.vram_low_threshold_mb else "--normalvram")
+            print(f"GPU VRAM Free: {free} MiB / {tot} MiB")
+            print(f"Calculated Flag: {Style.GREEN}{flag}{Style.RESET}")
+        else:
+            print(f"GPU: nvidia-smi not responding or not available")
+        print("\nPress ENTER to activate environment and boot server.")
+
+    elif action_id == "ollama":
+        print(f"{Style.BOLD}{Style.PURPLE}=== Ollama / vLLM Model Manager ==={Style.RESET}")
+        print(f"API Target: {cfg.ollama_url}")
+        try:
+            req = urllib.request.Request(f"{cfg.ollama_url.rstrip('/')}/api/ps", headers={"User-Agent": "CoreX-Preview"})
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = data.get("models", [])
+                print(f"Status: {Style.GREEN}Daemon Active{Style.RESET}")
+                print(f"Loaded in VRAM: {len(models)} model(s)")
+                for m in models:
+                    vram_mb = m.get("size_vram", 0) / (1024 * 1024)
+                    print(f" - {m.get('name')} ({vram_mb:.0f} MiB)")
+        except Exception:
+            print(f"Status: {Style.RED}Daemon Inactive / Unreachable{Style.RESET}")
+        print("\nPress ENTER to view, unload models, or toggle service.")
+
+    elif action_id == "docker":
+        engine = "docker" if check_tool("docker") else ("podman" if check_tool("podman") else "none")
+        print(f"{Style.BOLD}{Style.BLUE}=== Container Engine ({engine}) ==={Style.RESET}")
+        if engine != "none":
+            ret, out, _ = run_cmd([engine, "ps", "-q"], capture_output=True)
+            cnt = len([x for x in out.strip().splitlines() if x.strip()]) if ret == 0 else 0
+            print(f"Running Containers: {cnt}")
+        print("\nPress ENTER to inspect containers, live logs, restart, or kill.")
+
+    elif action_id == "stream":
+        print(f"{Style.BOLD}{Style.RED}=== Media Stream Engine ==={Style.RESET}")
+        print(f"Backend: yt-dlp ({'installed' if check_tool('yt-dlp') else 'missing'})")
+        print(f"Player:  mpv ({'installed' if check_tool('mpv') else 'missing'})")
+        print(f"Default Provider: {cfg.stream_provider} ({cfg.stream_results_count} results)")
+        print("\nPress ENTER to search and stream audio/video instantly.")
+
+    elif action_id == "rip-audio":
+        print(f"{Style.BOLD}{Style.ORANGE}=== Pristine Audio Ripper ==={Style.RESET}")
+        print(f"Encoder: ffmpeg ({'installed' if check_tool('ffmpeg') else 'missing'})")
+        print(f"Default Lossless: {cfg.rip_flac_bits}-bit FLAC")
+        print(f"Default Opus: {cfg.rip_opus_bitrate}")
+        print("\nPress ENTER to select video files in current working dir.")
+
+    elif action_id == "local-player":
+        print(f"{Style.BOLD}{Style.GREEN}=== Local Music Browser ==={Style.RESET}")
+        print(f"Library Root: {cfg.music_dir}")
+        print("\nPress ENTER for fuzzy track browsing with ffprobe live tag preview.")
+
+    elif action_id == "fkill":
+        print(f"{Style.BOLD}{Style.RED}=== Interactive Process Killer ==={Style.RESET}")
+        print("Features: Multi-select with TAB, live /proc/status inspection.")
+        print("Signals: ENTER (SIGTERM), CTRL-X (SIGKILL -9), CTRL-H (SIGHUP).")
+
+    elif action_id == "vram":
+        print(f"{Style.BOLD}{Style.YELLOW}=== Nvidia VRAM & Zombie Process Inspector ==={Style.RESET}")
+        tot, free = get_nvidia_vram()
+        if tot is not None and free is not None:
+            used = tot - free
+            print(f"Memory: {used} MiB used / {free} MiB free ({tot} MiB total)")
+        print("\nPress ENTER to detect rogue GPU buffer processes.")
+
+    elif action_id == "snapshot":
+        print(f"{Style.BOLD}{Style.TEAL}=== BTRFS / Snapper Snapshot Manager ==={Style.RESET}")
+        print(f"Configured Backend: {cfg.snapshot_backend}")
+        print(f"Snapper Config:     {cfg.snapper_config}")
+        print("\nPress ENTER to capture timestamped root snapshot.")
+
+    elif action_id == "scratch":
+        print(f"{Style.BOLD}{Style.WHITE}=== Quick Scratchpad Notes ==={Style.RESET}")
+        print(f"Storage: {cfg.notes_dir}")
+        print(f"Editor:  {get_default_editor(cfg)}")
+        print("\nPress ENTER to browse existing notes or create new one.")
+
+    elif action_id in cfg.custom_commands:
+        custom = cfg.custom_commands[action_id]
+        print(f"{Style.BOLD}{Style.CYAN}=== Custom Command: {custom.get('name', action_id)} ==={Style.RESET}")
+        print(f"Category:    {custom.get('category', 'Custom')}")
+        print(f"Description: {custom.get('description', '')}")
+        print(f"Command:     {custom.get('command', '')}")
+        preview_script = custom.get("preview")
+        if preview_script:
+            print("\nPreview:")
+            run_cmd(preview_script, shell=True)
+
+
+# ---------------------------------------------------------------------------
+# MASTER INTERACTIVE MENU (No Arguments)
+# ---------------------------------------------------------------------------
+def run_master_menu(cfg: CoreXConfig, dry_run: bool = False, config_path: Optional[Path] = None):
+    """Launches the global interactive fzf launcher menu."""
+    items = [
+        # AI & Workflows
+        f"comfyui\t{Style.PURPLE}[AI & Workflows]{Style.RESET}\tComfyUI One-Click Launcher (Smart VRAM)",
+        f"ollama\t{Style.PURPLE}[AI & Workflows]{Style.RESET}\tOllama / vLLM Model Manager & Daemon Control",
+        f"docker\t{Style.PURPLE}[AI & Workflows]{Style.RESET}\tContainer Manager (Logs, Restart, Kill)",
+
+        # Media & Streams
+        f"stream\t{Style.RED}[Media & Streams]{Style.RESET}\tSearch & Stream YouTube/SoundCloud via mpv",
+        f"rip-audio\t{Style.RED}[Media & Streams]{Style.RESET}\tExtract 24-bit FLAC / Opus Audio from Videos",
+        f"local-player\t{Style.RED}[Media & Streams]{Style.RESET}\tLocal Music Library Fuzzy Player & Tag Preview",
+
+        # System & GPU
+        f"fkill\t{Style.BLUE}[System & GPU]{Style.RESET}\tInteractive Process Manager & Multi-Kill",
+        f"vram\t{Style.BLUE}[System & GPU]{Style.RESET}\tNvidia VRAM Inspector & Zombie GPU Killer",
+        f"snapshot\t{Style.BLUE}[System & GPU]{Style.RESET}\tBTRFS / Snapper System Snapshot Helper",
+
+        # Quick Tools
+        f"scratch\t{Style.GREEN}[Quick Tools]{Style.RESET}\tTimestamped Markdown Scratchpad in $EDITOR",
+    ]
+
+    # Inject custom commands from config
+    for cid, cdata in cfg.custom_commands.items():
+        cat = cdata.get("category", "Custom")
+        desc = cdata.get("description", cdata.get("name", cid))
+        items.append(f"{cid}\t{Style.ORANGE}[{cat}]{Style.RESET}\t{desc}")
+
+    self_exe = os.path.abspath(sys.argv[0])
+    cfg_arg = f" --config '{config_path}'" if config_path else ""
+    preview_cmd = f"python3 '{self_exe}'{cfg_arg} __preview {{1}}"
+
+    extra = [
+        "--delimiter=\t",
+        "--with-nth=2,3",
+        "--header=COREX MULTITOOL | Select an action or type to filter | ESC to exit",
+    ]
+
+    selected = run_fzf(
+        items,
+        prompt="cx ⚡ > ",
+        preview_cmd=preview_cmd,
+        extra_args=extra,
+    )
+    if not selected:
+        return
+
+    chosen_id = selected[0].split("\t")[0].strip()
+    dispatch_action(chosen_id, cfg, dry_run=dry_run)
+
+
+def dispatch_action(action_id: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
+    """Route action to appropriate handler."""
+    extra = extra_args or []
+    if action_id in ["comfy", "comfyui"]:
+        cmd_comfyui(cfg, dry_run=dry_run, extra_args=extra)
+    elif action_id in ["ai", "ollama", "vllm"]:
+        cmd_ai_models(cfg, dry_run=dry_run)
+    elif action_id in ["docker", "compose", "podman"]:
+        cmd_docker(dry_run=dry_run)
+    elif action_id in ["stream", "yt"]:
+        q = " ".join(extra) if extra else None
+        cmd_stream(cfg, query=q, dry_run=dry_run)
+    elif action_id in ["rip", "rip-audio"]:
+        target = extra[0] if extra else None
+        cmd_rip_audio(cfg, target_dir=target, dry_run=dry_run)
+    elif action_id in ["play", "local-player", "music"]:
+        mpath = extra[0] if extra else None
+        cmd_local_player(cfg, music_path=mpath, dry_run=dry_run)
+    elif action_id in ["kill", "fkill"]:
+        filter_term = extra[0] if extra else None
+        cmd_fkill(filter_term=filter_term, dry_run=dry_run)
+    elif action_id in ["vram", "gpu"]:
+        cmd_vram(dry_run=dry_run)
+    elif action_id in ["snap", "snapshot"]:
+        lbl = extra[0] if extra else None
+        cmd_snapshot(cfg, label=lbl, dry_run=dry_run)
+    elif action_id in ["scratch", "note", "notes"]:
+        title = " ".join(extra) if extra else None
+        cmd_scratch(cfg, title=title, dry_run=dry_run)
+    elif action_id in cfg.custom_commands:
+        custom = cfg.custom_commands[action_id]
+        cmd_str = custom.get("command", "")
+        log_info(f"Running custom action: {custom.get('name', action_id)}")
+        run_cmd(cmd_str, shell=True, dry_run=dry_run)
+    else:
+        log_error(f"Unknown sub-command '{action_id}'. Run 'cx --help' for usage.")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# CLI PARSER & ENTRYPOINT
+# ---------------------------------------------------------------------------
+def main():
+    signal.signal(signal.SIGINT, lambda sig, frame: sys.exit(130))
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+
+
+    # Shell completion requests
+    if len(sys.argv) >= 2 and sys.argv[1] == "completions":
+        target_shell = sys.argv[2] if len(sys.argv) > 2 else "fish"
+        if target_shell == "fish":
+            print(generate_fish_completions())
+        else:
+            print(generate_bash_completions())
+        sys.exit(0)
+
+    parser = argparse.ArgumentParser(
+        prog="cx",
+        description="CoreX (cx) - Elite Linux Systems Multitool & Interactive Launcher CLI",
+        add_help=False,
+    )
+    parser.add_argument("command", nargs="?", help="Subcommand to execute directly (bypasses fzf menu)")
+    parser.add_argument("args", nargs=argparse.REMAINDER, help="Arguments for the subcommand")
+    parser.add_argument("-h", "--help", action="store_true", help="Show this help message")
+    parser.add_argument("-v", "--version", action="store_true", help="Show CoreX version")
+    parser.add_argument("--dry-run", action="store_true", help="Preview shell commands without executing them")
+    parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
+    parser.add_argument("--config", type=Path, default=None, help="Custom path to config.toml")
+
+    parsed, unknown = parser.parse_known_args()
+
+    if parsed.version:
+        print(f"CoreX (cx) v{VERSION}")
+        sys.exit(0)
+
+    if parsed.help:
+        print_banner(parsed.dry_run)
+        print("""
+USAGE:
+  cx                               Open interactive master fzf menu
+  cx <command> [args...]           Directly execute subcommand with zero latency
+  cx --dry-run <command> [args...] Preview command execution safely
+
+SUBCOMMANDS:
+  comfy, comfyui                   One-click launcher for ComfyUI (smart VRAM detection)
+  ai, ollama                       Inspect & unload local LLMs, manage Ollama daemon
+  docker                           Interactive container manager (logs, restart, kill)
+  stream [query]                   Search & stream YouTube/SoundCloud in mpv
+  rip [path]                       Extract 24-bit FLAC / Opus audio from videos
+  play [path]                      Instant fuzzy local music player with tag preview
+  kill, fkill [filter]             Interactive process manager & multi-process killer
+  vram                             Nvidia VRAM usage breakdown & zombie killer
+  snap, snapshot [label]           BTRFS / Snapper snapshot assistant
+  scratch [title]                  Instant markdown scratchpad opened in $EDITOR
+  completions [fish|bash|zsh]      Output native shell completion code
+
+FLAGS:
+  --dry-run                        Preview shell commands before execution
+  --config <path>                  Use custom TOML configuration file
+  --no-color                       Disable terminal ANSI colors
+  -h, --help                       Show this help message
+  -v, --version                    Display CoreX version
+""")
+        sys.exit(0)
+
+    cfg = load_config(parsed.config)
+
+    # Internal preview callback for fzf
+    if parsed.command == "__preview":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        handle_preview(target, cfg)
+        sys.exit(0)
+
+    # Master interactive mode if no command specified
+    if not parsed.command:
+        run_master_menu(cfg, dry_run=parsed.dry_run, config_path=parsed.config)
+        sys.exit(0)
+
+    # Execute targeted subcommand directly
+    extra = (parsed.args or []) + unknown
+    dispatch_action(parsed.command, cfg, dry_run=parsed.dry_run, extra_args=extra)
+
+
+if __name__ == "__main__":
+    main()
