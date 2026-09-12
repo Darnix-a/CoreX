@@ -814,6 +814,529 @@ def builtin_ai_ask(query: Optional[str], cfg: CoreXConfig):
         print()
 
 
+def get_hardware_profile() -> Dict[str, Any]:
+    """Detects GPU VRAM and System RAM to calculate model performance compatibility."""
+    profile = {
+        "gpu_name": "CPU Only",
+        "vram_total_mb": 0,
+        "vram_free_mb": 0,
+        "ram_total_mb": 0,
+        "ram_avail_mb": 0,
+        "has_gpu": False,
+    }
+
+    # 1. Probe Nvidia GPU
+    if shutil.which("nvidia-smi"):
+        try:
+            res = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=1.5,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                parts = [p.strip() for p in res.stdout.strip().splitlines()[0].split(",")]
+                if len(parts) >= 3:
+                    profile["gpu_name"] = parts[0]
+                    profile["vram_total_mb"] = int(float(parts[1]))
+                    profile["vram_free_mb"] = int(float(parts[2]))
+                    profile["has_gpu"] = True
+        except Exception:
+            pass
+
+    # 2. Probe AMD / Intel DRM sysfs
+    if not profile["has_gpu"]:
+        try:
+            vram_files = list(Path("/sys/class/drm").glob("card*/device/mem_info_vram_total"))
+            if vram_files:
+                bytes_val = int(vram_files[0].read_text().strip())
+                mb_val = bytes_val // (1024 * 1024)
+                if mb_val > 512:
+                    profile["gpu_name"] = "AMD/Intel DRM GPU"
+                    profile["vram_total_mb"] = mb_val
+                    profile["vram_free_mb"] = mb_val
+                    profile["has_gpu"] = True
+        except Exception:
+            pass
+
+    # 3. Probe System RAM (/proc/meminfo)
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    profile["ram_total_mb"] = int(line.split()[1]) // 1024
+                elif line.startswith("MemAvailable:"):
+                    profile["ram_avail_mb"] = int(line.split()[1]) // 1024
+    except Exception:
+        profile["ram_total_mb"] = 16384
+        profile["ram_avail_mb"] = 8192
+
+    return profile
+
+
+MODEL_CATALOG = [
+    {
+        "name": "qwen2.5-coder:1.5b",
+        "params": "1.5B",
+        "disk_gb": 0.98,
+        "vram_mb": 1500,
+        "category": "Code / CLI",
+        "desc": "Ultra-fast Linux CLI & Python scripting assistant. Minimal footprint.",
+    },
+    {
+        "name": "qwen2.5-coder:7b",
+        "params": "7B",
+        "disk_gb": 4.7,
+        "vram_mb": 5500,
+        "category": "Code / CLI",
+        "desc": "State-of-the-art coding powerhouse. Full terminal scripting & deep debugging.",
+    },
+    {
+        "name": "qwen2.5-coder:14b",
+        "params": "14B",
+        "disk_gb": 9.0,
+        "vram_mb": 10500,
+        "category": "Code / CLI",
+        "desc": "Heavyweight systems programming model. Complex refactoring & architecture.",
+    },
+    {
+        "name": "deepseek-r1:1.5b",
+        "params": "1.5B",
+        "disk_gb": 1.1,
+        "vram_mb": 1800,
+        "category": "Reasoning",
+        "desc": "Lightweight Chain-of-Thought reasoning. Fast logic & math solving.",
+    },
+    {
+        "name": "deepseek-r1:7b",
+        "params": "7B",
+        "disk_gb": 4.7,
+        "vram_mb": 5500,
+        "category": "Reasoning",
+        "desc": "DeepSeek reasoning engine distilled into Qwen 7B. Highly capable logic.",
+    },
+    {
+        "name": "deepseek-r1:8b",
+        "params": "8B",
+        "disk_gb": 4.9,
+        "vram_mb": 6000,
+        "category": "Reasoning",
+        "desc": "DeepSeek reasoning engine distilled into Llama 8B. Broad knowledge & analysis.",
+    },
+    {
+        "name": "deepseek-r1:14b",
+        "params": "14B",
+        "disk_gb": 9.0,
+        "vram_mb": 10500,
+        "category": "Reasoning",
+        "desc": "Advanced reasoning & mathematics. High accuracy on difficult tasks.",
+    },
+    {
+        "name": "deepseek-r1:32b",
+        "params": "32B",
+        "disk_gb": 19.0,
+        "vram_mb": 21000,
+        "category": "Heavyweight",
+        "desc": "Near-frontier reasoning power. Requires large VRAM or RAM offload.",
+    },
+    {
+        "name": "llama3.2:1b",
+        "params": "1B",
+        "disk_gb": 1.3,
+        "vram_mb": 1700,
+        "category": "General",
+        "desc": "Ultra-compact Meta model. Blazing inference speed on any machine.",
+    },
+    {
+        "name": "llama3.2:3b",
+        "params": "3B",
+        "disk_gb": 2.0,
+        "vram_mb": 3000,
+        "category": "General",
+        "desc": "Balanced speed and general knowledge. Great all-rounder daily driver.",
+    },
+    {
+        "name": "llama3.1:8b",
+        "params": "8B",
+        "disk_gb": 4.7,
+        "vram_mb": 5800,
+        "category": "General",
+        "desc": "Gold-standard open weights model. Excellent creative and analytical skills.",
+    },
+    {
+        "name": "mistral:7b",
+        "params": "7B",
+        "disk_gb": 4.1,
+        "vram_mb": 5200,
+        "category": "General",
+        "desc": "Original fast instruction follower. High performance per parameter.",
+    },
+    {
+        "name": "phi4:14b",
+        "params": "14B",
+        "disk_gb": 9.1,
+        "vram_mb": 10800,
+        "category": "Reasoning",
+        "desc": "Microsoft Phi-4 reasoning model. High synthetic training density.",
+    },
+    {
+        "name": "qwen2.5:32b",
+        "params": "32B",
+        "disk_gb": 19.0,
+        "vram_mb": 21000,
+        "category": "Heavyweight",
+        "desc": "Elite 32B model. Highly intelligent, requires significant system resources.",
+    },
+]
+
+
+def rate_model_compatibility(vram_req_mb: int, hw: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculates hardware compatibility tier, color badge, and tok/s estimation."""
+    vram = hw.get("vram_total_mb", 0)
+    ram = hw.get("ram_total_mb", 0)
+
+    if vram > 0:
+        ratio = vram_req_mb / vram
+        if ratio <= 0.35:
+            return {
+                "tier": "BLAZING",
+                "badge": "🟢 BLAZING",
+                "color": Style.GREEN,
+                "fit": "100% GPU VRAM",
+                "est_speed": "~85-130 tok/s",
+                "note": f"Fits effortlessly in VRAM ({ratio*100:.0f}% used). Blazing instant generation.",
+                "playable": True,
+            }
+        elif ratio <= 0.80:
+            return {
+                "tier": "OPTIMAL",
+                "badge": "🟢 OPTIMAL",
+                "color": Style.GREEN,
+                "fit": "100% GPU VRAM",
+                "est_speed": "~45-75 tok/s",
+                "note": f"Runs fully accelerated inside GPU VRAM ({ratio*100:.0f}% used). Smooth & fast.",
+                "playable": True,
+            }
+        elif ratio <= 0.98:
+            return {
+                "tier": "TIGHT FIT",
+                "badge": "🟡 TIGHT",
+                "color": Style.YELLOW,
+                "fit": "100% GPU VRAM",
+                "est_speed": "~25-35 tok/s",
+                "note": f"Fits inside VRAM ({ratio*100:.0f}% used), but long context may cause offload.",
+                "playable": True,
+            }
+        elif vram_req_mb <= (vram + ram * 0.70):
+            spill_gb = (vram_req_mb - vram) / 1024
+            return {
+                "tier": "RAM OFFLOAD",
+                "badge": "🟠 RAM-SPLIT",
+                "color": Style.YELLOW,
+                "fit": f"VRAM + {spill_gb:.1f}GB RAM",
+                "est_speed": "~8-18 tok/s",
+                "note": f"Exceeds VRAM by {spill_gb:.1f}GB. Offloaded layers run on CPU/RAM at reduced speed.",
+                "playable": True,
+            }
+        else:
+            return {
+                "tier": "TOO HEAVY",
+                "badge": "🔴 TOO HEAVY",
+                "color": Style.RED,
+                "fit": "Exceeds Capacity",
+                "est_speed": "<3 tok/s",
+                "note": f"Model requires ~{vram_req_mb/1024:.1f}GB VRAM/RAM. Will cause thrashing or crash.",
+                "playable": False,
+            }
+    else:
+        # CPU-only machine
+        if vram_req_mb <= (ram * 0.45):
+            return {
+                "tier": "CPU OPTIMAL",
+                "badge": "🟡 CPU OK",
+                "color": Style.YELLOW,
+                "fit": "100% System RAM",
+                "est_speed": "~15-25 tok/s",
+                "note": "Runs in system RAM on CPU. Solid performance for lightweight model.",
+                "playable": True,
+            }
+        elif vram_req_mb <= (ram * 0.75):
+            return {
+                "tier": "CPU HEAVY",
+                "badge": "🟠 CPU HEAVY",
+                "color": Style.YELLOW,
+                "fit": "Heavy System RAM",
+                "est_speed": "~5-12 tok/s",
+                "note": "High RAM utilization on CPU. Usable but slower token generation.",
+                "playable": True,
+            }
+        else:
+            return {
+                "tier": "TOO HEAVY",
+                "badge": "🔴 TOO HEAVY",
+                "color": Style.RED,
+                "fit": "Exceeds RAM",
+                "est_speed": "<2 tok/s",
+                "note": "Model size exceeds available physical RAM.",
+                "playable": False,
+            }
+
+
+def set_config_ai_model(model_name: str):
+    """Persists chosen model to ~/.config/corex/config.toml under [ai]."""
+    cfg_file = CONFIG_FILE
+    if not cfg_file.exists():
+        return
+    text = cfg_file.read_text(encoding="utf-8")
+    import re
+    if re.search(r'^\s*model\s*=\s*".*?"', text, re.MULTILINE):
+        new_text = re.sub(r'^\s*model\s*=\s*".*?"', f'model = "{model_name}"', text, flags=re.MULTILINE)
+    elif "[ai]" in text:
+        new_text = text.replace("[ai]", f'[ai]\nmodel = "{model_name}"')
+    else:
+        new_text = text + f'\n[ai]\nmodel = "{model_name}"\n'
+    cfg_file.write_text(new_text, encoding="utf-8")
+
+
+def render_model_preview(model_name: str, cfg: CoreXConfig):
+    """Renders real-time ANSI preview card for FZF model chooser."""
+    import json
+    import urllib.request
+
+    hw = get_hardware_profile()
+    raw_name = model_name.split()[0].strip() if model_name else ""
+
+    spec = next((m for m in MODEL_CATALOG if m["name"] == raw_name), None)
+    if not spec:
+        spec = {
+            "name": raw_name,
+            "params": "Local",
+            "disk_gb": 4.0,
+            "vram_mb": 5000,
+            "category": "Custom Model",
+            "desc": "Locally installed or external model.",
+        }
+
+    rating = rate_model_compatibility(spec["vram_mb"], hw)
+
+    installed = False
+    size_str = f"{spec['disk_gb']:.1f} GB"
+    api_url = cfg.ollama_url.rstrip("/")
+    try:
+        req = urllib.request.Request(f"{api_url}/api/tags", headers={"User-Agent": "CoreX"})
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for m in data.get("models", []):
+                if m.get("name") == raw_name or m.get("name", "").startswith(raw_name.split(":")[0]):
+                    installed = True
+                    sz_bytes = m.get("size", 0)
+                    if sz_bytes:
+                        size_str = f"{sz_bytes / (1024**3):.2f} GB (On Disk)"
+                    break
+    except Exception:
+        pass
+
+    in_vram = False
+    try:
+        req = urllib.request.Request(f"{api_url}/api/ps", headers={"User-Agent": "CoreX"})
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for m in data.get("models", []):
+                if m.get("name") == raw_name:
+                    in_vram = True
+                    break
+    except Exception:
+        pass
+
+    active_model = cfg.ollama_model
+
+    print(box_header(f"MODEL SPECIFICATION: {spec['name']}", color=rating["color"]))
+    print(f" {Style.BOLD}Category:{Style.RESET}        {spec['category']}")
+    print(f" {Style.BOLD}Parameters:{Style.RESET}      {spec['params']}")
+    print(f" {Style.BOLD}Download Size:{Style.RESET}   {size_str}")
+    print(f" {Style.BOLD}Required VRAM:{Style.RESET}   ~{spec['vram_mb'] / 1024:.1f} GB (Weights + KV Cache)")
+    print(f" {Style.BOLD}Description:{Style.RESET}     {spec['desc']}")
+    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+
+    print(f" {Style.BOLD}HARDWARE PERFORMANCE ANALYSIS:{Style.RESET}")
+    print(f"  • {Style.BOLD}Detected Host:{Style.RESET}   {hw['gpu_name']} ({hw['vram_total_mb']/1024:.1f} GB VRAM) | RAM: {hw['ram_total_mb']/1024:.1f} GB")
+    print(f"  • {Style.BOLD}Rating Tier:{Style.RESET}     {rating['badge']}")
+    print(f"  • {Style.BOLD}Execution Fit:{Style.RESET}   {rating['fit']}")
+    print(f"  • {Style.BOLD}Estimated Speed:{Style.RESET} {rating['est_speed']}")
+    print(f"  • {Style.BOLD}Feasibility:{Style.RESET}     {rating['note']}")
+    print(f"{Style.DARK_GRAY}{'─' * 62}{Style.RESET}")
+
+    print(f" {Style.BOLD}DEPLOYMENT STATUS:{Style.RESET}")
+    status_str = f"{Style.GREEN}✔ Installed & Ready{Style.RESET}" if installed else f"{Style.YELLOW}▲ Not Downloaded (Press ENTER to pull){Style.RESET}"
+    if in_vram:
+        status_str += f" | {Style.CYAN}⚡ Currently Live in VRAM{Style.RESET}"
+    print(f"  • {Style.BOLD}Local Status:{Style.RESET}    {status_str}")
+    default_str = f"{Style.GREEN}★ Active Default for cx ask{Style.RESET}" if raw_name == active_model else f"{Style.GRAY}Inactive (Press ENTER to activate){Style.RESET}"
+    print(f"  • {Style.BOLD}Configuration:{Style.RESET}   {default_str}")
+    print(box_footer(color=rating["color"]))
+
+
+def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
+    """Interactive AI Model Chooser, Hardware Telemetry Profiler, and Downloader."""
+    import json
+    import urllib.request
+
+    args = extra_args or []
+
+    ensure_ollama_ready(cfg)
+
+    hw = get_hardware_profile()
+    api_url = cfg.ollama_url.rstrip("/")
+
+    installed_models = {}
+    try:
+        req = urllib.request.Request(f"{api_url}/api/tags", headers={"User-Agent": "CoreX"})
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                if name:
+                    installed_models[name] = m
+    except Exception:
+        pass
+
+    if "--summary" in args or "--list" in args:
+        print(f"\n{box_header('AI HARDWARE TELEMETRY & MODEL COMPATIBILITY', color=Style.CYAN)}")
+        print(f" {Style.BOLD}GPU Hardware:{Style.RESET}     {hw['gpu_name']} ({hw['vram_total_mb']/1024:.1f} GB VRAM, {hw['vram_free_mb']/1024:.1f} GB Free)")
+        print(f" {Style.BOLD}System Memory:{Style.RESET}    {hw['ram_total_mb']/1024:.1f} GB Total ({hw['ram_avail_mb']/1024:.1f} GB Available)")
+        print(f" {Style.BOLD}Active Copilot:{Style.RESET}   {Style.GREEN}{cfg.ollama_model}{Style.RESET}")
+        print(f"{Style.DARK_GRAY}{'─' * 70}{Style.RESET}")
+        print(f" {Style.BOLD}{'MODEL':<24} {'SIZE':<9} {'TIER':<14} {'STATUS':<12} {'EXECUTION FIT'}{Style.RESET}")
+        print(f" {Style.DARK_GRAY}{'─' * 70}{Style.RESET}")
+        for cat in MODEL_CATALOG:
+            name = cat["name"]
+            rating = rate_model_compatibility(cat["vram_mb"], hw)
+            is_inst = name in installed_models or any(name.split(":")[0] == k.split(":")[0] for k in installed_models)
+            status = "Installed" if is_inst else "Available"
+            is_act = (name == cfg.ollama_model)
+            act_mark = " ★" if is_act else ""
+            print(f" {name:<24} {cat['disk_gb']:>4.1f} GB   {rating['badge']:<14} {status + act_mark:<12} {rating['fit']}")
+        print(box_footer(color=Style.CYAN))
+        return
+
+    catalog_names = set(m["name"] for m in MODEL_CATALOG)
+    all_models = list(MODEL_CATALOG)
+
+    for name, m in installed_models.items():
+        if name not in catalog_names and not any(name.split(":")[0] == c["name"].split(":")[0] for c in MODEL_CATALOG):
+            sz_gb = m.get("size", 0) / (1024**3)
+            all_models.insert(0, {
+                "name": name,
+                "params": "Local",
+                "disk_gb": round(sz_gb, 1),
+                "vram_mb": int(sz_gb * 1200),
+                "category": "Custom Installed",
+                "desc": "Custom user-downloaded Ollama model.",
+            })
+
+    def sort_key(item):
+        name = item["name"]
+        is_inst = name in installed_models or any(name.split(":")[0] == k.split(":")[0] for k in installed_models)
+        is_act = (name == cfg.ollama_model)
+        if is_act:
+            return (0, name)
+        elif is_inst:
+            return (1, name)
+        else:
+            return (2, name)
+
+    all_models.sort(key=sort_key)
+
+    items = []
+    for m in all_models:
+        name = m["name"]
+        rating = rate_model_compatibility(m["vram_mb"], hw)
+        is_inst = name in installed_models or any(name.split(":")[0] == k.split(":")[0] for k in installed_models)
+        tag = "[INSTALLED]" if is_inst else "[AVAILABLE]"
+        act_star = "★ ACTIVE" if name == cfg.ollama_model else "        "
+        line = f"{name:<24} {rating['badge']:<15} {tag:<12} {act_star} {m['disk_gb']:>4.1f} GB  {m['category']:<16} {m['desc']}"
+        items.append(line)
+
+    self_exe = os.path.abspath(sys.argv[0])
+    preview_cmd = f"python3 '{self_exe}' __preview_model {{1}}"
+
+    header = (
+        f"GPU: {hw['gpu_name']} ({hw['vram_total_mb']/1024:.1f} GB VRAM) | RAM: {hw['ram_total_mb']/1024:.1f} GB | Active: {cfg.ollama_model}\n"
+        "ENTER: Activate / Download   |   CTRL-D: Delete Model   |   CTRL-T: Test Prompt"
+    )
+
+    selected = run_fzf(
+        items,
+        prompt="Select AI Model > ",
+        preview_cmd=preview_cmd,
+        header=header,
+        extra_args=["--expect=ctrl-d,ctrl-t", "--delimiter= "]
+    )
+
+    if not selected or len(selected) < 2:
+        return
+
+    key = selected[0].strip()
+    chosen_line = selected[1].strip()
+    chosen_name = chosen_line.split()[0].strip()
+
+    is_installed = chosen_name in installed_models or any(chosen_name.split(":")[0] == k.split(":")[0] for k in installed_models)
+
+    if key == "ctrl-d":
+        if not is_installed:
+            log_warn(f"Model '{chosen_name}' is not downloaded, cannot delete.")
+            return
+        try:
+            print(f"\n{Style.YELLOW}{Style.BOLD}⚠️  Delete local model '{chosen_name}' to free disk space? [y/N]: {Style.RESET}", end="", flush=True)
+            ans = input().strip().lower()
+            if ans in ("y", "yes"):
+                log_info(f"Removing model '{chosen_name}' via Ollama...")
+                subprocess.run(["ollama", "rm", chosen_name])
+                log_success(f"Model '{chosen_name}' removed from local storage.")
+        except (KeyboardInterrupt, EOFError):
+            print()
+        return
+
+    if key == "ctrl-t":
+        if not is_installed:
+            log_warn(f"Model '{chosen_name}' must be downloaded before running a test.")
+            return
+        log_info(f"Testing model '{chosen_name}' with test prompt...")
+        temp_cfg = CoreXConfig()
+        temp_cfg.ollama_url = cfg.ollama_url
+        temp_cfg.ollama_model = chosen_name
+        builtin_ai_ask("Explain what your architecture excels at in 1 sentence.", temp_cfg)
+        return
+
+    if is_installed:
+        set_config_ai_model(chosen_name)
+        cfg.ollama_model = chosen_name
+        log_success(f"Active AI model set to '{chosen_name}' for cx ask / cx ai.")
+    else:
+        cat_spec = next((m for m in MODEL_CATALOG if m["name"] == chosen_name), None)
+        sz_str = f"~{cat_spec['disk_gb']} GB" if cat_spec else ""
+        print(f"\n{box_header('DOWNLOAD MODEL', color=Style.CYAN)}")
+        print(f" Model:          {Style.BOLD}{chosen_name}{Style.RESET}")
+        if sz_str:
+            print(f" Download Size:  {sz_str}")
+        print(f" Storage Path:   ~/.ollama/models")
+        print(box_footer(color=Style.CYAN))
+
+        try:
+            ans = input(f" {Style.BOLD}Download '{chosen_name}' and set as active default? [Y/n]: {Style.RESET}").strip().lower()
+            if ans in ("", "y", "yes"):
+                log_info(f"Downloading '{chosen_name}' via Ollama...")
+                res = subprocess.run(["ollama", "pull", chosen_name])
+                if res.returncode == 0:
+                    set_config_ai_model(chosen_name)
+                    cfg.ollama_model = chosen_name
+                    log_success(f"Model '{chosen_name}' installed and activated as default!")
+                else:
+                    log_error(f"Failed pulling '{chosen_name}'.")
+        except (KeyboardInterrupt, EOFError):
+            print()
+
+
 def builtin_model_symlink(cfg: CoreXConfig):
     models_dir = cfg.comfyui_path / "models"
     if not models_dir.exists():
@@ -1921,7 +2444,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
-        "url-short", "ask"
+        "url-short", "ask", "models"
     }
 
     for cid, spec in cfg.commands.items():
@@ -2686,6 +3209,9 @@ def execute_command(
         "ai": "ask",
         "ask": "ask",
         "copilot": "ask",
+        "models": "models",
+        "model": "models",
+        "ai-models": "models",
         "docker": "docker-fzf",
         "doctor": "doctor",
         "test-all": "doctor",
@@ -2810,6 +3336,8 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
     if name in ("ask", "ai", "ai-copilot", "copilot"):
         q = " ".join(args) if args else None
         builtin_ai_ask(q, cfg)
+    elif name in ("models", "model", "ai-models"):
+        builtin_model_chooser(cfg, extra_args=args)
     elif name == "comfy-boot":
         builtin_comfy_boot(cfg, dry_run=dry_run, extra_args=args)
     elif name == "ollama-ps":
@@ -3084,6 +3612,12 @@ def main():
     if parsed.command == "__preview":
         target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
         render_preview(target, cfg)
+        sys.exit(0)
+
+    # Internal preview callback for model chooser
+    if parsed.command == "__preview_model":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        render_model_preview(target, cfg)
         sys.exit(0)
 
     # Internal helper: get raw command string for Ctrl+Y clipboard

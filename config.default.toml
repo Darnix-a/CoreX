@@ -34,6 +34,15 @@ requires_sudo = false
 confirm = false
 deps = []
 
+[commands.models]
+category = "AI, CUDA & Deep Learning"
+description = "Interactive AI model manager, hardware compatibility profiler & downloader"
+command = "cx __builtin models"
+preview_cmd = "cx __builtin models --summary 2>/dev/null | head -n 15 || echo 'AI Model Manager & VRAM Profiler'"
+requires_sudo = false
+confirm = false
+deps = []
+
 [commands.comfy-boot]
 category = "AI, CUDA & Deep Learning"
 description = "Detect venv, check port 8188, apply CUDA alloc flags, launch ComfyUI & notify"
