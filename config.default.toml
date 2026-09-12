@@ -1452,6 +1452,15 @@ requires_sudo = false
 confirm = false
 deps = ["kubectl", "fzf"]
 
+[commands.builder]
+category = "Git, Dev & Code Utilities"
+description = "In-App Command Builder & Action Studio (Create, edit, or test custom actions)"
+command = "cx __builtin builder"
+preview_cmd = "echo 'Interactive studio to build, test, and register custom actions into CoreX'"
+requires_sudo = false
+confirm = false
+deps = []
+
 [commands.doctor]
 category = "System Architecture & BTRFS Snapshotting"
 description = "Run diagnostic health checks on all 150+ commands & install missing dependencies"

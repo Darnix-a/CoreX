@@ -161,5 +161,6 @@ complete -c cx -n '__fish_use_subcommand' -a 'noise-gate' -d 'Toggle real-time A
 complete -c cx -n '__fish_use_subcommand' -a 'git-rebase-i' -d 'Interactive rebase helper for the last N commits'
 complete -c cx -n '__fish_use_subcommand' -a 'semver-bump' -d 'Interactive Semantic Version bumper (patch, minor, major) for project configs'
 complete -c cx -n '__fish_use_subcommand' -a 'k8s-pods-fzf' -d 'Interactive fuzzy selector to view logs or exec into Kubernetes cluster pods'
+complete -c cx -n '__fish_use_subcommand' -a 'builder' -d 'In-App Command Builder & Action Studio (Create, edit, or test custom actions)'
 complete -c cx -n '__fish_use_subcommand' -a 'doctor' -d 'Run diagnostic health checks on all 150+ commands & install missing dependencies'
 complete -c corex -w cx

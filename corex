@@ -13,7 +13,6 @@ import signal
 import subprocess
 import sys
 import time
-import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -39,6 +38,28 @@ CATEGORY_TAGS = {
     "Container, Pod & Service Micro-Orchestration": "@docker",
     "Local Development & Code Diagnostics": "@code",
 }
+
+CATEGORY_COLORS = {
+    "@ai": "\033[38;5;177m",       # Soft Orchid / Magenta
+    "@audio": "\033[38;5;147m",    # Soft Lavender
+    "@gpu": "\033[38;5;114m",      # Sage / Mint Green
+    "@sys": "\033[38;5;75m",       # Sky Blue
+    "@net": "\033[38;5;81m",       # Ice Blue
+    "@netflow": "\033[38;5;44m",   # Bright Teal
+    "@dev": "\033[38;5;215m",      # Peach / Amber
+    "@daily": "\033[38;5;211m",    # Coral Pink
+    "@kernel": "\033[38;5;203m",   # Soft Crimson
+    "@vulkan": "\033[38;5;183m",   # Lilac
+    "@mem": "\033[38;5;221m",      # Amber Yellow
+    "@dsp": "\033[38;5;141m",      # Violet
+    "@docker": "\033[38;5;39m",    # Deep Sky Blue
+    "@code": "\033[38;5;120m",     # Fresh Light Green
+    "@custom": "\033[38;5;208m",   # Vivid Orange
+}
+
+
+def get_tag_color(tag: str) -> str:
+    return CATEGORY_COLORS.get(tag, Style.CYAN)
 
 # ---------------------------------------------------------------------------
 # ANSI Terminal Styling
@@ -105,13 +126,14 @@ def log_step(step: str, detail: str):
     print(f"{Style.CYAN}{Style.BOLD}λ{Style.RESET} {Style.BOLD}{step}:{Style.RESET} {Style.GRAY}{detail}{Style.RESET}")
 
 
-def box_header(title: str, width: int = 70) -> str:
-    line = "═" * max(0, width - len(title) - 4)
-    return f"{Style.CYAN}╔═ {Style.BOLD}{Style.WHITE}{title}{Style.RESET}{Style.CYAN} {line}╗{Style.RESET}"
+def box_header(title: str, width: int = 70, color: str = Style.CYAN) -> str:
+    title_str = f" {title} " if title else ""
+    line = "─" * max(0, width - len(title_str) - 3)
+    return f"{color}╭─{Style.BOLD}{Style.WHITE}{title_str}{Style.RESET}{color}{line}╮{Style.RESET}"
 
 
-def box_footer(width: int = 70) -> str:
-    return f"{Style.CYAN}╚{'═' * max(0, width - 2)}╝{Style.RESET}"
+def box_footer(width: int = 70, color: str = Style.CYAN) -> str:
+    return f"{color}╰{'─' * max(0, width - 2)}╯{Style.RESET}"
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +202,7 @@ def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
 
     cfg = CoreXConfig()
     try:
+        import tomllib
         with open(path, "rb") as f:
             data = tomllib.load(f)
 
@@ -268,9 +291,12 @@ def run_fzf(
         "--height=85%",
         "--layout=reverse",
         "--border=rounded",
-        "--color=bg+:#1e1e2e,bg:#181825,spinner:#f5e0dc,hl:#f38ba8",
-        "--color=fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc",
-        "--color=marker:#b4befe,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8",
+        "--scrollbar=│",
+        "--info=inline-right",
+        "--color=bg+:#1e1e2e,bg:#181825,spinner:#f5e0dc,hl:#89b4fa",
+        "--color=fg:#cdd6f4,header:#89dceb,info:#cba6f7,pointer:#f5e0dc",
+        "--color=marker:#b4befe,fg+:#ffffff,prompt:#89b4fa,hl+:#f38ba8",
+        "--color=border:#45475a,label:#89b4fa,preview-border:#45475a,preview-label:#cba6f7",
     ]
 
     if multi:
@@ -1377,7 +1403,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "sys-info", "irq-top", "oom-score", "ram-breakdown", "hugepages-toggle",
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
-        "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode"
+        "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder"
     }
 
     for cid, spec in cfg.commands.items():
@@ -1488,6 +1514,468 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
 
 
 # ---------------------------------------------------------------------------
+# IN-APP COMMAND BUILDER & ACTION STUDIO
+# ---------------------------------------------------------------------------
+def save_command_to_config(
+    cid: str,
+    category: str,
+    description: str,
+    command: str,
+    preview_cmd: str = "",
+    requires_sudo: bool = False,
+    confirm: bool = False,
+    deps: Optional[List[str]] = None,
+    config_path: Optional[Path] = None,
+) -> bool:
+    """Saves or updates a command in config.toml, keeping doctor at the bottom."""
+    path = config_path or CONFIG_FILE
+    if not path.exists():
+        if DEFAULT_CONFIG_TEMPLATE.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("[general]\neditor = ''\n\n[commands]\n", encoding="utf-8")
+
+    text = path.read_text(encoding="utf-8")
+
+    def escape_toml(val: str) -> str:
+        return val.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+
+    lines = [
+        f"[commands.{cid}]",
+        f'category = "{escape_toml(category)}"',
+        f'description = "{escape_toml(description)}"',
+        f'command = "{escape_toml(command)}"',
+    ]
+    if preview_cmd:
+        lines.append(f'preview_cmd = "{escape_toml(preview_cmd)}"')
+    else:
+        lines.append(f'preview_cmd = "echo \\"Action: {escape_toml(cid)}\\""')
+    lines.append(f'requires_sudo = {"true" if requires_sudo else "false"}')
+    lines.append(f'confirm = {"true" if confirm else "false"}')
+    deps_list = deps or []
+    deps_formatted = ", ".join([f'"{escape_toml(d)}"' for d in deps_list])
+    lines.append(f'deps = [{deps_formatted}]')
+    block = "\n".join(lines) + "\n\n"
+
+    # If updating an existing command:
+    pattern = rf"(?ms)^\[commands\.{re.escape(cid)}\].*?(?=(?:^\[|\Z))"
+    if re.search(pattern, text):
+        new_text = re.sub(pattern, block, text)
+    else:
+        # Insert before [commands.doctor] if present to keep doctor at bottom
+        doctor_pos = text.find("[commands.doctor]")
+        if doctor_pos != -1:
+            new_text = text[:doctor_pos] + block + text[doctor_pos:]
+        else:
+            new_text = text.rstrip() + "\n\n" + block
+
+    path.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def remove_command_from_config(cid: str, config_path: Optional[Path] = None) -> bool:
+    """Removes a command from config.toml."""
+    path = config_path or CONFIG_FILE
+    if not path.exists():
+        return False
+    text = path.read_text(encoding="utf-8")
+    pattern = rf"(?ms)^\[commands\.{re.escape(cid)}\].*?(?=(?:^\[|\Z))"
+    if not re.search(pattern, text):
+        return False
+    new_text = re.sub(pattern, "", text)
+    new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+    path.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def sync_completions(cfg: CoreXConfig):
+    """Regenerates and updates completions across fish, bash, and zsh."""
+    fish_path = Path.home() / ".config" / "fish" / "completions" / "cx.fish"
+    if fish_path.parent.exists():
+        try:
+            fish_path.write_text(generate_fish_completions(cfg), encoding="utf-8")
+        except Exception:
+            pass
+
+    bash_path = Path.home() / ".local" / "share" / "bash-completion" / "completions" / "cx"
+    if bash_path.parent.exists():
+        try:
+            bash_path.write_text(generate_bash_completions(cfg), encoding="utf-8")
+        except Exception:
+            pass
+
+    zsh_path = Path.home() / ".zsh" / "completions" / "_cx"
+    if zsh_path.parent.exists():
+        try:
+            zsh_path.write_text(generate_zsh_completions(cfg), encoding="utf-8")
+        except Exception:
+            pass
+
+
+def detect_command_dependencies(cmd_str: str) -> List[str]:
+    """Scans shell command string to detect common CLI binaries."""
+    ignore = {
+        "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+        "case", "esac", "echo", "cd", "pwd", "read", "true", "false",
+        "test", "exit", "return", "set", "unset", "export", "alias",
+        "source", "exec", "eval", "sh", "bash", "zsh", "sudo", "cx", "corex"
+    }
+    tokens = re.findall(r"(?:^|[|;&]\s*)([a-zA-Z0-9_\-\.]+)", cmd_str)
+    deps = []
+    for tok in tokens:
+        tok = tok.strip()
+        if tok and tok not in ignore and shutil.which(tok) and tok not in deps:
+            deps.append(tok)
+    return deps
+
+
+def prompt_user(msg: str, default: str = "") -> str:
+    """Helper for reading user input with fallback default."""
+    try:
+        val = input(msg).strip()
+        return val if val else default
+    except (KeyboardInterrupt, EOFError):
+        print()
+        raise KeyboardInterrupt()
+
+
+def wizard_create_action(cfg: CoreXConfig, initial_id: Optional[str] = None):
+    """Interactive step-by-step wizard to create a new action."""
+    print(f"\n{box_header('ACTION BUILDER: CREATE NEW ACTION', color=Style.CYAN)}")
+    print(f" {Style.GRAY}Follow the guided steps below. Press Ctrl+C to cancel.{Style.RESET}\n")
+
+    # Step 1: Command Identifier
+    cid = ""
+    while not cid:
+        raw_id = prompt_user(f"◈ {Style.BOLD}[1/6] Command ID / Slug{Style.RESET} [e.g. fast-backup, clean-pacman]: ", default=initial_id or "")
+        cid = re.sub(r"[^a-zA-Z0-9_\-]", "-", raw_id.lower()).strip("-")
+        if not cid:
+            log_warn("Command ID cannot be empty.")
+            continue
+        if cid in cfg.commands:
+            print(f"  {Style.YELLOW}▲ Action '{cid}' already exists!{Style.RESET}")
+            ans = prompt_user(f"  Overwrite existing action '{cid}'? [y/N]: ", default="n").lower()
+            if ans not in ("y", "yes"):
+                cid = ""
+                continue
+
+    # Step 2: Category
+    cats = list(CATEGORY_TAGS.keys())
+    print(f"\n◈ {Style.BOLD}[2/6] Select Category:{Style.RESET}")
+    for idx, cat_name in enumerate(cats, 1):
+        tag = CATEGORY_TAGS[cat_name]
+        color = get_tag_color(tag)
+        print(f"   [{idx:2d}] {color}{tag:<9}{Style.RESET} {cat_name}")
+    print(f"   [{len(cats)+1:2d}] {Style.ORANGE}@custom  {Style.RESET} Enter Custom Category")
+
+    category = "Git, Dev & Code Utilities"
+    cat_tag = "@dev"
+    choice = prompt_user(f"  Choice [1-{len(cats)+1}, default: 6 (@dev)]: ", default="6").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(cats):
+        category = cats[int(choice) - 1]
+        cat_tag = CATEGORY_TAGS[category]
+    elif choice.isdigit() and int(choice) == len(cats) + 1:
+        category = prompt_user("  Enter Custom Category Name: ", default="Custom Actions").strip()
+        cat_tag = "@custom"
+    else:
+        found = False
+        for cname, ctag in CATEGORY_TAGS.items():
+            if choice.lower() in (ctag.lower(), cname.lower()):
+                category = cname
+                cat_tag = ctag
+                found = True
+                break
+        if not found:
+            category = "Git, Dev & Code Utilities"
+            cat_tag = "@dev"
+
+    # Step 3: Description
+    print()
+    desc = prompt_user(f"◈ {Style.BOLD}[3/6] Short Description{Style.RESET}: ", default=f"User action: {cid}")
+
+    # Step 4: Shell Command & Live Syntax Validation
+    print()
+    cmd_str = ""
+    while not cmd_str:
+        cmd_str = prompt_user(f"◈ {Style.BOLD}[4/6] Shell Command to Execute{Style.RESET}: ")
+        if not cmd_str:
+            log_warn("Command string cannot be empty.")
+            continue
+        res = subprocess.run(["bash", "-n", "-c", cmd_str], capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f"   {Style.GREEN}✔ Bash syntax check passed.{Style.RESET}")
+        else:
+            print(f"   {Style.RED}▲ Bash syntax warning/error:{Style.RESET} {res.stderr.strip()}")
+            keep = prompt_user("   Keep this command anyway? [y/N]: ", default="n").lower()
+            if keep not in ("y", "yes"):
+                cmd_str = ""
+                continue
+
+    detected_deps = detect_command_dependencies(cmd_str)
+    if detected_deps:
+        print(f"   {Style.GRAY}Auto-detected dependencies: {', '.join(detected_deps)}{Style.RESET}")
+
+    # Step 5: Live Preview Command
+    print()
+    prev_default = f"echo 'Action: {cid} | Runs: {cmd_str[:40]}...'"
+    preview_cmd = prompt_user(f"◈ {Style.BOLD}[5/6] Live Preview Command{Style.RESET} (press Enter for default): ", default=prev_default)
+
+    # Step 6: Privileges, Confirmation & Dependencies
+    print()
+    default_sudo = "y" if "sudo" in cmd_str else "n"
+    sudo_ans = prompt_user(f"◈ {Style.BOLD}[6/6] Execution Options:{Style.RESET}\n  Requires Sudo / Root privileges? [{'Y/n' if default_sudo == 'y' else 'y/N'}]: ", default=default_sudo).lower()
+    req_sudo = sudo_ans in ("y", "yes")
+
+    conf_ans = prompt_user("  Prompt for confirmation before executing? [y/N]: ", default="n").lower()
+    confirm = conf_ans in ("y", "yes")
+
+    deps_default = ", ".join(detected_deps)
+    deps_raw = prompt_user(f"  Binary dependencies (comma-separated, press Enter for '{deps_default or 'none'}'): ", default=deps_default)
+    deps = [d.strip() for d in deps_raw.replace(" ", ",").split(",") if d.strip()]
+
+    # Review & Test
+    t_color = get_tag_color(cat_tag)
+    print(f"\n{box_header('ACTION SPECIFICATION SUMMARY', color=t_color)}")
+    print(f" {Style.BOLD}ID:{Style.RESET}           {Style.CYAN}{cid}{Style.RESET}")
+    print(f" {Style.BOLD}Category:{Style.RESET}     {t_color}{cat_tag}{Style.RESET} {Style.GRAY}({category}){Style.RESET}")
+    print(f" {Style.BOLD}Description:{Style.RESET}  {desc}")
+    priv_tag = f"{Style.RED}ROOT (Sudo){Style.RESET}" if req_sudo else f"{Style.GREEN}USER (Safe){Style.RESET}"
+    conf_tag = f"{Style.YELLOW}YES{Style.RESET}" if confirm else f"{Style.GRAY}NO{Style.RESET}"
+    print(f" {Style.BOLD}Security:{Style.RESET}     {priv_tag}  •  Confirm: {conf_tag}")
+    deps_str = ", ".join(deps) if deps else "native / none"
+    print(f" {Style.BOLD}Dependencies:{Style.RESET} {deps_str}")
+    print(f" {Style.BOLD}Command:{Style.RESET}      {Style.WHITE}{cmd_str}{Style.RESET}")
+    print(box_footer(color=t_color))
+
+    test_ans = prompt_user(f"\nWould you like to test-run this command now? [y/N]: ", default="n").lower()
+    if test_ans in ("y", "yes"):
+        print(f"\n{Style.CYAN}--- Executing Test Run ---{Style.RESET}")
+        test_cmd = f"sudo {cmd_str}" if req_sudo and not cmd_str.strip().startswith("sudo") else cmd_str
+        ret = subprocess.run(test_cmd, shell=True)
+        print(f"{Style.CYAN}--- Test Exited with Code {ret.returncode} ---{Style.RESET}\n")
+
+    save_ans = prompt_user(f"Save and register action '{cid}' to ~/.config/corex/config.toml? [Y/n]: ", default="y").lower()
+    if save_ans in ("", "y", "yes"):
+        save_command_to_config(
+            cid=cid,
+            category=category,
+            description=desc,
+            command=cmd_str,
+            preview_cmd=preview_cmd,
+            requires_sudo=req_sudo,
+            confirm=confirm,
+            deps=deps,
+        )
+        cfg.commands[cid] = CommandSpec(
+            id=cid,
+            category=category,
+            description=desc,
+            command=cmd_str,
+            preview_cmd=preview_cmd,
+            requires_sudo=req_sudo,
+            confirm=confirm,
+            deps=deps,
+        )
+        sync_completions(cfg)
+        print(f"\n{box_header('ACTION SUCCESSFULLY REGISTERED', color=Style.GREEN)}")
+        print(f"  {Style.GREEN}✔ Action '{cid}' saved to ~/.config/corex/config.toml{Style.RESET}")
+        print(f"  {Style.GREEN}✔ Shell completions updated for Fish, Bash, and Zsh{Style.RESET}")
+        print(f"  ⚡ Run it immediately with: {Style.BOLD}{Style.CYAN}cx {cid}{Style.RESET}")
+        print(box_footer(color=Style.GREEN) + "\n")
+
+
+def wizard_edit_action(cfg: CoreXConfig, target_id: Optional[str] = None):
+    """Interactive wizard to edit an existing action."""
+    cid = target_id
+    if not cid:
+        items = [f"{c.id}\t{c.description}" for c in cfg.commands.values()]
+        if shutil.which("fzf") and sys.stdin.isatty():
+            sel = run_fzf(items, prompt="Select action to edit > ")
+            if sel:
+                cid = sel[0].split("\t")[0].strip()
+        if not cid:
+            cid = prompt_user("Enter action ID to edit: ").strip()
+
+    if not cid or cid not in cfg.commands:
+        log_error(f"Action '{cid}' not found in configuration.")
+        return
+
+    spec = cfg.commands[cid]
+    print(f"\n{box_header(f'EDIT ACTION: {cid}', color=Style.YELLOW)}")
+    print(f"  [1] Interactive Field-by-Field Wizard")
+    print(f"  [2] Open in Text Editor ($EDITOR)")
+    print(f"  [3] Cancel")
+    mode = prompt_user("Choice [1-3, default: 1]: ", default="1").strip()
+
+    if mode == "2":
+        ed = get_default_editor(cfg)
+        line_num = 1
+        if CONFIG_FILE.exists():
+            for idx, line in enumerate(CONFIG_FILE.read_text(encoding="utf-8").splitlines(), 1):
+                if line.strip() == f"[commands.{cid}]":
+                    line_num = idx
+                    break
+        subprocess.run([ed, f"+{line_num}", str(CONFIG_FILE)])
+        log_success(f"Configuration file edited. Shell completions updating...")
+        sync_completions(load_config())
+        return
+
+    if mode != "1":
+        log_info("Edit canceled.")
+        return
+
+    print(f"\n {Style.GRAY}Press Enter to keep the existing value.{Style.RESET}\n")
+    new_desc = prompt_user(f"Description [{spec.description}]: ", default=spec.description)
+    new_cmd = prompt_user(f"Command [{spec.command}]: ", default=spec.command)
+    new_prev = prompt_user(f"Preview Command [{spec.preview_cmd}]: ", default=spec.preview_cmd)
+    new_sudo = prompt_user(f"Requires Sudo? [{'Y/n' if spec.requires_sudo else 'y/N'}]: ", default="y" if spec.requires_sudo else "n").lower() in ("y", "yes")
+    new_conf = prompt_user(f"Confirm prompt? [{'Y/n' if spec.confirm else 'y/N'}]: ", default="y" if spec.confirm else "n").lower() in ("y", "yes")
+    deps_str = ", ".join(spec.deps)
+    new_deps_raw = prompt_user(f"Dependencies [{deps_str}]: ", default=deps_str)
+    new_deps = [d.strip() for d in new_deps_raw.replace(" ", ",").split(",") if d.strip()]
+
+    save_command_to_config(
+        cid=cid,
+        category=spec.category,
+        description=new_desc,
+        command=new_cmd,
+        preview_cmd=new_prev,
+        requires_sudo=new_sudo,
+        confirm=new_conf,
+        deps=new_deps,
+    )
+    cfg.commands[cid] = CommandSpec(
+        id=cid,
+        category=spec.category,
+        description=new_desc,
+        command=new_cmd,
+        preview_cmd=new_prev,
+        requires_sudo=new_sudo,
+        confirm=new_conf,
+        deps=new_deps,
+    )
+    sync_completions(cfg)
+    log_success(f"Action '{cid}' updated successfully!")
+
+
+def wizard_delete_action(cfg: CoreXConfig, target_id: Optional[str] = None):
+    """Safely removes an action from config.toml."""
+    cid = target_id
+    if not cid:
+        items = [f"{c.id}\t{c.description}" for c in cfg.commands.values()]
+        if shutil.which("fzf") and sys.stdin.isatty():
+            sel = run_fzf(items, prompt="Select action to delete > ")
+            if sel:
+                cid = sel[0].split("\t")[0].strip()
+        if not cid:
+            cid = prompt_user("Enter action ID to delete: ").strip()
+
+    if not cid or cid not in cfg.commands:
+        log_error(f"Action '{cid}' not found.")
+        return
+
+    ans = prompt_user(f"Are you sure you want to permanently delete action '{cid}'? [y/N]: ", default="n").lower()
+    if ans in ("y", "yes"):
+        if remove_command_from_config(cid):
+            if cid in cfg.commands:
+                del cfg.commands[cid]
+            sync_completions(cfg)
+            log_success(f"Action '{cid}' permanently removed from configuration.")
+        else:
+            log_error(f"Could not remove '{cid}' from config file.")
+    else:
+        log_info("Deletion canceled.")
+
+
+def wizard_test_action(cfg: CoreXConfig, target_id: Optional[str] = None):
+    """Validates action syntax, dependencies, and offers safe test-run."""
+    cid = target_id
+    if not cid:
+        items = [f"{c.id}\t{c.description}" for c in cfg.commands.values()]
+        if shutil.which("fzf") and sys.stdin.isatty():
+            sel = run_fzf(items, prompt="Select action to test > ")
+            if sel:
+                cid = sel[0].split("\t")[0].strip()
+        if not cid:
+            cid = prompt_user("Enter action ID to test: ").strip()
+
+    if not cid or cid not in cfg.commands:
+        log_error(f"Action '{cid}' not found.")
+        return
+
+    spec = cfg.commands[cid]
+    print(f"\n{box_header(f'AUDIT & TEST: {cid}', color=Style.PURPLE)}")
+    if not spec.command.startswith("cx __builtin"):
+        res = subprocess.run(["bash", "-n", "-c", spec.command], capture_output=True, text=True)
+        if res.returncode == 0:
+            print(f" {Style.GREEN}✔ Shell Syntax:{Style.RESET} Valid")
+        else:
+            print(f" {Style.RED}✖ Shell Syntax Error:{Style.RESET} {res.stderr.strip()}")
+    else:
+        print(f" {Style.CYAN}◈ Dispatch:{Style.RESET} Native CoreX built-in action")
+
+    for d in spec.deps:
+        if shutil.which(d):
+            print(f" {Style.GREEN}✔ Dependency '{d}':{Style.RESET} Installed ({shutil.which(d)})")
+        else:
+            print(f" {Style.RED}✖ Dependency '{d}':{Style.RESET} Missing from PATH")
+
+    print(box_footer(color=Style.PURPLE))
+
+    ans = prompt_user(f"\nExecute '{cid}' in dry-run mode? [Y/n]: ", default="y").lower()
+    if ans in ("", "y", "yes"):
+        execute_command(cid, cfg, dry_run=True)
+
+
+def builtin_builder(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
+    """Entrypoint for the In-App Command Builder & Cockpit Studio."""
+    args = extra_args or []
+    subaction = args[0].lower() if args else None
+    target_id = args[1] if len(args) > 1 else None
+
+    try:
+        if subaction in ("new", "add", "create"):
+            wizard_create_action(cfg, initial_id=target_id)
+            return
+        elif subaction in ("edit", "modify"):
+            wizard_edit_action(cfg, target_id=target_id)
+            return
+        elif subaction in ("delete", "remove", "rm"):
+            wizard_delete_action(cfg, target_id=target_id)
+            return
+        elif subaction in ("test", "validate", "check"):
+            wizard_test_action(cfg, target_id=target_id)
+            return
+
+        while True:
+            print(f"\n{box_header('COREX COMMAND BUILDER & ACTION STUDIO', color=Style.CYAN)}")
+            print(f"  {Style.BOLD}[1]{Style.RESET} ⚡ Create New Action (Step-by-Step Wizard)")
+            print(f"  {Style.BOLD}[2]{Style.RESET} ✎  Edit Existing Action")
+            print(f"  {Style.BOLD}[3]{Style.RESET} ✖  Delete Action")
+            print(f"  {Style.BOLD}[4]{Style.RESET} ◈  Test & Validate Action Syntax")
+            print(f"  {Style.BOLD}[5]{Style.RESET} ⏻  Exit Studio")
+            print(box_footer(color=Style.CYAN))
+
+            choice = prompt_user("Select an option [1-5, default: 1]: ", default="1").strip()
+            if choice == "1":
+                wizard_create_action(cfg)
+            elif choice == "2":
+                wizard_edit_action(cfg)
+            elif choice == "3":
+                wizard_delete_action(cfg)
+            elif choice == "4":
+                wizard_test_action(cfg)
+            elif choice in ("5", "q", "quit", "exit"):
+                break
+            else:
+                log_warn("Invalid option.")
+    except KeyboardInterrupt:
+        print(f"\n{Style.GRAY}Action builder session ended.{Style.RESET}")
+
+
+# ---------------------------------------------------------------------------
 # DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
 def render_preview(cmd_id: str, cfg: CoreXConfig):
@@ -1496,84 +1984,135 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
         return
 
     tag = CATEGORY_TAGS.get(spec.category, "@action")
-    print(box_header(f"ACTION: {spec.id}"))
-    print(f" {Style.BOLD}Category:{Style.RESET}      {Style.YELLOW}{tag}{Style.RESET} {spec.category}")
-    print(f" {Style.BOLD}Description:{Style.RESET}   {spec.description}")
-    sudo_tag = f"{Style.RED}{Style.BOLD}YES{Style.RESET}" if spec.requires_sudo else f"{Style.GRAY}NO{Style.RESET}"
-    confirm_tag = f"{Style.YELLOW}{Style.BOLD}YES{Style.RESET}" if spec.confirm else f"{Style.GRAY}NO{Style.RESET}"
-    print(f" {Style.BOLD}Requires Sudo:{Style.RESET} {sudo_tag}  |  {Style.BOLD}Confirm Prompt:{Style.RESET} {confirm_tag}")
+    t_color = get_tag_color(tag)
+
+    print(box_header(f"ACTION: {spec.id}", color=t_color))
+    print(f" {Style.BOLD}Category:{Style.RESET}     {t_color}{tag:<8}{Style.RESET} {Style.DARK_GRAY}│{Style.RESET} {Style.GRAY}{spec.category}{Style.RESET}")
+    print(f" {Style.BOLD}Summary:{Style.RESET}      {Style.WHITE}{spec.description}{Style.RESET}")
+
+    if spec.requires_sudo:
+        priv_badge = f"{Style.ORANGE}{Style.BOLD}⚡ ROOT (Sudo Required){Style.RESET}"
+    else:
+        priv_badge = f"{Style.GREEN}🛡️  USER (Safe){Style.RESET}"
+
+    if spec.confirm:
+        conf_badge = f"{Style.YELLOW}⚠️  Confirmation Prompt{Style.RESET}"
+    else:
+        conf_badge = f"{Style.GRAY}⚡ Instant Execution{Style.RESET}"
+
+    print(f" {Style.BOLD}Security:{Style.RESET}     {priv_badge}  {Style.DARK_GRAY}•{Style.RESET}  {conf_badge}")
 
     # Dependency check
     if spec.deps:
         dep_statuses = []
         for d in spec.deps:
             if shutil.which(d):
-                dep_statuses.append(f"{Style.GREEN}[✔ {d}]{Style.RESET}")
+                dep_statuses.append(f"{Style.GREEN}✔ {d}{Style.RESET}")
             else:
-                dep_statuses.append(f"{Style.RED}[✖ {d} missing]{Style.RESET}")
-        print(f" {Style.BOLD}Dependencies:{Style.RESET}  {' '.join(dep_statuses)}")
+                dep_statuses.append(f"{Style.RED}▲ {d} missing{Style.RESET}")
+        print(f" {Style.BOLD}Dependencies:{Style.RESET} {' '.join(dep_statuses)}")
     else:
-        print(f" {Style.BOLD}Dependencies:{Style.RESET}  {Style.GREEN}[✔ native / none]{Style.RESET}")
+        print(f" {Style.BOLD}Dependencies:{Style.RESET} {Style.GRAY}✔ Native shell / none{Style.RESET}")
 
     if spec.id == "comfy-boot":
-        print(f" {Style.BOLD}Target Root:{Style.RESET}   {cfg.comfyui_path} (venv: {cfg.comfyui_venv})")
+        print(f" {Style.BOLD}Target Root:{Style.RESET}  {cfg.comfyui_path} (venv: {cfg.comfyui_venv})")
         tot, free = get_nvidia_vram()
         if free is not None:
             flag = "--highvram" if free >= cfg.vram_high_threshold_mb else ("--lowvram" if free < cfg.vram_low_threshold_mb else "--normalvram")
-            print(f" {Style.BOLD}Calculated:{Style.RESET}    {Style.GREEN}{flag}{Style.RESET} ({free} MiB free VRAM / {tot} MiB total)")
+            print(f" {Style.BOLD}Calculated:{Style.RESET}   {Style.GREEN}{flag}{Style.RESET} ({free} MiB free VRAM / {tot} MiB total)")
 
-    cmd_preview = spec.command[:62] + ("..." if len(spec.command) > 62 else "")
-    print(f" {Style.BOLD}Execution:{Style.RESET}     {Style.CYAN}{cmd_preview}{Style.RESET}")
-    print(box_footer())
+    print(f"\n {Style.BOLD}{Style.CYAN}Shell Command:{Style.RESET}")
+    cmd_lines = spec.command.strip().splitlines()
+    for line in cmd_lines[:8]:
+        print(f"  {Style.DARK_GRAY}❯{Style.RESET} {Style.WHITE}{line}{Style.RESET}")
+    if len(cmd_lines) > 8:
+        print(f"  {Style.GRAY}... ({len(cmd_lines) - 8} more lines){Style.RESET}")
+
+    print(f"\n {Style.GRAY}Shortcuts: {Style.BOLD}[Enter]{Style.RESET} {Style.GRAY}Run │ {Style.BOLD}[^N]{Style.RESET} {Style.GRAY}Builder │ {Style.BOLD}[^Y]{Style.RESET} {Style.GRAY}Copy │ {Style.BOLD}[^D]{Style.RESET} {Style.GRAY}Dry-Run │ {Style.BOLD}[^E]{Style.RESET} {Style.GRAY}Edit{Style.RESET}")
+    print(box_footer(color=t_color))
 
     if spec.preview_cmd and not spec.preview_cmd.startswith("cx __preview"):
-        print(f"\n{Style.DARK_GRAY}── Live Preview Output ──────────────────────────────────────────{Style.RESET}")
+        print(f"\n{box_header('LIVE PREVIEW', color=Style.PURPLE)}")
         try:
             subprocess.run(spec.preview_cmd, shell=True, timeout=3.0)
         except subprocess.TimeoutExpired:
-            print(f"{Style.GRAY}[Preview timed out]{Style.RESET}")
+            print(f" {Style.GRAY}[Live preview timed out]{Style.RESET}")
         except Exception as e:
-            print(f"{Style.GRAY}[Preview error: {e}]{Style.RESET}")
+            print(f" {Style.GRAY}[Live preview error: {e}]{Style.RESET}")
+        print(box_footer(color=Style.PURPLE))
 
 
 # ---------------------------------------------------------------------------
-# TWO-TIER & UNIFIED INTERACTIVE NAVIGATION (Naked 'cx')
+# UNIFIED COCKPIT NAVIGATION & ITEM FORMATTING
 # ---------------------------------------------------------------------------
-def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
-    """
-    Unified, lightning-fast cockpit with @category fuzzy filtering
-    and hotkey bindings (Ctrl+Y, Ctrl+E, Ctrl+D).
-    """
-    self_exe = os.path.abspath(sys.argv[0])
+def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
+    """Formats 150+ catalog items with clean columns, colors, and minimal badges."""
     items = []
     for c in cfg.commands.values():
         tag = CATEGORY_TAGS.get(c.category, "@misc")
+        t_color = get_tag_color(tag)
         has_missing = any(not shutil.which(d) for d in c.deps)
-        badge = f"{Style.RED}[DEP MISSING]{Style.RESET}" if has_missing else f"{Style.GREEN}[READY]{Style.RESET}"
+
+        badges = []
+        if has_missing:
+            badges.append(f"{Style.RED}{Style.BOLD}▲ MISSING{Style.RESET}")
         if c.requires_sudo:
-            badge += f" {Style.YELLOW}[SUDO]{Style.RESET}"
-        # Format line: id \t tag \t name \t description \t badge
-        items.append(f"{c.id}\t{Style.YELLOW}{tag:<9}{Style.RESET}\t{Style.CYAN}{c.id:<22}{Style.RESET}\t{c.description}\t{badge}")
+            badges.append(f"{Style.YELLOW}⚡SUDO{Style.RESET}")
+
+        badge_str = " ".join(badges) if badges else f"{Style.DARK_GRAY}•{Style.RESET}"
+
+        # Delimiter: tab
+        # 1: id (hidden from display via --with-nth)
+        # 2: colored tag
+        # 3: command id
+        # 4: subtle vertical separator
+        # 5: description
+        # 6: badges
+        items.append(
+            f"{c.id}\t{t_color}{tag:<9}{Style.RESET}\t{Style.BOLD}{Style.WHITE}{c.id:<22}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description:<48}{Style.RESET}\t{badge_str}"
+        )
+    return items
+
+
+def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
+    """
+    Unified, lightning-fast cockpit with @category fuzzy filtering,
+    in-app command builder (Ctrl+N), and hotkey bindings.
+    """
+    self_exe = os.path.abspath(sys.argv[0])
+    items = format_cockpit_items(cfg)
 
     preview_call = f"python3 '{self_exe}' __preview {{1}}"
     header = (
-        f"COREX MISSION CONTROL ({len(cfg.commands)} ACTIONS) | Type '@<tag>' to filter categories | ESC to exit\n"
-        "HOTKEYS: ENTER: Run | CTRL-D: Dry-Run | CTRL-Y: Copy Command | CTRL-E: Edit & Run"
+        f"  CoreX Cockpit • {len(cfg.commands)} Actions Ready  │  Type '@<tag>' to filter categories (e.g. @sys, @ai, @gpu)\n"
+        f"  [Enter] Run  │  [^N] Builder  │  [^Y] Copy  │  [^D] Dry-Run  │  [^E] Edit & Run  │  [^R] Reload  │  [ESC] Quit"
     )
 
     extra = [
         "--delimiter=\t",
-        "--with-nth=2,3,4,5",
+        "--with-nth=2,3,4,5,6",
+        "--header-first",
         f"--header={header}",
-        # Hotkey: Ctrl+Y copies underlying command to clipboard
+        "--border=rounded",
+        "--border-label= ⚡ COREX WORKSTATION COCKPIT ",
+        "--border-label-pos=3",
+        "--preview-window=right:52%:border-rounded:wrap",
+        "--preview-label= ACTION DETAILS ",
+        "--preview-label-pos=3",
+        "--prompt=  ◈ cx ❯ ",
+        "--pointer=▶ ",
+        "--marker=◈ ",
+        "--scrollbar=│",
+        "--info=inline-right",
+        f"--bind=ctrl-n:execute(python3 '{self_exe}' builder)+reload(python3 '{self_exe}' __fzf_items)",
+        f"--bind=ctrl-r:reload(python3 '{self_exe}' __fzf_items)",
         f"--bind=ctrl-y:execute-silent(python3 '{self_exe}' __get_cmd {{1}} | wl-copy 2>/dev/null || python3 '{self_exe}' __get_cmd {{1}} | xclip -selection clipboard 2>/dev/null)",
-        # Hotkey: Ctrl+D executes with dry-run
         f"--bind=ctrl-d:execute(python3 '{self_exe}' --dry-run {{1}}; echo; read -n 1 -s -r -p 'Press any key to return...'; echo)",
-        # Hotkey: Ctrl+E opens command in editor
         f"--bind=ctrl-e:execute(python3 '{self_exe}' __edit_run {{1}})",
+        "--bind=?:toggle-preview",
     ]
 
-    sel = run_fzf(items, prompt="cx ⚡ > ", preview_cmd=preview_call, extra_args=extra)
+    sel = run_fzf(items, prompt="  ◈ cx ❯ ", preview_cmd=preview_call, extra_args=extra)
     if not sel:
         return
 
@@ -1606,6 +2145,12 @@ def execute_command(
         "doctor": "doctor",
         "test-all": "doctor",
         "health-check": "doctor",
+        "builder": "builder",
+        "new": "builder",
+        "add": "builder",
+        "edit": "builder",
+        "delete": "builder",
+        "remove": "builder",
     }
     actual_id = alias_map.get(cmd_id, cmd_id)
     spec = cfg.commands.get(actual_id)
@@ -1635,6 +2180,8 @@ def execute_command(
     if spec.command.startswith("cx __builtin "):
         builtin_name = spec.command.replace("cx __builtin ", "").strip()
         args = extra_args or []
+        if actual_id == "builder" and cmd_id in ("new", "add", "create", "edit", "modify", "delete", "remove", "rm", "test", "validate", "check"):
+            args = [cmd_id] + args
         if bg_run:
             # Wrap built-in in detached subshell
             self_exe = os.path.abspath(sys.argv[0])
@@ -1703,6 +2250,10 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
     if name in ("doctor", "test-all", "health-check"):
         auto_install = ("-y" in args or "--yes" in args)
         builtin_doctor(cfg, dry_run=dry_run, auto_install=auto_install)
+        return
+
+    if name == "builder":
+        builtin_builder(cfg, extra_args=args)
         return
 
     if dry_run:
@@ -1931,10 +2482,11 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
             if i + 1 < len(argv):
                 parsed.config = Path(argv[i + 1])
                 i += 1
-        elif not arg.startswith("-") and parsed.command is None:
-            parsed.command = arg
-            parsed.args = argv[i + 1:]
-            break
+        elif not arg.startswith("-"):
+            if parsed.command is None:
+                parsed.command = arg
+            else:
+                parsed.args.append(arg)
         else:
             unknown.append(arg)
         i += 1
@@ -1961,6 +2513,11 @@ def main():
         for cid, spec in sorted(cfg.commands.items()):
             tag = CATEGORY_TAGS.get(spec.category, "@misc")
             print(f"{cid}\t{tag}\t{spec.category}\t{spec.description}")
+        sys.exit(0)
+
+    # Internal helper: return formatted lines for FZF reload
+    if parsed.command == "__fzf_items":
+        print("\n".join(format_cockpit_items(cfg)))
         sys.exit(0)
 
     # Internal preview callback for fzf
@@ -2015,9 +2572,22 @@ def main():
 USAGE:
   cx                              Launch 150+ action interactive Mission Control TUI
   cx <command> [args...]          Execute command directly with zero latency
+  cx new [name]                   Launch In-App Command Builder wizard
+  cx builder                      Open Command Builder & Action Studio menu
+  cx edit <command>               Edit an existing action
+  cx delete <command>             Delete an action from configuration
   cx --dry-run <command> [args]   Preview command safely
   cx --bg <command> [args...]     Detach command into background systemd user scope
   cx --list                       Print all {len(cfg.commands)} registered commands and category tags
+
+TUI HOTKEYS:
+  • ENTER:   Execute action immediately
+  • CTRL-N:  Open In-App Command Builder (Create & register new action)
+  • CTRL-R:  Reload command catalog in-place
+  • CTRL-D:  Preview with --dry-run without leaving TUI
+  • CTRL-Y:  Copy underlying shell command to clipboard
+  • CTRL-E:  Open command in $EDITOR before running
+  • ?:       Toggle action preview pane
 
 CATEGORIES & FILTER TAGS:
   • @kernel   Kernel Tracing, Interrupts & eBPF            (11 actions)
@@ -2032,14 +2602,8 @@ CATEGORIES & FILTER TAGS:
   • @gpu      Gaming, Hardware & Display Orchestration     (8 actions)
   • @sys      System Architecture & BTRFS Snapshotting     (9 actions)
   • @net      Network, VPN & Remote Infrastructure         (9 actions)
-  • @dev      Git, Dev & Code Utilities                    (9 actions)
+  • @dev      Git, Dev & Code Utilities                    (10 actions)
   • @daily    Daily Driver Quality-of-Life & Crypto/Files  (15 actions)
-
-TUI HOTKEYS:
-  • ENTER:   Execute action immediately
-  • CTRL-D:  Preview with --dry-run without leaving TUI
-  • CTRL-Y:  Copy underlying shell command to clipboard
-  • CTRL-E:  Open command in $EDITOR before running
 
 FLAGS:
   --dry-run                       Preview command execution without running

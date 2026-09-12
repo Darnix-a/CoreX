@@ -56,9 +56,12 @@ cx
 ### 2. In-Menu Hotkeys
 While inside `cx`:
 - `Enter` — Run selected command
+- `Ctrl+N` — Open the In-App Command Builder (make & register a new action on the fly)
+- `Ctrl+R` — Reload the action catalog in-place
 - `Ctrl+Y` — Copy the raw shell command to your clipboard (`wl-copy` / `xclip`)
 - `Ctrl+E` — Open the command in `$EDITOR` before running it
 - `Ctrl+D` — Run in `--dry-run` mode so you can see what it actually runs
+- `?` — Toggle the action details preview pane
 
 ### 3. Direct Command Execution
 You don't have to open the menu every time. Direct commands bypass the UI instantly:
@@ -71,6 +74,8 @@ cx fkill                  # Interactive process killer
 cx snap-now               # Instant BTRFS root snapshot
 cx my-ip                  # Local IPs + Public IP + Geo card
 cx notes "cool-idea"      # Quick markdown note in $EDITOR
+cx builder                # Open the in-app command builder / studio
+cx new                    # Guided wizard to build and add a new action
 cx doctor                 # Test all 150+ commands & auto-install missing packages
 ```
 
@@ -90,11 +95,22 @@ cx --dry-run btrfs-scrub
 
 ---
 
-## Add Your Own Commands
+## In-App Command Builder
 
-Everything is defined in `~/.config/corex/config.toml`. You don't have to touch Python code.
+Don't want to manually edit TOML files? Just run:
+```bash
+cx new
+```
+or press `Ctrl+N` inside the `cx` menu.
 
-Just add:
+The interactive wizard will:
+1. Ask for an ID/alias and category tag.
+2. Check your shell syntax (`bash -n`) so you don't save broken commands.
+3. Automatically detect dependencies (like `curl`, `rsync`, `ffmpeg`).
+4. Let you test-run the command right there.
+5. Save it into `~/.config/corex/config.toml` and instantly update your shell completions.
+
+Prefer editing TOML directly? It's right at `~/.config/corex/config.toml`:
 ```toml
 [commands.my-script]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
@@ -105,8 +121,6 @@ requires_sudo = false
 confirm = true
 deps = ["rsync"]
 ```
-
-Now `my-script` instantly shows up in `cx` and in tab completions.
 
 ---
 
