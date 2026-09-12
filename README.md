@@ -121,8 +121,3 @@ Now `my-script` instantly shows up in `cx` and in tab completions.
 
 If a tool isn't installed on your machine, `cx` simply grays it out or warns you in the preview pane instead of crashing.
 
----
-
-## License
-
-MIT. Hack away.
