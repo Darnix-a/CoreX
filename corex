@@ -1929,6 +1929,9 @@ def render_radio_preview(target: str, cfg: CoreXConfig):
     print(box_footer(color=col))
 
 
+RADIO_SOCK = "/tmp/corex-radio.sock"
+
+
 def _play_radio_stream(st: Dict[str, Any]):
     print(f"\n{box_header('LIVE RADIO TUNER', color=Style.CYAN)}")
     print(f" Station:       {Style.BOLD}{st['name']}{Style.RESET}")
@@ -1937,13 +1940,32 @@ def _play_radio_stream(st: Dict[str, Any]):
     print(f" Stream URL:    {st['url']}")
     print(f" Audio Engine:  mpv --no-video (PipeWire)")
     print(f" Control:       Press {Style.BOLD}'q'{Style.RESET} in terminal to stop playback")
+    print(f" Now Playing:   Run {Style.BOLD}'cx now-playing'{Style.RESET} or {Style.BOLD}'cx song'{Style.RESET} anytime to get track info")
     print(box_footer(color=Style.CYAN))
     log_step("Tuning in", f"Connecting to {st['name']}...")
-    cmd = ["mpv", "--no-video", "--term-osd-bar", st["url"]]
+    if os.path.exists(RADIO_SOCK):
+        try:
+            os.remove(RADIO_SOCK)
+        except Exception:
+            pass
+    cmd = [
+        "mpv",
+        "--no-video",
+        f"--input-ipc-server={RADIO_SOCK}",
+        "--term-osd-bar",
+        "--display-tags=icy-title,Title,Artist,Album",
+        st["url"],
+    ]
     try:
         subprocess.run(cmd)
     except KeyboardInterrupt:
         print()
+    finally:
+        if os.path.exists(RADIO_SOCK):
+            try:
+                os.remove(RADIO_SOCK)
+            except Exception:
+                pass
 
 
 def builtin_stream_radio(extra_args: Optional[List[str]] = None):
@@ -1954,8 +1976,14 @@ def builtin_stream_radio(extra_args: Optional[List[str]] = None):
 
     query = " ".join(extra_args).strip() if extra_args else ""
 
-    # If direct query was given and matches exactly 1 station, play it immediately
+    # If direct query was given or non-interactive mode
     if query:
+        # Check for exact or prefix name match first
+        exact_match = next((s for s in stations if query.lower() == s["name"].lower() or query.lower() == s["name"].lower().replace("somafm - ", "")), None)
+        if exact_match:
+            _play_radio_stream(exact_match)
+            return
+
         direct_matches = [
             s for s in stations
             if query.lower() in s["name"].lower() or query.lower() in s["genre"].lower() or query.lower() in s["category"].lower()
@@ -1964,6 +1992,13 @@ def builtin_stream_radio(extra_args: Optional[List[str]] = None):
             st = direct_matches[0]
             _play_radio_stream(st)
             return
+        elif not sys.stdin.isatty() and direct_matches:
+            _play_radio_stream(direct_matches[0])
+            return
+
+    if not sys.stdin.isatty():
+        _play_radio_stream(stations[0])
+        return
 
     items = []
     for s in stations:
@@ -2024,6 +2059,183 @@ def builtin_stream_radio(extra_args: Optional[List[str]] = None):
         return
 
     _play_radio_stream(st_obj)
+
+
+def get_now_playing() -> Optional[Dict[str, Any]]:
+    """Detects currently playing track from CoreX Radio IPC, MPRIS (playerctl), or MPV sockets."""
+    # 1. Check CoreX Radio mpv socket
+    sock_path = "/tmp/corex-radio.sock"
+    if os.path.exists(sock_path):
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(1.5)
+            s.connect(sock_path)
+            sf = s.makefile("r", encoding="utf-8")
+
+            s.sendall(json.dumps({"command": ["get_property", "metadata"], "request_id": 1}).encode("utf-8") + b"\n")
+            meta = {}
+            while True:
+                line = sf.readline()
+                if not line:
+                    break
+                obj = json.loads(line)
+                if obj.get("request_id") == 1:
+                    meta = obj.get("data", {}) or {}
+                    break
+
+            s.sendall(json.dumps({"command": ["get_property", "media-title"], "request_id": 2}).encode("utf-8") + b"\n")
+            media_title = ""
+            while True:
+                line = sf.readline()
+                if not line:
+                    break
+                obj = json.loads(line)
+                if obj.get("request_id") == 2:
+                    media_title = str(obj.get("data", "") or "")
+                    break
+
+            s.sendall(json.dumps({"command": ["get_property", "pause"], "request_id": 3}).encode("utf-8") + b"\n")
+            paused = False
+            while True:
+                line = sf.readline()
+                if not line:
+                    break
+                obj = json.loads(line)
+                if obj.get("request_id") == 3:
+                    paused = bool(obj.get("data", False))
+                    break
+            s.close()
+
+            icy_title = meta.get("icy-title") or meta.get("title") or media_title
+            station_name = meta.get("icy-name", "CoreX Radio")
+            if not icy_title or icy_title.lower() in ("mp3", "aac", "ogg", "stream", "live", "groovesalad-128-mp3", "dronezone-128-mp3", "defcon-128-mp3"):
+                icy_title = station_name
+
+            artist, title = "", icy_title
+            if " - " in icy_title:
+                parts = icy_title.split(" - ", 1)
+                artist = parts[0].strip()
+                title = parts[1].strip()
+
+            return {
+                "source": "CoreX Radio Stream",
+                "player": "mpv",
+                "artist": artist,
+                "title": title,
+                "album": station_name,
+                "genre": meta.get("icy-genre", ""),
+                "bitrate": f"{meta.get('icy-br')} kbps" if meta.get("icy-br") else "",
+                "status": "Paused" if paused else "Playing",
+                "raw": icy_title,
+            }
+        except Exception:
+            pass
+
+    # 2. Check playerctl (MPRIS: Spotify, Firefox, VLC, Amberol, etc.)
+    if shutil.which("playerctl"):
+        try:
+            res = subprocess.run(
+                ["playerctl", "-a", "metadata", "--format", "{{status}}|{{playerName}}|{{artist}}|{{title}}|{{album}}"],
+                capture_output=True,
+                text=True,
+                timeout=1.2,
+            )
+            lines = [l.strip() for l in res.stdout.strip().splitlines() if l.strip()]
+            if lines:
+                playing = [l for l in lines if l.startswith("Playing")]
+                chosen = playing[0] if playing else lines[0]
+                parts = chosen.split("|")
+                status = parts[0] if len(parts) > 0 else "Playing"
+                player = parts[1] if len(parts) > 1 else "Player"
+                artist = parts[2] if len(parts) > 2 else ""
+                title = parts[3] if len(parts) > 3 else ""
+                album = parts[4] if len(parts) > 4 else ""
+                raw = f"{artist} - {title}" if (artist and title) else (title or artist)
+                if raw:
+                    return {
+                        "source": f"MPRIS ({player.capitalize()})",
+                        "player": player,
+                        "artist": artist,
+                        "title": title,
+                        "album": album,
+                        "genre": "",
+                        "bitrate": "",
+                        "status": status,
+                        "raw": raw,
+                    }
+        except Exception:
+            pass
+
+    return None
+
+
+def builtin_now_playing(extra_args: Optional[List[str]] = None):
+    """Inspects currently playing song from CoreX Radio stream, Spotify, browser or playerctl."""
+    args = extra_args or []
+    short_mode = "--short" in args or "-s" in args
+    notify_mode = "--notify" in args or "-n" in args
+    follow_mode = "--follow" in args or "-f" in args
+    no_copy = "--no-copy" in args
+
+    if follow_mode:
+        print(f"{Style.CYAN}📡 Monitoring track changes live (Press Ctrl+C to quit)...{Style.RESET}\n")
+        last_track = None
+        try:
+            while True:
+                info = get_now_playing()
+                if info:
+                    cur = info["raw"]
+                    if cur != last_track:
+                        last_track = cur
+                        status_sym = f"{Style.GREEN}▶{Style.RESET}" if info["status"] == "Playing" else f"{Style.YELLOW}⏸{Style.RESET}"
+                        print(f" {status_sym} {Style.BOLD}{cur}{Style.RESET} {Style.DARK_GRAY}[{info['source']}]{Style.RESET}")
+                        if notify_mode and shutil.which("notify-send"):
+                            subprocess.run(["notify-send", "-a", "CoreX", "-i", "audio-headphones", "Now Playing", cur])
+                time.sleep(2.0)
+        except KeyboardInterrupt:
+            print("\nExited track monitor.")
+            return
+
+    info = get_now_playing()
+    if not info:
+        if short_mode:
+            print("No media playing")
+        else:
+            log_warn("No active media streams detected (checked CoreX Radio, Spotify, Firefox, MPV, playerctl).")
+            print(f"  {Style.GRAY}Tip: Run {Style.BOLD}cx stream-radio{Style.RESET}{Style.GRAY} to tune into 48+ commercial-free streams!{Style.RESET}\n")
+        return
+
+    track_str = info["raw"]
+
+    if short_mode:
+        print(f"🎵 {track_str}")
+        return
+
+    status_color = Style.GREEN if info["status"] == "Playing" else Style.YELLOW
+    status_sym = "● Playing" if info["status"] == "Playing" else "⏸ Paused"
+
+    print(f"\n{box_header('CURRENTLY PLAYING SONG', color=Style.CYAN)}")
+    if info["title"]:
+        print(f"  • {Style.BOLD}Track Title:{Style.RESET}    {Style.BOLD}{info['title']}{Style.RESET}")
+    if info["artist"]:
+        print(f"  • {Style.BOLD}Artist:{Style.RESET}         {info['artist']}")
+    if info["album"]:
+        label = "Station:" if "Radio" in info["source"] else "Album:"
+        print(f"  • {Style.BOLD}{label:<14}{Style.RESET} {info['album']}")
+    if info["genre"]:
+        print(f"  • {Style.BOLD}Genre:{Style.RESET}          {info['genre']}")
+    if info["bitrate"]:
+        print(f"  • {Style.BOLD}Bitrate:{Style.RESET}        {info['bitrate']}")
+    print(f"  • {Style.BOLD}Playback:{Style.RESET}       {status_color}{status_sym}{Style.RESET} via {info['source']}")
+    print(box_footer(color=Style.CYAN))
+
+    if not no_copy:
+        copied = copy_to_clipboard(track_str)
+        if copied:
+            log_success(f"Track copied to clipboard: '{track_str}'")
+
+    if notify_mode and shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "CoreX", "-i", "audio-headphones", "Now Playing", track_str])
 
 
 def builtin_rip_audio(fmt: str = "flac", dry_run: bool = False):
@@ -3015,7 +3227,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
-        "url-short", "ask", "models"
+        "url-short", "ask", "models", "now-playing", "song", "np"
     }
 
     for cid, spec in cfg.commands.items():
@@ -3829,7 +4041,8 @@ def execute_command(
         if bg_run:
             # Wrap built-in in detached subshell
             self_exe = os.path.abspath(sys.argv[0])
-            bg_cmd = f"python3 '{self_exe}' {actual_id} {' '.join(args)}"
+            quoted_args = " ".join([f"'{a}'" if " " in a else a for a in args])
+            bg_cmd = f"python3 '{self_exe}' {actual_id} {quoted_args}"
             detach_background(actual_id, bg_cmd, dry_run=dry_run)
             return
         dispatch_builtin(builtin_name, cfg, dry_run=dry_run, extra_args=args)
@@ -3925,6 +4138,8 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_stream_yt(video=True, query=q, dry_run=dry_run)
     elif name == "stream-radio":
         builtin_stream_radio(extra_args=extra_args)
+    elif name in ("now-playing", "song", "np"):
+        builtin_now_playing(extra_args=extra_args)
     elif name.startswith("rip-audio"):
         fmt = "opus" if "opus" in name else "flac"
         builtin_rip_audio(fmt=fmt, dry_run=dry_run)
@@ -4177,6 +4392,11 @@ def main():
         b_name = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
         b_args = (parsed.args[1:] if len(parsed.args) > 1 else []) + unknown[1:]
         dispatch_builtin(b_name, cfg, dry_run=parsed.dry_run, extra_args=b_args)
+        sys.exit(0)
+
+    # Direct built-in shortcuts for now-playing / song / np
+    if parsed.command in ("now-playing", "song", "np"):
+        builtin_now_playing(extra_args=parsed.args + unknown)
         sys.exit(0)
 
     # Internal preview callback for fzf

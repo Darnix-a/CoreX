@@ -182,6 +182,24 @@ requires_sudo = false
 confirm = false
 deps = ["mpv", "fzf"]
 
+[commands.now-playing]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Inspect currently playing song, artist, album & live radio stream metadata"
+command = "cx __builtin now-playing"
+preview_cmd = "cx now-playing"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.song]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Quick alias for now-playing (copies current track name to clipboard)"
+command = "cx __builtin now-playing"
+preview_cmd = "cx now-playing"
+requires_sudo = false
+confirm = false
+deps = []
+
 [commands.rip-flac]
 category = "Media, Audio & PipeWire Power-Tools"
 description = "Batch-convert video or audio files in current directory to uncompressed 24-bit FLAC"
