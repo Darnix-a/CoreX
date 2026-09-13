@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -118,6 +119,9 @@ COMMAND_ALIASES: Dict[str, str] = {
     "remove": "builder",
     "shorten": "url-short",
     "short": "url-short",
+    "update": "sys-update",
+    "sysupdate": "sys-update",
+    "cachy-update": "sys-update",
 }
 
 REVERSE_COMMAND_ALIASES: Dict[str, List[str]] = {}
@@ -3788,8 +3792,18 @@ def builtin_sys_info():
     days, hrs = divmod(hrs, 24)
     up_str = f"{days}d {hrs}h {mins}m" if days > 0 else f"{hrs}h {mins}m"
 
+    distro_name = "Linux"
+    try:
+        if Path("/etc/os-release").exists():
+            for line in Path("/etc/os-release").read_text().splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    distro_name = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except Exception:
+        pass
+
     print(box_header("SYSTEM HARDWARE & KERNEL"))
-    print(f" {Style.BOLD}OS / Distro:{Style.RESET}    CachyOS Linux (Arch Linux derivative)")
+    print(f" {Style.BOLD}OS / Distro:{Style.RESET}    {distro_name}")
     print(f" {Style.BOLD}Kernel:{Style.RESET}         {uname.release} ({uname.machine})")
     print(f" {Style.BOLD}Hostname:{Style.RESET}       {uname.nodename}")
     print(f" {Style.BOLD}Uptime:{Style.RESET}         {up_str}")
@@ -3806,6 +3820,255 @@ def builtin_sys_info():
             print(f" {Style.BOLD}RAM Usage:{Style.RESET}      {m_tot - m_avail} MiB / {m_tot} MiB used ({m_avail} MiB available)")
     except Exception:
         pass
+    print(box_footer())
+
+
+def builtin_sys_update(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    is_preview = "--preview" in args
+
+    pm, inst_prefix, update_cmd, distro = detect_package_manager()
+
+    if is_preview:
+        print(box_header("SYSTEM UPDATE & REPOSITORY TELEMETRY"))
+        print(f" {Style.BOLD}Detected Distro:{Style.RESET}  {distro} ({pm})")
+        running_kernel = os.uname().release
+        print(f" {Style.BOLD}Running Kernel:{Style.RESET}   {running_kernel}")
+
+        official_updates: List[str] = []
+        aur_updates: List[str] = []
+        flatpak_updates: List[str] = []
+
+        def check_pm_updates():
+            nonlocal official_updates
+            if shutil.which("checkupdates"):
+                try:
+                    res = subprocess.run(["checkupdates"], capture_output=True, text=True, timeout=3)
+                    official_updates = [l for l in res.stdout.splitlines() if l.strip()]
+                except Exception:
+                    pass
+            elif pm == "pacman":
+                try:
+                    res = subprocess.run(["pacman", "-Qu"], capture_output=True, text=True, timeout=2)
+                    official_updates = [l for l in res.stdout.splitlines() if l.strip()]
+                except Exception:
+                    pass
+            elif pm == "apt":
+                try:
+                    res = subprocess.run("apt list --upgradable 2>/dev/null | grep -v 'Listing...'", shell=True, capture_output=True, text=True, timeout=3)
+                    official_updates = [l for l in res.stdout.splitlines() if l.strip()]
+                except Exception:
+                    pass
+            elif pm == "dnf":
+                try:
+                    res = subprocess.run(["dnf", "check-update", "-q"], capture_output=True, text=True, timeout=3)
+                    official_updates = [l for l in res.stdout.splitlines() if l.strip() and not l.startswith("Last metadata")]
+                except Exception:
+                    pass
+            elif pm == "zypper":
+                try:
+                    res = subprocess.run(["zypper", "list-updates"], capture_output=True, text=True, timeout=3)
+                    official_updates = [l for l in res.stdout.splitlines() if l.strip() and not l.startswith("Loading")]
+                except Exception:
+                    pass
+
+        def check_aur_updates():
+            nonlocal aur_updates
+            aur_tool = shutil.which("paru") or shutil.which("yay")
+            if aur_tool:
+                try:
+                    res = subprocess.run([aur_tool, "-Qua"], capture_output=True, text=True, timeout=3)
+                    aur_updates = [l for l in res.stdout.splitlines() if l.strip()]
+                except Exception:
+                    pass
+
+        def check_flatpak_updates():
+            nonlocal flatpak_updates
+            if shutil.which("flatpak"):
+                try:
+                    res = subprocess.run(["flatpak", "remote-ls", "--updates"], capture_output=True, text=True, timeout=3)
+                    lines = [l for l in res.stdout.splitlines() if l.strip()]
+                    if len(lines) > 1:
+                        flatpak_updates = lines[1:]
+                except Exception:
+                    pass
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            f1 = ex.submit(check_pm_updates)
+            f2 = ex.submit(check_aur_updates)
+            f3 = ex.submit(check_flatpak_updates)
+            f1.result()
+            f2.result()
+            f3.result()
+
+        total_pending = len(official_updates) + len(aur_updates) + len(flatpak_updates)
+        if total_pending == 0:
+            print(f"\n {Style.GREEN}{Style.BOLD}✔ System is completely up to date!{Style.RESET}")
+        else:
+            print(f"\n {Style.BOLD}Pending Updates:{Style.RESET}   {Style.YELLOW}{Style.BOLD}{total_pending}{Style.RESET} package(s) available")
+            if official_updates:
+                print(f"   • {Style.CYAN}Native Repos ({pm}):{Style.RESET} {len(official_updates)}")
+            if aur_updates:
+                print(f"   • {Style.MAGENTA}AUR Packages:{Style.RESET}       {len(aur_updates)}")
+            if flatpak_updates:
+                print(f"   • {Style.BLUE}Flatpak Apps/Runtimes:{Style.RESET} {len(flatpak_updates)}")
+
+            print(f"\n {Style.BOLD}Pending Items Preview:{Style.RESET}")
+            for it in official_updates[:8]:
+                print(f"   {Style.GRAY}• {it}{Style.RESET}")
+            if len(official_updates) > 8:
+                print(f"   {Style.DARK_GRAY}... and {len(official_updates) - 8} more repo package(s){Style.RESET}")
+
+            if aur_updates:
+                print(f"   {Style.MAGENTA}AUR:{Style.RESET}")
+                for it in aur_updates[:5]:
+                    print(f"   {Style.GRAY}• {it}{Style.RESET}")
+                if len(aur_updates) > 5:
+                    print(f"   {Style.DARK_GRAY}... and {len(aur_updates) - 5} more AUR package(s){Style.RESET}")
+
+            if flatpak_updates:
+                print(f"   {Style.BLUE}Flatpaks:{Style.RESET}")
+                for it in flatpak_updates[:4]:
+                    app = it.split()[0] if it.split() else it
+                    print(f"   {Style.GRAY}• {app}{Style.RESET}")
+                if len(flatpak_updates) > 4:
+                    print(f"   {Style.DARK_GRAY}... and {len(flatpak_updates) - 4} more Flatpak(s){Style.RESET}")
+
+        print(f"\n {Style.BOLD}System Maintenance Telemetry:{Style.RESET}")
+        installed_kernels = []
+        if Path("/usr/lib/modules").exists():
+            installed_kernels = [p.name for p in Path("/usr/lib/modules").iterdir() if p.is_dir()]
+        if running_kernel not in installed_kernels and installed_kernels:
+            print(f"   {Style.YELLOW}⚠️  Kernel mismatch: Running {running_kernel}, installed: {', '.join(installed_kernels)}{Style.RESET}")
+        else:
+            print(f"   {Style.GREEN}✔ Kernel modules match running kernel ({running_kernel}){Style.RESET}")
+
+        if pm in ("pacman", "paru", "yay") or distro == "arch":
+            try:
+                res = subprocess.run("find /etc -maxdepth 3 -name '*.pacnew' 2>/dev/null", shell=True, capture_output=True, text=True, timeout=1)
+                pacnews = [l for l in res.stdout.splitlines() if l.strip()]
+                if pacnews:
+                    print(f"   {Style.YELLOW}⚠️  {len(pacnews)} .pacnew file(s) pending merge (run 'sudo pacdiff'){Style.RESET}")
+                else:
+                    print(f"   {Style.GREEN}✔ No pending .pacnew files{Style.RESET}")
+            except Exception:
+                pass
+
+            try:
+                res = subprocess.run("pacman -Qtdq 2>/dev/null", shell=True, capture_output=True, text=True, timeout=1)
+                orphans = [l for l in res.stdout.splitlines() if l.strip()]
+                if orphans:
+                    print(f"   {Style.CYAN}ℹ  {len(orphans)} orphan package(s) detected (run 'cx pkg-orphans'){Style.RESET}")
+            except Exception:
+                pass
+
+        print(box_footer())
+        return
+
+    # Normal execution mode
+    print(box_header("COREX WORKSTATION SYSTEM UPDATER"))
+    print(f" {Style.BOLD}Target Distro:{Style.RESET}    {distro}")
+    print(f" {Style.BOLD}Package Manager:{Style.RESET}  {pm}")
+    print(box_footer())
+    print()
+
+    cachy_update_bin = shutil.which("cachy-update")
+    if cachy_update_bin:
+        log_info("Launching CachyOS update engine (cachy-update)...")
+        forward_args = [a for a in args if a not in ("-y", "--yes", "--preview")]
+        res = subprocess.run([cachy_update_bin] + forward_args)
+        if res.returncode != 0:
+            log_warn(f"cachy-update exited with code {res.returncode}")
+        else:
+            log_success("System upgrade completed successfully via cachy-update!")
+        return
+
+    aur_bin = shutil.which("paru") or shutil.which("yay")
+    if pm == "pacman":
+        if aur_bin:
+            log_info(f"Running full system & AUR update via {os.path.basename(aur_bin)}...")
+            cmd = [aur_bin, "-Syu"]
+        else:
+            log_info("Running pacman system update...")
+            cmd = ["sudo", "pacman", "-Syu"]
+    elif pm == "apt":
+        log_info("Running apt update & upgrade...")
+        cmd = ["sudo", "apt", "update", "&&", "sudo", "apt", "upgrade"]
+    elif pm == "dnf":
+        log_info("Running dnf upgrade...")
+        cmd = ["sudo", "dnf", "upgrade"]
+    elif pm == "zypper":
+        log_info("Running zypper update...")
+        cmd = ["sudo", "zypper", "update"]
+    elif pm == "apk":
+        log_info("Running apk update & upgrade...")
+        cmd = ["sudo", "apk", "update", "&&", "sudo", "apk", "upgrade"]
+    elif pm == "xbps":
+        log_info("Running xbps-install -Su...")
+        cmd = ["sudo", "xbps-install", "-Su"]
+    else:
+        log_error(f"Unsupported package manager: {pm}")
+        return
+
+    if isinstance(cmd, list) and "&&" in cmd:
+        res = subprocess.run(" ".join(cmd), shell=True)
+    else:
+        res = subprocess.run(cmd)
+
+    if res.returncode != 0:
+        log_warn(f"System update returned exit code {res.returncode}")
+    else:
+        log_success("Core system packages upgraded successfully.")
+
+    flatpak_bin = shutil.which("flatpak")
+    if flatpak_bin:
+        print()
+        log_info("Checking for Flatpak runtime & application updates...")
+        fp_cmd = [flatpak_bin, "update"]
+        if "-y" in args or "--yes" in args:
+            fp_cmd.append("-y")
+        subprocess.run(fp_cmd)
+
+    print()
+    print(box_header("POST-UPDATE SYSTEM HEALTH CHECK"))
+    running_k = os.uname().release
+    installed_ks = []
+    if Path("/usr/lib/modules").exists():
+        installed_ks = [p.name for p in Path("/usr/lib/modules").iterdir() if p.is_dir()]
+
+    reboot_needed = False
+    reboot_reasons = []
+
+    if Path("/var/run/reboot-required").exists():
+        reboot_needed = True
+        reboot_reasons.append("/var/run/reboot-required flag set by apt")
+
+    if running_k not in installed_ks and installed_ks:
+        reboot_needed = True
+        reboot_reasons.append(f"Running kernel ({running_k}) was updated (installed: {', '.join(installed_ks)})")
+
+    if reboot_needed:
+        print(f" {Style.RED}{Style.BOLD}⚠️  REBOOT RECOMMENDED{Style.RESET}")
+        for r in reboot_reasons:
+            print(f"   • {r}")
+        print(f"   Run {Style.BOLD}'systemctl reboot'{Style.RESET} or select restart in your desktop environment.")
+    else:
+        print(f" {Style.GREEN}✔ Kernel running ({running_k}) is active and loaded.{Style.RESET}")
+
+    if pm in ("pacman", "paru", "yay") or distro == "arch":
+        try:
+            res = subprocess.run("find /etc -maxdepth 3 -name '*.pacnew' 2>/dev/null", shell=True, capture_output=True, text=True)
+            pacnews = [l for l in res.stdout.splitlines() if l.strip()]
+            if pacnews:
+                print(f"\n {Style.YELLOW}{Style.BOLD}⚠️  {len(pacnews)} .pacnew configuration file(s) found!{Style.RESET}")
+                for p in pacnews[:5]:
+                    print(f"   • {p}")
+                if len(pacnews) > 5:
+                    print(f"   ... and {len(pacnews) - 5} more")
+                print(f"   {Style.CYAN}Tip: Run 'sudo pacdiff' to merge upstream config changes.{Style.RESET}")
+        except Exception:
+            pass
+
     print(box_footer())
 
 
@@ -4104,7 +4367,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
-        "url-short", "ask", "models", "now-playing", "song", "np", "speedtest", "speed-check"
+        "url-short", "ask", "models", "now-playing", "song", "np", "speedtest", "speed-check",
+        "sys-update", "update"
     }
 
     for cid, spec in cfg.commands.items():
@@ -5189,6 +5453,8 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_todo(cfg)
     elif name == "sys-info":
         builtin_sys_info()
+    elif name in ("sys-update", "update"):
+        builtin_sys_update(cfg, extra_args=args)
     elif name == "irq-top":
         builtin_irq_top()
     elif name == "oom-score":
@@ -5413,8 +5679,15 @@ def main():
 
     # Internal helper: direct dispatch for cx __builtin <name>
     if parsed.command == "__builtin":
-        b_name = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
-        b_args = (parsed.args[1:] if len(parsed.args) > 1 else []) + unknown[1:]
+        if parsed.args:
+            b_name = parsed.args[0]
+            b_args = parsed.args[1:] + unknown
+        elif unknown:
+            b_name = unknown[0]
+            b_args = unknown[1:]
+        else:
+            b_name = ""
+            b_args = []
         dispatch_builtin(b_name, cfg, dry_run=parsed.dry_run, extra_args=b_args)
         sys.exit(0)
 
@@ -5432,6 +5705,15 @@ def main():
             print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx speedtest")
         else:
             builtin_speedtest(extra_args=parsed.args + unknown)
+        sys.exit(0)
+
+    # Direct built-in shortcuts for sys-update / update
+    if parsed.command in ("sys-update", "update"):
+        b_args = (parsed.args or []) + unknown
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx sys-update {' '.join(b_args)}".strip())
+        else:
+            builtin_sys_update(cfg, extra_args=b_args)
         sys.exit(0)
 
     # Internal preview callback for fzf

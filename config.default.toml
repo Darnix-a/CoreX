@@ -1518,4 +1518,14 @@ requires_sudo = false
 confirm = false
 deps = []
 
+[commands.sys-update]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Full system, AUR, and Flatpak updater with live preview and reboot detection"
+command = "cx __builtin sys-update"
+preview_cmd = "cx __builtin sys-update --preview"
+requires_sudo = false
+confirm = false
+deps = []
+
+
 
