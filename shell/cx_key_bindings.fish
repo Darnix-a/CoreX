@@ -19,8 +19,11 @@ end
 bind -e "" 2>/dev/null
 bind -e -M insert "" 2>/dev/null
 
-# Bind Alt+c (\ec) for CoreX launcher overlay
-bind \ec __cx_search_and_insert
+# Bind Alt+c and Ctrl+Space for CoreX launcher overlay
+bind alt-c __cx_search_and_insert
+bind ctrl-space __cx_search_and_insert 2>/dev/null
 if bind -M insert >/dev/null 2>&1
-    bind -M insert \ec __cx_search_and_insert
+    bind -M insert alt-c __cx_search_and_insert
+    bind -M insert ctrl-space __cx_search_and_insert 2>/dev/null
 end
+
