@@ -171,7 +171,6 @@ _cx() {
         '(-v --version)'{-v,--version}'[Show version]' \
         '--dry-run[Preview commands]' \
         '--bg[Detach command in background]' \
-        '--select[Run interactive launcher and output selected command]' \
         '--pinned[List pinned favorites]' \
         '--list[List all commands]' \
         '1: :->command' \

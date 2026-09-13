@@ -4693,10 +4693,10 @@ def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
     return items
 
 
-def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False, select_mode: bool = False, select_raw: bool = False):
+def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
     """
     Unified, lightning-fast cockpit with @category fuzzy filtering,
-    in-app command builder (Ctrl+N), favorites/pinning (Tab), and hotkey bindings.
+    in-app command builder (Ctrl+N), and favorites/pinning (Tab).
     """
     self_exe = os.path.abspath(sys.argv[0])
     items = format_cockpit_items(cfg)
@@ -4734,22 +4734,9 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False, select_mode
 
     sel = run_fzf(items, prompt="  ◈ cx ❯ ", preview_cmd=preview_call, preview_window="right:50%:border-rounded:wrap", extra_args=extra)
     if not sel:
-        if select_mode or select_raw:
-            sys.exit(130)
         return
 
     chosen_cmd_id = sel[0].split("\t")[0].strip()
-    if select_raw:
-        spec = cfg.commands.get(chosen_cmd_id)
-        if spec:
-            print(spec.command, end="")
-        else:
-            print(f"cx {chosen_cmd_id}", end="")
-        return
-    if select_mode:
-        print(f"cx {chosen_cmd_id}", end="")
-        return
-
     execute_command(chosen_cmd_id, cfg, dry_run=dry_run)
 
 
@@ -5063,7 +5050,7 @@ _cx_completions() {{
     local cur prev words cword
     _init_completion || return
 
-    local commands="{cmds} theme pin unpin pinned --select --select-raw --pinned --dry-run --bg --help --version --list --yes"
+    local commands="{cmds} theme pin unpin pinned --pinned --dry-run --bg --help --version --list --yes"
 
     if [[ $cword -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -5095,7 +5082,6 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
         "        '(-v --version)'{-v,--version}'[Show version]' \\",
         "        '--dry-run[Preview commands]' \\",
         "        '--bg[Detach command in background]' \\",
-        "        '--select[Run interactive launcher and output selected command]' \\",
         "        '--pinned[List pinned favorites]' \\",
         "        '--list[List all commands]' \\",
         "        '1: :->command' \\",
@@ -5123,8 +5109,6 @@ class ParsedArgs:
         self.list: bool = False
         self.no_color: bool = False
         self.config: Optional[Path] = None
-        self.select: bool = False
-        self.select_raw: bool = False
 
 
 def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
@@ -5150,10 +5134,6 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
                 parsed.list = True
         elif arg == "--no-color":
             parsed.no_color = True
-        elif arg == "--select":
-            parsed.select = True
-        elif arg == "--select-raw":
-            parsed.select_raw = True
         elif arg in ("--pinned", "--favorites", "--fav"):
             parsed.command = "pinned"
         elif arg == "--config":
@@ -5329,7 +5309,6 @@ def main():
 USAGE:
   cx                              Launch interactive CoreX menu
   cx <command> [args...]          Execute command directly with zero latency
-  cx --select                     Launch picker and print selected command (for shell hotkeys)
   cx theme [name]                 Switch color theme or open interactive Theme Studio
   cx pin <command>                Pin an action to favorites (starred at top of TUI)
   cx unpin <command>              Remove an action from favorites
@@ -5343,7 +5322,7 @@ USAGE:
   cx --list                       Print all {len(cfg.commands)} registered commands and category tags
 
 TUI HOTKEYS:
-  • ENTER:   Execute action immediately (or output command in --select mode)
+  • ENTER:   Execute action immediately
   • TAB:     Toggle Favorite / Pin on highlighted action live
   • CTRL-N:  Open In-App Command Builder (Create & register new action)
   • CTRL-R:  Reload command catalog in-place
@@ -5373,8 +5352,6 @@ CATEGORIES & FILTER TAGS:
   • @daily    Daily Driver Quality-of-Life & Crypto/Files  (15 actions)
 
 FLAGS:
-  --select                        Picker selection mode (outputs selected command to stdout)
-  --select-raw                    Picker selection mode (outputs raw shell command string)
   --pinned                        List all pinned favorite actions
   --dry-run                       Preview command execution without running
   --bg                            Detach command in background (systemd-run / nohup)
@@ -5386,9 +5363,9 @@ FLAGS:
 """)
         sys.exit(0)
 
-    # Selection mode or naked execution
-    if parsed.select or parsed.select_raw or not parsed.command:
-        run_interactive_cockpit(cfg, dry_run=parsed.dry_run, select_mode=parsed.select, select_raw=parsed.select_raw)
+    # Interactive menu or naked execution
+    if not parsed.command:
+        run_interactive_cockpit(cfg, dry_run=parsed.dry_run)
         sys.exit(0)
 
     # Direct subshell execution

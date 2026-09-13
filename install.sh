@@ -101,14 +101,12 @@ if command -v fish >/dev/null 2>&1; then
     FISH_CONFD="${HOME}/.config/fish/conf.d"
     mkdir -p "$FISH_FUNCTIONS"
     mkdir -p "$FISH_COMPLETIONS"
-    mkdir -p "$FISH_CONFD"
 
     cp "${SCRIPT_DIR}/shell/cx.fish" "${FISH_FUNCTIONS}/cx.fish"
     cp "${SCRIPT_DIR}/completions/cx.fish" "${FISH_COMPLETIONS}/cx.fish"
-    cp "${SCRIPT_DIR}/shell/cx_key_bindings.fish" "${FISH_CONFD}/cx_key_bindings.fish"
+    rm -f "${FISH_CONFD}/cx_key_bindings.fish"
     echo -e "  [${GREEN}✔${RESET}] Installed function to ${CYAN}${FISH_FUNCTIONS}/cx.fish${RESET}"
     echo -e "  [${GREEN}✔${RESET}] Installed completions to ${CYAN}${FISH_COMPLETIONS}/cx.fish${RESET}"
-    echo -e "  [${GREEN}✔${RESET}] Installed keybindings (Alt+C, Ctrl+Space) to ${CYAN}${FISH_CONFD}/cx_key_bindings.fish${RESET}"
 fi
 
 # 5. Bash & Zsh Shell Integrations & Completions
@@ -120,10 +118,8 @@ COREX_SHARE_DIR="${HOME}/.local/share/corex"
 mkdir -p "$BASH_COMP_DIR"
 mkdir -p "$COREX_SHARE_DIR"
 cp "${SCRIPT_DIR}/completions/cx.bash" "${BASH_COMP_DIR}/cx"
-cp "${SCRIPT_DIR}/shell/cx.bash" "${COREX_SHARE_DIR}/cx.bash"
-cp "${SCRIPT_DIR}/shell/cx.zsh" "${COREX_SHARE_DIR}/cx.zsh"
+rm -f "${COREX_SHARE_DIR}/cx.bash" "${COREX_SHARE_DIR}/cx.zsh"
 echo -e "  [${GREEN}✔${RESET}] Bash completions written to ${CYAN}${BASH_COMP_DIR}/cx${RESET}"
-echo -e "  [${GREEN}✔${RESET}] Shell keybindings written to ${CYAN}${COREX_SHARE_DIR}/cx.bash${RESET} & ${CYAN}cx.zsh${RESET}"
 
 if [ -d "$HOME/.zsh" ] || command -v zsh >/dev/null 2>&1; then
     mkdir -p "$ZSH_COMP_DIR"
@@ -143,7 +139,6 @@ echo -e "${GREEN}${BOLD}✔ CoreX (cx) successfully deployed!${RESET}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
 echo -e "\nQuick Start:"
 echo -e "  • Run ${CYAN}${BOLD}cx${RESET} to open the interactive menu (type ${YELLOW}@tag${RESET} to filter)"
-echo -e "  • Hotkeys: Press ${CYAN}${BOLD}Alt+C${RESET} or ${CYAN}${BOLD}Ctrl+Space${RESET} in your shell to open the floating launcher anywhere"
 echo -e "  • Favorites: Highlight any action and press ${CYAN}${BOLD}Tab${RESET} in TUI to Pin/Unpin (filter with ${YELLOW}@pinned${RESET})"
 echo -e "  • Themes: Run ${CYAN}${BOLD}cx theme${RESET} to preview and switch between 6 color themes"
 echo -e "  • Run ${CYAN}${BOLD}cx <command>${RESET} for zero-latency direct execution (e.g. ${CYAN}cx comfy-boot${RESET}, ${CYAN}cx vram-watch${RESET})"
