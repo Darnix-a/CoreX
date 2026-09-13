@@ -10,18 +10,17 @@ function __cx_search_and_insert --description "Interactive CoreX action search &
     # Run CoreX in picker selection mode
     set -l selected ($cx_bin --select)
     if test -n "$selected"
-        # If commandline is empty or has content, update buffer
         commandline -r -- "$selected "
-        commandline -f repaint
     end
+    commandline -f repaint
 end
 
-# Bind Alt+c (\ec) and Ctrl+Space (\x00) in default mode
-bind \ec __cx_search_and_insert
-bind \x00 __cx_search_and_insert
+# Clean up any stale empty fallback bindings
+bind -e "" 2>/dev/null
+bind -e -M insert "" 2>/dev/null
 
-# Also bind in insert mode if vi-mode is active
+# Bind Alt+c (\ec) for CoreX launcher overlay
+bind \ec __cx_search_and_insert
 if bind -M insert >/dev/null 2>&1
     bind -M insert \ec __cx_search_and_insert
-    bind -M insert \x00 __cx_search_and_insert
 end
