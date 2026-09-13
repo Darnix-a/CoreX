@@ -19,7 +19,7 @@ echo "   ______                     _  __"
 echo "  / ____/____   _____ ___     | |/ /"
 echo " / /    / __ \ / ___// _ \    |   / "
 echo "/ /___ / /_/ // /   /  __/   /   |  "
-echo "\____/ \____//_/    \___/   /_/|_|  WORKSTATION INSTALLER"
+echo "\____/ \____//_/    \___/   /_/|_|  INSTALLER"
 echo -e "${RESET}${GRAY}──────────────────────────────────────────────────────────────────${RESET}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,7 +84,7 @@ if [[ ":$PATH:" != *":${BIN_DIR}:"* ]]; then
 fi
 
 # 3. Setup Configuration
-echo -e "\n${CYAN}λ${RESET} ${BOLD}Configuring CoreX Workstation Engine...${RESET}"
+echo -e "\n${CYAN}λ${RESET} ${BOLD}Configuring CoreX...${RESET}"
 mkdir -p "$CONFIG_DIR"
 mkdir -p "$NOTES_DIR"
 
@@ -93,7 +93,7 @@ if [ -f "${CONFIG_DIR}/config.toml" ]; then
     echo -e "  [${GRAY}i${RESET}] Backed up existing config to ${CONFIG_DIR}/config.toml.bak"
 fi
 cp "${SCRIPT_DIR}/config.default.toml" "${CONFIG_DIR}/config.toml"
-echo -e "  [${GREEN}✔${RESET}] Updated 150+ command workstation config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
+echo -e "  [${GREEN}✔${RESET}] Updated config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
 
 # 4. Setup Fish Shell Integrations
 if command -v fish >/dev/null 2>&1; then
@@ -139,10 +139,10 @@ echo -e "  [${GREEN}✔${RESET}] CoreX execution: ${GREEN}${INSTALLED_VER}${RESE
 echo -e "  [${GREEN}✔${RESET}] Registered Commands: ${GREEN}${CMD_COUNT} actions loaded${RESET}"
 
 echo -e "\n${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}${BOLD}✔ CoreX (cx) 150+ Workstation Cockpit successfully deployed!${RESET}"
+echo -e "${GREEN}${BOLD}✔ CoreX (cx) successfully deployed!${RESET}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
 echo -e "\nQuick Start:"
-echo -e "  • Run ${CYAN}${BOLD}cx${RESET} to open the interactive Mission Control TUI (type ${YELLOW}@tag${RESET} to filter)"
+echo -e "  • Run ${CYAN}${BOLD}cx${RESET} to open the interactive menu (type ${YELLOW}@tag${RESET} to filter)"
 echo -e "  • Hotkeys: Press ${CYAN}${BOLD}Alt+C${RESET} or ${CYAN}${BOLD}Ctrl+Space${RESET} in your shell to open the floating launcher anywhere"
 echo -e "  • Favorites: Highlight any action and press ${CYAN}${BOLD}Tab${RESET} in TUI to Pin/Unpin (filter with ${YELLOW}@pinned${RESET})"
 echo -e "  • Themes: Run ${CYAN}${BOLD}cx theme${RESET} to preview and switch between 6 color themes"

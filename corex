@@ -443,7 +443,7 @@ def print_banner(dry_run: bool = False, bg_run: bool = False):
   / ____/____   _____ ___     | |/ /
  / /    / __ \\ / ___// _ \\    |   / 
 / /___ / /_/ // /   /  __/   /   |  
-\\____/ \\____//_/    \\___/   /_/|_|  {Style.GRAY}v{VERSION} WORKSTATION COCKPIT{badge_str}
+\\____/ \\____//_/    \\___/   /_/|_|  {Style.GRAY}CoreX v{VERSION}{badge_str}
 {Style.DARK_GRAY}──────────────────────────────────────────────────────────────────{Style.RESET}"""
     print(banner)
 
@@ -1102,8 +1102,8 @@ def builtin_ai_ask(query: Optional[str], cfg: CoreXConfig):
     if not detected_cmd:
         return
 
-    # Render interactive execution cockpit
-    print(f"\n{box_header('ACTION COCKPIT', color=Style.GREEN)}")
+    # Render interactive execution panel
+    print(f"\n{box_header('ACTION EXECUTION', color=Style.GREEN)}")
     print(f" {Style.BOLD}Detected Shell Command:{Style.RESET}")
     for line in detected_cmd.splitlines():
         print(f"   {Style.CYAN}{Style.BOLD}{line}{Style.RESET}")
@@ -3474,7 +3474,7 @@ def builtin_sys_info():
     days, hrs = divmod(hrs, 24)
     up_str = f"{days}d {hrs}h {mins}m" if days > 0 else f"{hrs}h {mins}m"
 
-    print(box_header("SYSTEM HARDWARE & KERNEL COCKPIT"))
+    print(box_header("SYSTEM HARDWARE & KERNEL"))
     print(f" {Style.BOLD}OS / Distro:{Style.RESET}    CachyOS Linux (Arch Linux derivative)")
     print(f" {Style.BOLD}Kernel:{Style.RESET}         {uname.release} ({uname.machine})")
     print(f" {Style.BOLD}Hostname:{Style.RESET}       {uname.nodename}")
@@ -4492,7 +4492,7 @@ def render_theme_preview(theme_name: str):
     print(div)
 
     # Action Row Sample
-    print(f"  {Style.BOLD}COCKPIT ROW SAMPLE{Style.RESET}")
+    print(f"  {Style.BOLD}SAMPLE ACTION ROW{Style.RESET}")
     print(f"  {cc.get('@pinned', '')}@pinned {Style.RESET} {st['YELLOW']}★{Style.RESET} {Style.BOLD}{st['WHITE']}vram-watch        {Style.RESET}{st['DARK_GRAY']}│{Style.RESET} {st['GRAY']}Continuous GPU VRAM & temp telemetry{Style.RESET}")
     print(f"  {cc.get('@ai', '')}@ai     {Style.RESET} {st['DARK_GRAY']}•{Style.RESET} {Style.BOLD}{st['WHITE']}models            {Style.RESET}{st['DARK_GRAY']}│{Style.RESET} {st['GRAY']}Interactive AI model downloader{Style.RESET}")
     print(div)
@@ -4578,7 +4578,7 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
     usage_count = state.get("frequency", {}).get(spec.id, 0)
     pin_badge = f"{Style.YELLOW}★ Pinned to Favorites{Style.RESET}" if is_pinned else f"{Style.DARK_GRAY}• Unpinned [Tab]{Style.RESET}"
     freq_str = f"{Style.CYAN}{usage_count} run{'s' if usage_count != 1 else ''}{Style.RESET}"
-    print(f"  {Style.BOLD}Cockpit:{Style.RESET}      {pin_badge}  {Style.DARK_GRAY}•{Style.RESET}  {freq_str}")
+    print(f"  {Style.BOLD}Status:{Style.RESET}       {pin_badge}  {Style.DARK_GRAY}•{Style.RESET}  {freq_str}")
     print(f"  {Style.BOLD}Category:{Style.RESET}     {t_color}{tag}{Style.RESET} {Style.DARK_GRAY}•{Style.RESET} {Style.GRAY}{spec.category}{Style.RESET}")
 
     if spec.requires_sudo:
@@ -4707,7 +4707,7 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False, select_mode
         "--delimiter=\t",
         "--with-nth=2,3,4,5,6",
         "--border=rounded",
-        "--border-label= ⚡ COREX WORKSTATION COCKPIT ",
+        "--border-label= CoreX ",
         "--border-label-pos=3",
         "--preview-window=right:50%:border-rounded:wrap",
         "--preview-label= ACTION DETAILS ",
@@ -5272,7 +5272,7 @@ def main():
         state = load_user_state()
         pinned_list = state.get("pinned", [])
         if not pinned_list:
-            print(f"{Style.GRAY}No actions currently pinned to favorites. Use 'cx pin <action>' or press [Tab] in cockpit.{Style.RESET}")
+            print(f"{Style.GRAY}No actions currently pinned to favorites. Use 'cx pin <action>' or press [Tab] in menu.{Style.RESET}")
         else:
             print(f"{Style.BOLD}{Style.YELLOW}★ PINNED FAVORITES ({len(pinned_list)}){Style.RESET}")
             for pid in pinned_list:
@@ -5327,7 +5327,7 @@ def main():
         print_banner(parsed.dry_run, parsed.bg)
         print(f"""
 USAGE:
-  cx                              Launch 150+ action interactive Mission Control TUI
+  cx                              Launch interactive CoreX menu
   cx <command> [args...]          Execute command directly with zero latency
   cx --select                     Launch picker and print selected command (for shell hotkeys)
   cx theme [name]                 Switch color theme or open interactive Theme Studio
