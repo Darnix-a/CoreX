@@ -155,3 +155,18 @@ deps = ["rsync"]
 
 If a tool isn't installed on your machine, `cx` simply grays it out or warns you in the preview pane instead of crashing.
 
+---
+
+## Uninstallation
+
+To cleanly remove CoreX executables, shell completions, and integrations:
+```bash
+chmod +x uninstall.sh
+./uninstall.sh
+```
+To also purge configuration files and saved notes:
+```bash
+./uninstall.sh --purge
+```
+
+
