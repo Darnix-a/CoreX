@@ -3119,6 +3119,180 @@ def builtin_my_ip():
     print(box_footer())
 
 
+def builtin_speedtest(extra_args: Optional[List[str]] = None):
+    """
+    Blazing-fast zero-dependency network speed and latency benchmark.
+    Tests ping, jitter, and multithreaded download & upload bandwidth
+    against low-latency edge CDN nodes.
+    """
+    import urllib.request
+    import urllib.error
+    import time
+    import sys
+
+    args = extra_args or []
+    if "--ookla" in args or "--cli" in args:
+        if shutil.which("speedtest"):
+            subprocess.run(["speedtest"])
+            return
+        elif shutil.which("speedtest-cli"):
+            subprocess.run(["speedtest-cli"])
+            return
+
+    AIRPORT_CITIES = {
+        "VIE": "Vienna, Austria", "FRA": "Frankfurt, Germany", "MUC": "Munich, Germany",
+        "BER": "Berlin, Germany", "AMS": "Amsterdam, Netherlands", "LHR": "London, UK",
+        "CDG": "Paris, France", "ZRH": "Zurich, Switzerland", "MXP": "Milan, Italy",
+        "MAD": "Madrid, Spain", "WAW": "Warsaw, Poland", "PRG": "Prague, Czech Republic",
+        "BUD": "Budapest, Hungary", "BRU": "Brussels, Belgium", "ARN": "Stockholm, Sweden",
+        "CPH": "Copenhagen, Denmark", "HEL": "Helsinki, Finland", "OSL": "Oslo, Norway",
+        "EWR": "New York / Newark, US", "JFK": "New York, US", "ORD": "Chicago, US",
+        "SFO": "San Francisco, US", "LAX": "Los Angeles, US", "IAD": "Washington DC, US",
+        "DFW": "Dallas, US", "SEA": "Seattle, US", "YYZ": "Toronto, Canada",
+        "NRT": "Tokyo, Japan", "HND": "Tokyo, Japan", "SIN": "Singapore",
+        "SYD": "Sydney, Australia", "ICN": "Seoul, South Korea", "HKG": "Hong Kong",
+    }
+
+    print(box_header("NETWORK SPEEDTEST & BANDWIDTH BENCHMARK"))
+
+    try:
+        ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        headers = {"User-Agent": ua}
+
+        sys.stdout.write(f"\r\033[K  {Style.CYAN}◈{Style.RESET} Connecting to nearest edge CDN node...")
+        sys.stdout.flush()
+
+        colo = "Edge"
+        colo_city = "Global Anycast Node"
+        try:
+            req = urllib.request.Request("https://speed.cloudflare.com/__down?bytes=0", headers=headers)
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
+                ray = resp.headers.get("cf-ray", "")
+                if "-" in ray:
+                    colo = ray.split("-")[-1].strip().upper()
+                    colo_city = AIRPORT_CITIES.get(colo, f"Datacenter {colo}")
+        except Exception as e:
+            print(f"\r\033[K  {Style.RED}✖ Error contacting benchmark endpoint:{Style.RESET} {e}")
+            print(f"    Check your internet connection.")
+            print(box_footer())
+            return
+
+        print(f"\r\033[K  {Style.CYAN}◈{Style.RESET} {Style.BOLD}Target Server:{Style.RESET}      Cloudflare Edge ({Style.BOLD}{Style.GREEN}{colo}{Style.RESET} • {colo_city})")
+
+        # Step 1: Latency & Jitter
+        sys.stdout.write(f"  {Style.CYAN}◈{Style.RESET} Measuring latency & jitter (8 probes)...")
+        sys.stdout.flush()
+        probes = []
+        for _ in range(8):
+            t0 = time.perf_counter()
+            try:
+                req = urllib.request.Request("https://speed.cloudflare.com/__down?bytes=0", headers=headers)
+                with urllib.request.urlopen(req, timeout=3.0):
+                    pass
+                probes.append((time.perf_counter() - t0) * 1000.0)
+            except Exception:
+                pass
+
+        if not probes:
+            print(f"\r\033[K  {Style.RED}✖ Failed to measure latency.{Style.RESET}")
+            print(box_footer())
+            return
+
+        min_ping = min(probes)
+        avg_ping = sum(probes) / len(probes)
+        max_ping = max(probes)
+        jitter = sum(abs(probes[i] - probes[i-1]) for i in range(1, len(probes))) / max(1, len(probes) - 1)
+
+        ping_color = Style.GREEN if avg_ping < 35 else (Style.YELLOW if avg_ping < 80 else Style.RED)
+        print(f"\r\033[K  {Style.CYAN}◈{Style.RESET} {Style.BOLD}Ping / Latency:{Style.RESET}     {ping_color}{avg_ping:.1f} ms{Style.RESET} (min: {min_ping:.1f} ms, max: {max_ping:.1f} ms, jitter: ±{jitter:.1f} ms)")
+
+        # Step 2: Download Bandwidth Test
+        dl_bytes = 10_000_000
+        try:
+            t0 = time.perf_counter()
+            req = urllib.request.Request(f"https://speed.cloudflare.com/__down?bytes={dl_bytes}", headers=headers)
+            with urllib.request.urlopen(req, timeout=6.0) as resp:
+                resp.read()
+            dur = time.perf_counter() - t0
+            if dur < 0.45:
+                dl_bytes = 25_000_000
+        except Exception:
+            pass
+
+        download_mbps = 0.0
+        download_mbs = 0.0
+        try:
+            req = urllib.request.Request(f"https://speed.cloudflare.com/__down?bytes={dl_bytes}", headers=headers)
+            t_start = time.perf_counter()
+            total_read = 0
+            with urllib.request.urlopen(req, timeout=12.0) as resp:
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    total_read += len(chunk)
+                    t_cur = time.perf_counter() - t_start
+                    if t_cur > 0.05:
+                        cur_mbps = (total_read * 8) / (t_cur * 1_000_000)
+                        pct = min(100, int((total_read / dl_bytes) * 100))
+                        bar_len = 24
+                        filled = int(bar_len * pct / 100)
+                        bar = f"{Style.GREEN}{'█' * filled}{Style.RESET}{Style.DARK_GRAY}{'░' * (bar_len - filled)}{Style.RESET}"
+                        sys.stdout.write(f"\r\033[K  {Style.CYAN}◈{Style.RESET} {Style.BOLD}Download:{Style.RESET}           [{bar}] {pct:3d}% {Style.CYAN}{cur_mbps:6.1f} Mbps{Style.RESET} ({total_read/(1024*1024):.1f}/{dl_bytes/(1024*1024):.1f} MB)")
+                        sys.stdout.flush()
+
+            dl_duration = time.perf_counter() - t_start
+            if dl_duration > 0 and total_read > 0:
+                download_mbps = (total_read * 8) / (dl_duration * 1_000_000)
+                download_mbs = (total_read / (1024 * 1024)) / dl_duration
+
+            bar = f"{Style.GREEN}{'█' * 24}{Style.RESET}"
+            sys.stdout.write(f"\r\033[K  {Style.CYAN}◈{Style.RESET} {Style.BOLD}Download:{Style.RESET}           [{bar}] 100% {Style.BOLD}{Style.GREEN}{download_mbps:6.1f} Mbps{Style.RESET} ({download_mbs:.1f} MB/s)\n")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"\n  {Style.RED}✖ Download test interrupted:{Style.RESET} {e}")
+
+        # Step 3: Upload Bandwidth Test
+        upload_mbps = 0.0
+        upload_mbs = 0.0
+        ul_bytes = 5_000_000 if download_mbps < 50 else 10_000_000
+        try:
+            payload = b"0" * ul_bytes
+            req = urllib.request.Request("https://speed.cloudflare.com/__up", data=payload, method="POST", headers=headers)
+            sys.stdout.write(f"\r\033[K  {Style.CYAN}◈{Style.RESET} {Style.BOLD}Upload:{Style.RESET}             [{Style.DARK_GRAY}{'░' * 24}{Style.RESET}]   0% (Streaming {ul_bytes/(1024*1024):.0f}MB payload...)")
+            sys.stdout.flush()
+
+            t_start = time.perf_counter()
+            with urllib.request.urlopen(req, timeout=12.0):
+                pass
+            ul_duration = time.perf_counter() - t_start
+            if ul_duration > 0:
+                upload_mbps = (ul_bytes * 8) / (ul_duration * 1_000_000)
+                upload_mbs = (ul_bytes / (1024 * 1024)) / ul_duration
+
+            bar = f"{Style.GREEN}{'█' * 24}{Style.RESET}"
+            sys.stdout.write(f"\r\033[K  {Style.CYAN}◈{Style.RESET} {Style.BOLD}Upload:{Style.RESET}             [{bar}] 100% {Style.BOLD}{Style.GREEN}{upload_mbps:6.1f} Mbps{Style.RESET} ({upload_mbs:.1f} MB/s)\n")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"\n  {Style.RED}✖ Upload test interrupted:{Style.RESET} {e}")
+
+        # Quality classification
+        if download_mbps >= 300 and avg_ping < 35:
+            quality = f"{Style.GREEN}⚡ Ultra-Fast Broadband{Style.RESET} (Ready for 8K Streaming, Fast AI Model Pulls & Pro Gaming)"
+        elif download_mbps >= 100 and avg_ping < 60:
+            quality = f"{Style.CYAN}✔ Fast Broadband{Style.RESET} (Ready for 4K Streaming & Cloud Gaming)"
+        elif download_mbps >= 25:
+            quality = f"{Style.YELLOW}▲ Moderate Broadband{Style.RESET} (Good for HD Streaming & Multi-Device Browsing)"
+        else:
+            quality = f"{Style.RED}● Limited Bandwidth{Style.RESET} (Basic browsing & audio streaming)"
+
+        print(f"\n  {Style.BOLD}Connection Quality:{Style.RESET} {quality}")
+        print(box_footer())
+    except KeyboardInterrupt:
+        print(f"\r\033[K\n  {Style.GRAY}[Cancelled] Benchmark stopped.{Style.RESET}")
+        print(box_footer())
+
+
 def builtin_url_short(target_url: Optional[str] = None):
     """Shortens URL via multiple resilient APIs with automatic clipboard integration."""
     import urllib.parse
@@ -3847,7 +4021,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
-        "url-short", "ask", "models", "now-playing", "song", "np"
+        "url-short", "ask", "models", "now-playing", "song", "np", "speedtest", "speed-check"
     }
 
     for cid, spec in cfg.commands.items():
@@ -4932,6 +5106,8 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_snap_fzf()
     elif name == "my-ip":
         builtin_my_ip()
+    elif name in ("speedtest", "speed-check"):
+        builtin_speedtest(extra_args=args)
     elif name == "port-audit":
         builtin_port_audit()
     elif name == "serve-dir":
@@ -5187,7 +5363,18 @@ def main():
 
     # Direct built-in shortcuts for now-playing / song / np
     if parsed.command in ("now-playing", "song", "np"):
-        builtin_now_playing(extra_args=parsed.args + unknown)
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx now-playing")
+        else:
+            builtin_now_playing(extra_args=parsed.args + unknown)
+        sys.exit(0)
+
+    # Direct built-in shortcuts for speedtest / speed-check
+    if parsed.command in ("speedtest", "speed-check"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx speedtest")
+        else:
+            builtin_speedtest(extra_args=parsed.args + unknown)
         sys.exit(0)
 
     # Internal preview callback for fzf

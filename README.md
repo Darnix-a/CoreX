@@ -91,6 +91,7 @@ cx socket-summary         # TCP/UDP connection summary
 cx fkill                  # Interactive process killer
 cx snap-now               # Instant BTRFS root snapshot
 cx my-ip                  # Local IPs + Public IP + Geo card
+cx speedtest              # Zero-dependency bandwidth benchmark (ping, jitter, download & upload Mbps)
 cx notes "cool-idea"      # Quick markdown note in $EDITOR
 cx builder                # Open the in-app command builder / studio
 cx new                    # Guided wizard to build and add a new action
