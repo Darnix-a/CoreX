@@ -159,15 +159,15 @@ If a tool isn't installed on your machine, `cx` simply grays it out or warns you
 
 ## Uninstallation
 
-To completely remove CoreX (binaries, shell completions, configurations, and this repository folder):
+To completely remove CoreX (binaries, shell completions, configurations, data, and this folder):
 ```bash
 chmod +x uninstall.sh
 ./uninstall.sh
 ```
 
-To remove binaries and configs while preserving this source directory:
+To remove all binaries and configurations while preserving the source directory:
 ```bash
-./uninstall.sh --keep-source
+./uninstall.sh --keep-folder
 ```
 
 
