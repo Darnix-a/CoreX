@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # CoreX (cx) Automated Uninstaller & Cleanup
-# Removes CoreX binaries, completions, shell integrations, and optional configs.
+# Completely removes CoreX binaries, shell integrations, configs, and source.
 # ==============================================================================
 
 set -eo pipefail
@@ -22,6 +22,7 @@ echo "/ /___ / /_/ // /   /  __/   /   |  "
 echo "\____/ \____//_/    \___/   /_/|_|  UNINSTALLER"
 echo -e "${RESET}${GRAY}──────────────────────────────────────────────────────────────────${RESET}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${HOME}/.config/corex"
 SHARE_DIR="${HOME}/.local/share/corex"
@@ -31,13 +32,13 @@ FISH_CONFD="${HOME}/.config/fish/conf.d"
 BASH_COMP_DIR="${HOME}/.local/share/bash-completion/completions"
 ZSH_COMP_DIR="${HOME}/.zsh/completions"
 
-PURGE=false
+KEEP_SOURCE=false
 ASSUME_YES=false
 
 for arg in "$@"; do
     case "$arg" in
-        --purge|--all|-a)
-            PURGE=true
+        --keep-source)
+            KEEP_SOURCE=true
             ;;
         -y|--yes)
             ASSUME_YES=true
@@ -45,18 +46,21 @@ for arg in "$@"; do
         -h|--help)
             echo "Usage: ./uninstall.sh [OPTIONS]"
             echo ""
+            echo "Completely removes CoreX: executables, shell integrations, configs, and this folder."
+            echo ""
             echo "Options:"
-            echo "  -y, --yes      Bypass confirmation prompts"
-            echo "  --purge, --all Also remove user configuration (~/.config/corex) and data"
-            echo "  -h, --help     Show this help message"
+            echo "  -y, --yes        Bypass confirmation prompts"
+            echo "  --keep-source    Remove binaries and configs but preserve this source directory"
+            echo "  -h, --help       Show this help message"
             exit 0
             ;;
     esac
 done
 
 if [ "$ASSUME_YES" = false ]; then
-    echo -e "${YELLOW}Warning:${RESET} This will remove CoreX binaries, shell completions, and integrations."
-    read -r -p "Are you sure you want to uninstall CoreX? [y/N]: " confirm
+    echo -e "${YELLOW}Warning:${RESET} This will completely remove CoreX, all configurations, and delete this directory:"
+    echo -e "         ${CYAN}${SCRIPT_DIR}${RESET}"
+    read -r -p "Are you sure you want to completely uninstall CoreX? [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[yY]([eE][sS])?$ ]]; then
         echo -e "${GRAY}Uninstallation cancelled.${RESET}"
         exit 0
@@ -98,29 +102,32 @@ if [ -f "${ZSH_COMP_DIR}/_cx" ]; then
     echo -e "  [${GREEN}✔${RESET}] Removed ${CYAN}${ZSH_COMP_DIR}/_cx${RESET}"
 fi
 
-# Share directory
+echo -e "\n${CYAN}λ${RESET} ${BOLD}Removing Configurations & Data...${RESET}"
+if [ -d "$CONFIG_DIR" ]; then
+    rm -rf "$CONFIG_DIR"
+    echo -e "  [${GREEN}✔${RESET}] Removed ${CYAN}${CONFIG_DIR}${RESET}"
+fi
 if [ -d "$SHARE_DIR" ]; then
-    rm -f "${SHARE_DIR}/cx.bash" "${SHARE_DIR}/cx.zsh"
+    rm -rf "$SHARE_DIR"
+    echo -e "  [${GREEN}✔${RESET}] Removed ${CYAN}${SHARE_DIR}${RESET}"
 fi
 
-echo -e "\n${CYAN}λ${RESET} ${BOLD}Configuration & User Data...${RESET}"
-if [ "$PURGE" = true ]; then
-    rm -rf "$CONFIG_DIR" "$SHARE_DIR"
-    echo -e "  [${GREEN}✔${RESET}] Purged ${CYAN}${CONFIG_DIR}${RESET} and ${CYAN}${SHARE_DIR}${RESET}"
-else
-    if [ "$ASSUME_YES" = false ] && [ -d "$CONFIG_DIR" ]; then
-        read -r -p "Do you also want to remove your custom configuration and notes ($CONFIG_DIR)? [y/N]: " purge_confirm
-        if [[ "$purge_confirm" =~ ^[yY]([eE][sS])?$ ]]; then
-            rm -rf "$CONFIG_DIR" "$SHARE_DIR"
-            echo -e "  [${GREEN}✔${RESET}] Purged ${CYAN}${CONFIG_DIR}${RESET} and ${CYAN}${SHARE_DIR}${RESET}"
-        else
-            echo -e "  [${GRAY}i${RESET}] Preserved configuration at ${CYAN}${CONFIG_DIR}${RESET}"
-        fi
-    else
-        echo -e "  [${GRAY}i${RESET}] Preserved configuration at ${CYAN}${CONFIG_DIR}${RESET} (use --purge to delete)"
+if [ "$KEEP_SOURCE" = false ]; then
+    echo -e "\n${CYAN}λ${RESET} ${BOLD}Removing CoreX Source Directory...${RESET}"
+    if [ -n "$SCRIPT_DIR" ] && [ "$SCRIPT_DIR" != "/" ] && [ "$SCRIPT_DIR" != "$HOME" ] && [ -d "$SCRIPT_DIR" ]; then
+        echo -e "  [${GREEN}✔${RESET}] Removing ${CYAN}${SCRIPT_DIR}${RESET}"
     fi
 fi
 
 echo -e "\n${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}${BOLD}✔ CoreX (cx) has been successfully uninstalled.${RESET}"
+echo -e "${GREEN}${BOLD}✔ CoreX (cx) has been completely removed from your system.${RESET}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════════════════${RESET}\n"
+
+# Final step: Delete the repository directory itself
+if [ "$KEEP_SOURCE" = false ]; then
+    if [ -n "$SCRIPT_DIR" ] && [ "$SCRIPT_DIR" != "/" ] && [ "$SCRIPT_DIR" != "$HOME" ] && [ -d "$SCRIPT_DIR" ]; then
+        rm -rf "$SCRIPT_DIR" 2>/dev/null || true
+    fi
+fi
+
+exit 0
