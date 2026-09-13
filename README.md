@@ -11,7 +11,7 @@
 
 A fast, modular CLI multitool and terminal launcher so you don't have to remember 200 different flags, aliases, and one-liner bash scripts.
 
-Just type `cx` and you get an interactive `fzf` menu with live preview panes for monitoring your GPU, managing PipeWire audio, running docker/k8s stuff, inspecting kernel/memory, launching AI workflows (ComfyUI / Ollama), and doing daily terminal chores.
+Just type `cx` and you get an interactive `fzf` menu with live preview panes for monitoring your GPU, managing PipeWire audio, running docker/k8s stuff, inspecting kernel/memory, launching AI workflows (ComfyUI / Ollama), doing daily terminal chores, and much, much more.
 
 Runs in ~40ms with zero bloated python dependencies.
 
