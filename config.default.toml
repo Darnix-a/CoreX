@@ -419,11 +419,11 @@ deps = []
 [commands.pkg-orphans]
 category = "System Architecture & BTRFS Snapshotting"
 description = "Scan and remove unneeded package dependencies and clean package cache"
-command = "orphans=$(pacman -Qdtq 2>/dev/null) && [ -n \"$orphans\" ] && sudo pacman -Rns $orphans || echo '✔ No orphaned packages found.'"
-preview_cmd = "pacman -Qdtq 2>/dev/null || echo 'No orphaned packages'"
+command = "if command -v pacman >/dev/null 2>&1; then orphans=$(pacman -Qdtq 2>/dev/null) && [ -n \"$orphans\" ] && sudo pacman -Rns $orphans || echo '✔ No orphaned packages found.'; elif command -v apt-get >/dev/null 2>&1 || command -v apt >/dev/null 2>&1; then sudo apt autoremove; elif command -v dnf5 >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then sudo dnf autoremove; elif command -v zypper >/dev/null 2>&1; then sudo zypper packages --orphaned; else echo 'No supported package manager found.'; fi"
+preview_cmd = "if command -v pacman >/dev/null 2>&1; then pacman -Qdtq 2>/dev/null || echo 'No orphaned packages'; elif command -v apt >/dev/null 2>&1; then echo 'Cleans unused packages via apt autoremove'; elif command -v dnf >/dev/null 2>&1; then echo 'Cleans unused packages via dnf autoremove'; else echo 'Clean orphaned packages'; fi"
 requires_sudo = true
 confirm = true
-deps = ["pacman"]
+deps = []
 
 [commands.service-fail]
 category = "System Architecture & BTRFS Snapshotting"

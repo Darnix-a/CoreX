@@ -649,6 +649,113 @@ def get_default_editor(cfg: CoreXConfig) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Cross-Distribution Package Management & System Detection
+# ---------------------------------------------------------------------------
+def detect_package_manager() -> Tuple[Optional[str], Optional[str], Optional[str], str]:
+    """
+    Detects the active package manager and returns:
+    (pm_name, install_cmd_prefix, update_cmd, distro_family)
+    Supports Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE, Alpine, Void.
+    """
+    if shutil.which("paru"):
+        return "paru", "paru -Sy --needed", "paru -Syu", "arch"
+    if shutil.which("yay"):
+        return "yay", "yay -Sy --needed", "yay -Syu", "arch"
+    if shutil.which("pacman"):
+        return "sudo pacman", "sudo pacman -Sy --needed", "sudo pacman -Syu", "arch"
+    if shutil.which("dnf5"):
+        return "sudo dnf5", "sudo dnf5 install -y", "sudo dnf5 upgrade", "fedora"
+    if shutil.which("dnf"):
+        return "sudo dnf", "sudo dnf install -y", "sudo dnf upgrade", "fedora"
+    if shutil.which("apt-get"):
+        return "sudo apt-get", "sudo apt-get install -y", "sudo apt-get update && sudo apt-get upgrade -y", "debian"
+    if shutil.which("apt"):
+        return "sudo apt", "sudo apt install -y", "sudo apt update && sudo apt upgrade -y", "debian"
+    if shutil.which("zypper"):
+        return "sudo zypper", "sudo zypper install -y", "sudo zypper update", "suse"
+    if shutil.which("apk"):
+        return "sudo apk", "sudo apk add", "sudo apk upgrade", "alpine"
+    if shutil.which("xbps-install"):
+        return "sudo xbps-install", "sudo xbps-install -S", "sudo xbps-install -Su", "void"
+    return None, None, None, "unknown"
+
+
+def get_package_map(distro: str = "") -> Dict[str, str]:
+    """Returns mapping from binary name to package name tailored to the target distribution."""
+    if not distro:
+        _, _, _, distro = detect_package_manager()
+
+    return {
+        "aria2c": "aria2",
+        "arp-scan": "arp-scan",
+        "btrfs": "btrfs-progs",
+        "curl": "curl",
+        "demucs": "demucs",
+        "dive": "dive",
+        "cava": "cava",
+        "conntrack": "conntrack-tools" if distro != "debian" else "conntrack",
+        "docker": "docker.io" if distro == "debian" else "docker",
+        "docker-compose": "docker-compose-v2" if distro == "debian" else "docker-compose",
+        "duperemove": "duperemove",
+        "dust": "dust",
+        "easyeffects": "easyeffects",
+        "ffmpeg": "ffmpeg",
+        "fzf": "fzf",
+        "gamescope": "gamescope",
+        "git": "git",
+        "glmark2": "glmark2",
+        "htop": "htop",
+        "iotop": "iotop",
+        "ip": "iproute2",
+        "jq": "jq",
+        "kubectl": "kubectl",
+        "mpv": "mpv",
+        "mtr": "mtr",
+        "ncdu": "ncdu",
+        "nethogs": "nethogs",
+        "nmap": "nmap",
+        "nvidia-smi": "nvidia-utils" if distro == "arch" else "nvidia-utils",
+        "ollama": "ollama",
+        "paplay": "libpulse" if distro == "arch" else "pulseaudio-utils",
+        "perf": "perf" if distro == "arch" else "linux-tools-common",
+        "pipewire": "pipewire",
+        "podman": "podman",
+        "pw-link": "pipewire" if distro == "arch" else "pipewire-bin",
+        "python3": "python" if distro == "arch" else "python3",
+        "qrencode": "qrencode",
+        "sensors": "lm-sensors" if distro == "debian" else "lm_sensors",
+        "skopeo": "skopeo",
+        "smartctl": "smartmontools",
+        "snapper": "snapper",
+        "speedtest-cli": "speedtest-cli",
+        "sqlite3": "sqlite3" if distro == "debian" else "sqlite",
+        "ss": "iproute2",
+        "sysctl": "procps" if distro == "debian" else "procps-ng",
+        "tcpdump": "tcpdump",
+        "tokei": "tokei",
+        "vulkaninfo": "vulkan-tools",
+        "wireguard-tools": "wireguard-tools",
+        "wireplumber": "wireplumber",
+        "wl-copy": "wl-clipboard",
+        "wpctl": "wireplumber",
+        "xclip": "xclip",
+        "xxd": "xxd",
+        "yt-dlp": "yt-dlp",
+        "zbarimg": "zbar",
+    }
+
+
+def get_install_hint(pkg: str) -> str:
+    """Returns a tailored install command for the current distribution."""
+    _, inst, _, distro = detect_package_manager()
+    pkg_map = get_package_map(distro)
+    actual_pkg = pkg_map.get(pkg, pkg)
+    if inst:
+        return f"{inst} {actual_pkg}"
+    return f"Install {actual_pkg} via your package manager"
+
+
+# ---------------------------------------------------------------------------
 # FZF Helper
 # ---------------------------------------------------------------------------
 def run_fzf(
@@ -661,7 +768,7 @@ def run_fzf(
     extra_args: Optional[List[str]] = None,
 ) -> List[str]:
     if not shutil.which("fzf"):
-        log_error("'fzf' is required for interactive navigation. Run: sudo pacman -S fzf")
+        log_error(f"'fzf' is required for interactive navigation. Run: {get_install_hint('fzf')}")
         return []
 
     if not sys.stdin.isatty() and not os.isatty(0):
@@ -3985,65 +4092,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
     missing_deps_map: Dict[str, List[str]] = {}
     syntax_errs: List[Tuple[str, str]] = []
 
-    # Comprehensive binary -> package map for Arch / CachyOS
-    PKG_MAP = {
-        "aria2c": "aria2",
-        "arp-scan": "arp-scan",
-        "btrfs": "btrfs-progs",
-        "curl": "curl",
-        "demucs": "demucs",
-        "dive": "dive",
-        "cava": "cava",
-        "conntrack": "conntrack-tools",
-        "docker": "docker",
-        "docker-compose": "docker-compose",
-        "duperemove": "duperemove",
-        "dust": "dust",
-        "easyeffects": "easyeffects",
-        "ffmpeg": "ffmpeg",
-        "fzf": "fzf",
-        "gamescope": "gamescope",
-        "git": "git",
-        "glmark2": "glmark2",
-        "htop": "htop",
-        "iotop": "iotop",
-        "ip": "iproute2",
-        "jq": "jq",
-        "kubectl": "kubectl",
-        "mpv": "mpv",
-        "mtr": "mtr",
-        "ncdu": "ncdu",
-        "nethogs": "nethogs",
-        "nmap": "nmap",
-        "nvidia-smi": "nvidia-utils",
-        "ollama": "ollama",
-        "paplay": "libpulse",
-        "perf": "perf",
-        "pipewire": "pipewire",
-        "podman": "podman",
-        "pw-link": "pipewire",
-        "python3": "python",
-        "qrencode": "qrencode",
-        "sensors": "lm_sensors",
-        "skopeo": "skopeo",
-        "smartctl": "smartmontools",
-        "snapper": "snapper",
-        "speedtest-cli": "speedtest-cli",
-        "sqlite3": "sqlite",
-        "ss": "iproute2",
-        "sysctl": "procps-ng",
-        "tcpdump": "tcpdump",
-        "tokei": "tokei",
-        "vulkaninfo": "vulkan-tools",
-        "wireguard-tools": "wireguard-tools",
-        "wireplumber": "wireplumber",
-        "wl-copy": "wl-clipboard",
-        "wpctl": "wireplumber",
-        "xclip": "xclip",
-        "xxd": "xxd",
-        "yt-dlp": "yt-dlp",
-        "zbarimg": "zbar",
-    }
+    pm, inst_prefix, update_cmd, distro = detect_package_manager()
+    PKG_MAP = get_package_map(distro)
 
     known_builtins = {
         "comfy-boot", "ollama-ps", "ollama-drop", "model-symlink", "stream-yt",
@@ -4134,24 +4184,14 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
             log_info("All missing dependencies are standalone / pipx tools. Install them using the commands above.")
         return
 
-    # Detect package manager
-    pm = None
-    if shutil.which("paru"):
-        pm = "paru"
-    elif shutil.which("yay"):
-        pm = "yay"
-    elif shutil.which("pacman"):
-        pm = "sudo pacman"
-
-    if not pm:
-        log_warn("No supported Arch package manager (paru, yay, pacman) found. Please install packages manually:")
+    if not pm or not inst_prefix:
+        log_warn("No supported package manager (apt, dnf, zypper, pacman, paru, yay, apk, xbps) found. Please install packages manually:")
         print(f"  Packages: {' '.join(sorted_pkgs)}")
         return
 
-    # Use -Sy on Arch/CachyOS to refresh mirror databases and avoid 404 errors on rolling release mirrors
-    sync_flag = "-Sy" if pm in ("paru", "yay", "sudo pacman") else "-S"
-    install_cmd = f"{pm} {sync_flag} --needed {' '.join(sorted_pkgs)}"
-    print(f"\n{Style.BOLD}Proposed Install Command:{Style.RESET}")
+    install_cmd = f"{inst_prefix} {' '.join(sorted_pkgs)}"
+    distro_title = distro.title() if distro != "unknown" else "System"
+    print(f"\n{Style.BOLD}Proposed Install Command ({distro_title} / {pm}):{Style.RESET}")
     print(f"  {Style.CYAN}{install_cmd}{Style.RESET}")
 
     if dry_run:
@@ -4171,8 +4211,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
 
     if do_install:
         log_info(f"Executing: {install_cmd}")
-        cmd_list = pm.split() + [sync_flag, "--needed"] + sorted_pkgs
-        ret = subprocess.run(cmd_list)
+        ret = subprocess.run(install_cmd, shell=True)
         if ret.returncode == 0:
             log_success("Package installation completed successfully! Re-verifying...")
             resolved = [d for d in missing_deps_map if shutil.which(d)]
@@ -4185,8 +4224,9 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
                 log_success("All workstation dependencies are now 100% installed and operational!")
         else:
             log_error(f"Package installation returned exit code {ret.returncode}.")
-            log_warn("If mirrors returned 404 errors, your local databases or mirrors may need a full system sync:")
-            print(f"  {Style.BOLD}sudo pacman -Syu{Style.RESET}  or  {Style.BOLD}paru -Syu{Style.RESET}")
+            if update_cmd:
+                log_warn("If errors occurred, your package repositories may need a refresh:")
+                print(f"  {Style.BOLD}{update_cmd}{Style.RESET}")
 
 
 # ---------------------------------------------------------------------------
@@ -4983,7 +5023,7 @@ def execute_command(
     # Dependency check
     for d in spec.deps:
         if not shutil.which(d):
-            log_warn(f"Required binary '{d}' is missing! Command may fail. (Install: sudo pacman -S {d})")
+            log_warn(f"Required binary '{d}' is missing! Command may fail. ({get_install_hint(d)})")
 
     # Confirmation check
     if spec.confirm and not dry_run:

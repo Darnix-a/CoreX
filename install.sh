@@ -51,15 +51,39 @@ check_dep() {
     fi
 }
 
+# Detect distro package manager for install hints
+if command -v pacman >/dev/null 2>&1; then
+    PM_INSTALL="sudo pacman -S"
+    PY_PKG="python"
+elif command -v apt-get >/dev/null 2>&1 || command -v apt >/dev/null 2>&1; then
+    PM_INSTALL="sudo apt install"
+    PY_PKG="python3"
+elif command -v dnf5 >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+    PM_INSTALL="sudo dnf install"
+    PY_PKG="python3"
+elif command -v zypper >/dev/null 2>&1; then
+    PM_INSTALL="sudo zypper install"
+    PY_PKG="python3"
+elif command -v apk >/dev/null 2>&1; then
+    PM_INSTALL="sudo apk add"
+    PY_PKG="python3"
+elif command -v xbps-install >/dev/null 2>&1; then
+    PM_INSTALL="sudo xbps-install -S"
+    PY_PKG="python3"
+else
+    PM_INSTALL="your-package-manager install"
+    PY_PKG="python3"
+fi
+
 REQ_FAILED=0
-check_dep "python3" "required" "sudo pacman -S python" || REQ_FAILED=1
-check_dep "fzf" "required" "sudo pacman -S fzf" || REQ_FAILED=1
-check_dep "mpv" "optional" "sudo pacman -S mpv"
-check_dep "ffmpeg" "optional" "sudo pacman -S ffmpeg"
-check_dep "yt-dlp" "optional" "sudo pacman -S yt-dlp"
+check_dep "python3" "required" "${PM_INSTALL} ${PY_PKG}" || REQ_FAILED=1
+check_dep "fzf" "required" "${PM_INSTALL} fzf" || REQ_FAILED=1
+check_dep "mpv" "optional" "${PM_INSTALL} mpv"
+check_dep "ffmpeg" "optional" "${PM_INSTALL} ffmpeg"
+check_dep "yt-dlp" "optional" "${PM_INSTALL} yt-dlp"
 check_dep "nvidia-smi" "optional" "Install nvidia proprietary drivers"
-check_dep "snapper" "optional" "sudo pacman -S snapper"
-check_dep "docker" "optional" "sudo pacman -S docker"
+check_dep "snapper" "optional" "${PM_INSTALL} snapper"
+check_dep "docker" "optional" "${PM_INSTALL} docker"
 
 if [ $REQ_FAILED -ne 0 ]; then
     echo -e "\n${RED}${BOLD}Error:${RESET} Missing required dependencies. Please install them and rerun install.sh."
