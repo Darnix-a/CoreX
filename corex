@@ -4197,18 +4197,12 @@ def builtin_fetch(extra_args: Optional[List[str]] = None):
     dim = "\033[2m"
 
     logo = [
-        f"{c1}          /\\          {rst}",
-        f"{c1}         /  \\         {rst}",
-        f"{c1}        / /\\ \\        {rst}",
-        f"{c2}       / /  \\ \\       {rst}",
-        f"{c2}      / /    \\ \\      {rst}",
-        f"{c2}     / /  /\\  \\ \\     {rst}",
-        f"{c3}    / /  /  \\  \\ \\    {rst}",
-        f"{c3}    \\ \\  \\  /  / /    {rst}",
-        f"{c3}     \\ \\  \\/  / /     {rst}",
-        f"{c4}      \\ \\    / /      {rst}",
-        f"{c4}       \\ \\__/ /       {rst}",
-        f"{c4}        \\____/        {rst}",
+        f"{c1}   ______                     _  __{rst}",
+        f"{c1}  / ____/____   _____ ___     | |/ /{rst}",
+        f"{c2} / /    / __ \\ / ___// _ \\    |   / {rst}",
+        f"{c2}/ /___ / /_/ // /   /  __/   /   |  {rst}",
+        f"{c3}\\____/ \\____//_/    \\___/   /_/|_|  {c4}v3.0{rst}",
+        f"{dim}──────────────────────────────────────────{rst}",
     ]
 
     info = [
@@ -4226,14 +4220,37 @@ def builtin_fetch(extra_args: Optional[List[str]] = None):
         f"{bld}{c1}Audio:{rst}     {pw_status}",
     ]
 
-    print()
-    for i in range(12):
-        print(f"  {logo[i]}  {info[i]}")
-
     dots1 = "".join([f"\033[38;5;{c}m●   " for c in [1, 2, 3, 4, 5, 6, 7]])
     dots2 = "".join([f"\033[38;5;{c}m●   " for c in [9, 10, 11, 12, 13, 14, 15]])
-    print(f"\n                      {dots1}{rst}")
-    print(f"                      {dots2}{rst}\n")
+
+    term_cols = shutil.get_terminal_size((80, 24)).columns
+    if term_cols < 90:
+        print()
+        for line in logo:
+            print(f"  {line}")
+        print()
+        for line in info:
+            print(f"  {line}")
+        print(f"\n  {dots1}{rst}")
+        print(f"  {dots2}{rst}\n")
+    else:
+        left_col = logo + [
+            "",
+            f"      {dots1}{rst}",
+            f"      {dots2}{rst}",
+            "",
+            "",
+            "",
+        ]
+        logo_w = 46
+        print()
+        for i in range(len(info)):
+            l = left_col[i] if i < len(left_col) else ""
+            vis_l = re.sub(r"\033\[[0-9;]*m", "", l)
+            pad = " " * max(0, logo_w - len(vis_l))
+            r = info[i]
+            print(f"  {l}{pad}{r}")
+        print()
 
 
 DEV_QUOTES = [
