@@ -5076,11 +5076,13 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
 
     tag = CATEGORY_TAGS.get(spec.category, "@action")
     t_color = get_tag_color(tag)
-
-    div = f"  {Style.DARK_GRAY}" + "─" * 52 + f"{Style.RESET}"
+    preview_cols = int(os.environ.get("FZF_PREVIEW_COLUMNS", 40))
+    div_len = max(16, min(preview_cols - 4, 48))
+    div = f"  {Style.DARK_GRAY}" + "─" * div_len + f"{Style.RESET}"
 
     print(f"\n  {t_color}⚡ {Style.BOLD}{Style.WHITE}{spec.id}{Style.RESET}")
-    print(f"  {Style.GRAY}{spec.description}{Style.RESET}\n")
+    print(f"  {Style.GRAY}{spec.description}{Style.RESET}")
+    print(f"  {Style.DARK_GRAY}• Press [?] to close details{Style.RESET}\n")
     print(div)
 
     # Metadata & User State
@@ -5233,13 +5235,13 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
         "--border=rounded",
         "--border-label= CoreX ",
         "--border-label-pos=3",
-        "--preview-window=right:50%:border-rounded:wrap",
-        "--preview-label= ACTION DETAILS ",
+        "--preview-window=right:30%:border-rounded:wrap",
+        "--preview-label= ACTION DETAILS [? to close] ",
         "--preview-label-pos=3",
         "--header= Filter: @pinned  @ai  @audio  @gpu  @sys  @net  @dev  @daily  @docker  @code ",
         "--header-label= CATEGORIES ",
         "--header-label-pos=3",
-        "--footer= [Enter] Run  │  [Tab] Pin/Unpin  │  [^N] Builder  │  [^Y] Copy  │  [^D] Dry-Run  │  [^E] Edit  │  [ESC] Quit ",
+        "--footer= [Enter] Run  │  [Tab] Pin  │  [?] Details  │  [^N] Builder  │  [^Y] Copy  │  [^D] Dry-Run  │  [^E] Edit  │  [ESC] Quit ",
         "--footer-label= KEYBINDINGS ",
         "--footer-label-pos=3",
         "--prompt=  ◈ cx ❯ ",
@@ -5256,7 +5258,7 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
         "--bind=?:toggle-preview",
     ]
 
-    sel = run_fzf(items, prompt="  ◈ cx ❯ ", preview_cmd=preview_call, preview_window="right:50%:border-rounded:wrap", extra_args=extra)
+    sel = run_fzf(items, prompt="  ◈ cx ❯ ", preview_cmd=preview_call, preview_window="right:30%:border-rounded:wrap", extra_args=extra)
     if not sel:
         return
 
@@ -5855,7 +5857,7 @@ TUI HOTKEYS:
   • CTRL-D:  Preview with --dry-run without leaving TUI
   • CTRL-Y:  Copy underlying shell command to clipboard
   • CTRL-E:  Open command in $EDITOR before running
-  • ?:       Toggle action preview pane
+  • ?:       Close / Toggle Action Details preview pane
 
 THEMES:
   • catppuccin-mocha (default), tokyonight, nord, gruvbox, dracula, rose-pine
