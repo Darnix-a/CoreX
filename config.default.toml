@@ -1527,5 +1527,60 @@ requires_sudo = false
 confirm = false
 deps = []
 
+[commands.fetch]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Custom CoreX ASCII workstation fetch card with CPU, GPU, VRAM, and RAM telemetry"
+command = "cx __builtin fetch"
+preview_cmd = "cx __builtin fetch"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.type-test]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Terminal typing speed test (WPM & accuracy) with developer quotes and code snippets"
+command = "cx __builtin type-test"
+preview_cmd = "echo 'Interactive terminal typing test: tracks live WPM, accuracy, and rank'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.snake]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Classic retro Snake terminal mini-game with score tracking and speed scaling"
+command = "cx __builtin snake"
+preview_cmd = "echo 'Classic arcade Snake game for terminal: WASD/Arrows to move, P to pause'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.quote]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Developer wisdom, Unix philosophy, and hacker maxims card"
+command = "cx __builtin quote"
+preview_cmd = "cx __builtin quote"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.clock]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Full-screen big ANSI digital clock with live seconds, date, and 12/24h toggle"
+command = "cx __builtin clock"
+preview_cmd = "echo 'Live ANSI digital clock: [C] cycle color, [T] toggle 12/24h, [Q] quit'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.matrix]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Cyberpunk digital rain screensaver with color cycling and pause"
+command = "cx __builtin matrix"
+preview_cmd = "echo 'Cyberpunk falling green digital rain screensaver: [C] color, [Space] pause'"
+requires_sudo = false
+confirm = false
+deps = []
+
+
 
 

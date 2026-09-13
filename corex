@@ -122,6 +122,11 @@ COMMAND_ALIASES: Dict[str, str] = {
     "update": "sys-update",
     "sysupdate": "sys-update",
     "cachy-update": "sys-update",
+    "corex-fetch": "fetch",
+    "typing": "type-test",
+    "type": "type-test",
+    "zen": "quote",
+    "cmatrix": "matrix",
 }
 
 REVERSE_COMMAND_ALIASES: Dict[str, List[str]] = {}
@@ -4072,6 +4077,689 @@ def builtin_sys_update(cfg: CoreXConfig, extra_args: Optional[List[str]] = None)
     print(box_footer())
 
 
+def builtin_fetch():
+    distro_name = "Linux"
+    try:
+        if Path("/etc/os-release").exists():
+            for line in Path("/etc/os-release").read_text().splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    distro_name = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except Exception:
+        pass
+
+    uname = os.uname()
+    host_str = f"{os.environ.get('USER', 'user')}@{uname.nodename}"
+
+    uptime_sec = 0
+    try:
+        with open("/proc/uptime") as f:
+            uptime_sec = float(f.readline().split()[0])
+    except Exception:
+        pass
+    hrs, rem = divmod(int(uptime_sec), 3600)
+    mins, _ = divmod(rem, 60)
+    days, hrs = divmod(hrs, 24)
+    up_str = f"{days}d {hrs}h {mins}m" if days > 0 else f"{hrs}h {mins}m"
+
+    cpu_name = "Unknown CPU"
+    try:
+        if Path("/proc/cpuinfo").exists():
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                if "model name" in line:
+                    cpu_name = line.split(":", 1)[1].strip()
+                    break
+    except Exception:
+        pass
+
+    gpu_name = "Integrated / Unknown"
+    vram_str = ""
+    try:
+        res = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.free", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=1.5
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            parts = [p.strip() for p in res.stdout.strip().split(",")]
+            if len(parts) >= 3:
+                gpu_name = parts[0]
+                tot_v = int(parts[1].replace("MiB", "").strip())
+                free_v = int(parts[2].replace("MiB", "").strip())
+                vram_str = f" ({tot_v - free_v} / {tot_v} MiB VRAM)"
+    except Exception:
+        pass
+
+    ram_str = "Unknown"
+    try:
+        with open("/proc/meminfo") as f:
+            mem = f.read()
+            m_tot = int(re.search(r"MemTotal:\s+(\d+)", mem).group(1)) // 1024
+            m_avail = int(re.search(r"MemAvailable:\s+(\d+)", mem).group(1)) // 1024
+            m_used = m_tot - m_avail
+            pct = int((m_used / m_tot) * 100) if m_tot else 0
+            ram_str = f"{m_used} MiB / {m_tot} MiB ({pct}%)"
+    except Exception:
+        pass
+
+    pm_count = 0
+    pm_name = "pacman"
+    if shutil.which("pacman"):
+        res = subprocess.run("pacman -Qq 2>/dev/null | wc -l", shell=True, capture_output=True, text=True, timeout=1.5)
+        if res.stdout.strip().isdigit():
+            pm_count = int(res.stdout.strip())
+    elif shutil.which("dpkg"):
+        pm_name = "dpkg"
+        res = subprocess.run("dpkg-query -f '.\n' -W 2>/dev/null | wc -l", shell=True, capture_output=True, text=True, timeout=1.5)
+        if res.stdout.strip().isdigit():
+            pm_count = int(res.stdout.strip())
+    elif shutil.which("rpm"):
+        pm_name = "rpm"
+        res = subprocess.run("rpm -qa 2>/dev/null | wc -l", shell=True, capture_output=True, text=True, timeout=1.5)
+        if res.stdout.strip().isdigit():
+            pm_count = int(res.stdout.strip())
+
+    flatpak_count = 0
+    if shutil.which("flatpak"):
+        res = subprocess.run("flatpak list --app 2>/dev/null | wc -l", shell=True, capture_output=True, text=True, timeout=1.5)
+        if res.stdout.strip().isdigit():
+            flatpak_count = int(res.stdout.strip())
+
+    pkg_parts = []
+    if pm_count:
+        pkg_parts.append(f"{pm_count} ({pm_name})")
+    if flatpak_count:
+        pkg_parts.append(f"{flatpak_count} (flatpak)")
+    pkg_str = ", ".join(pkg_parts) if pkg_parts else "N/A"
+
+    shell_str = os.environ.get("SHELL", "bash").split("/")[-1]
+    desktop_str = os.environ.get("XDG_CURRENT_DESKTOP", os.environ.get("DESKTOP_SESSION", "Wayland/TTY"))
+
+    pw_status = "Inactive"
+    try:
+        res = subprocess.run(["systemctl", "--user", "is-active", "pipewire"], capture_output=True, text=True, timeout=1)
+        if res.stdout.strip() == "active":
+            pw_status = "PipeWire (Active)"
+    except Exception:
+        pass
+
+    c1 = Style.CYAN
+    c2 = Style.BLUE
+    c3 = Style.MAGENTA
+    rst = Style.RESET
+    bld = Style.BOLD
+
+    logo = [
+        f"{c1}       ____            {rst}",
+        f"{c1}      / ___|___  _ __  {rst}",
+        f"{c2}     | |   / _ \\| '__/ {rst}",
+        f"{c2}     | |__| (_) | |    {rst}",
+        f"{c3}      \\____\\___/|_|    {rst}",
+        f"{c3}     ╭────────────────╮{rst}",
+        f"{c3}     │  {bld}{Style.WHITE}C O R E X{rst}{c3}   │{rst}",
+        f"{c3}     ╰────────────────╯{rst}",
+    ]
+
+    info_lines = [
+        f"{bld}{c1}{host_str}{rst}",
+        f"{Style.DARK_GRAY}{'─' * max(len(host_str), 28)}{rst}",
+        f"{bld}{c2}OS:{rst}        {distro_name} {uname.machine}",
+        f"{bld}{c2}Kernel:{rst}    {uname.release}",
+        f"{bld}{c2}Uptime:{rst}    {up_str}",
+        f"{bld}{c2}Packages:{rst}  {pkg_str}",
+        f"{bld}{c2}Shell:{rst}     {shell_str} ({desktop_str})",
+        f"{bld}{c2}CPU:{rst}       {cpu_name}",
+        f"{bld}{c2}GPU:{rst}       {gpu_name}{vram_str}",
+        f"{bld}{c2}Memory:{rst}    {ram_str}",
+        f"{bld}{c2}Audio:{rst}     {pw_status}",
+        f"{bld}{c2}Theme:{rst}     {CURRENT_THEME}",
+    ]
+
+    print()
+    max_l = max(len(logo), len(info_lines))
+    for i in range(max_l):
+        l_part = logo[i] if i < len(logo) else " " * 23
+        r_part = info_lines[i] if i < len(info_lines) else ""
+        print(f"  {l_part}   {r_part}")
+
+    palette = (
+        f"\033[40m   \033[41m   \033[42m   \033[43m   \033[44m   \033[45m   \033[46m   \033[47m   \033[0m\n"
+        f"  {' ' * 23}   \033[100m   \033[101m   \033[102m   \033[103m   \033[104m   \033[105m   \033[106m   \033[107m   \033[0m"
+    )
+    print(f"\n  {' ' * 23}   {palette}\n")
+
+
+DEV_QUOTES = [
+    ("Talk is cheap. Show me the code.", "Linus Torvalds"),
+    ("Simplicity is prerequisite for reliability.", "Edsger W. Dijkstra"),
+    ("Programs must be written for people to read, and only incidentally for machines to execute.", "Harold Abelson"),
+    ("There are only two hard things in Computer Science: cache invalidation and naming things.", "Phil Karlton"),
+    ("First, solve the problem. Then, write the code.", "John Johnson"),
+    ("Unix is simple. It just takes a genius to understand its simplicity.", "Dennis Ritchie"),
+    ("Make each program do one thing well. To do a new job, build afresh rather than complicate old programs.", "Doug McIlroy"),
+    ("Write programs that do one thing and do it well. Write programs to work together.", "Ken Thompson"),
+    ("Premature optimization is the root of all evil.", "Donald Knuth"),
+    ("Any fool can write code that a computer can understand. Good programmers write code that humans can understand.", "Martin Fowler"),
+    ("The most dangerous phrase in the language is, 'We've always done it this way.'", "Grace Hopper"),
+    ("Deleted code is debugged code.", "Jeff Sickel"),
+    ("Controlling complexity is the essence of computer programming.", "Brian Kernighan"),
+    ("It's not a bug – it's an undocumented feature.", "Anonymous"),
+    ("Before software can be reusable it first has to be usable.", "Ralph Johnson"),
+    ("The function of good software is to make the complex appear to be simple.", "Grady Booch"),
+    ("Complexity is the enemy of security and reliability.", "Bruce Schneier"),
+    ("Code is like humor. When you have to explain it, it’s bad.", "Cory House"),
+    ("Don't comment bad code — rewrite it.", "Brian W. Kernighan"),
+    ("Perfection is achieved, not when there is nothing more to add, but when there is nothing left to take away.", "Antoine de Saint-Exupéry"),
+    ("The quieter you become, the more you are able to hear.", "Kali Linux / Rumi"),
+    ("Hackers break things to see how they work. Builders create things so they never break.", "Anonymous"),
+    ("Automation is good, so long as you know exactly where to put the machine.", "Eliyahu Goldratt"),
+]
+
+
+def builtin_quote(extra_args: Optional[List[str]] = None):
+    import random
+    text, author = random.choice(DEV_QUOTES)
+    print()
+    print(box_header("DEVELOPER WISDOM & UNIX ZEN"))
+    print(f"\n  {Style.ITALIC}{Style.WHITE}\"{text}\"{Style.RESET}\n")
+    print(f"  {Style.CYAN}{'— ' + author:>58}{Style.RESET}\n")
+    print(box_footer())
+
+
+def builtin_clock():
+    def _clock_tui(stdscr):
+        import curses
+        curses.curs_set(0)
+        stdscr.nodelay(True)
+        curses.start_color()
+        curses.use_default_colors()
+
+        curses.init_pair(1, curses.COLOR_CYAN, -1)
+        curses.init_pair(2, curses.COLOR_GREEN, -1)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        curses.init_pair(4, curses.COLOR_MAGENTA, -1)
+        curses.init_pair(5, curses.COLOR_RED, -1)
+        curses.init_pair(6, curses.COLOR_BLUE, -1)
+
+        DIGITS = {
+            '0': ["████", "█  █", "█  █", "█  █", "████"],
+            '1': ["  ██", "   █", "   █", "   █", "  ███"],
+            '2': ["████", "   █", "████", "█   ", "████"],
+            '3': ["████", "   █", "████", "   █", "████"],
+            '4': ["█  █", "█  █", "████", "   █", "   █"],
+            '5': ["████", "█   ", "████", "   █", "████"],
+            '6': ["████", "█   ", "████", "█  █", "████"],
+            '7': ["████", "   █", "  ██", "   █", "   █"],
+            '8': ["████", "█  █", "████", "█  █", "████"],
+            '9': ["████", "█  █", "████", "   █", "████"],
+            ':': ["    ", "  █ ", "    ", "  █ ", "    "],
+            ' ': ["    ", "    ", "    ", "    ", "    "],
+            'A': [" ██ ", "█  █", "████", "█  █", "█  █"],
+            'P': ["████", "█  █", "████", "█   ", "█   "],
+            'M': ["█  █", "████", "█  █", "█  █", "█  █"],
+        }
+
+        color_idx = 1
+        is_24h = True
+
+        while True:
+            key = stdscr.getch()
+            if key in (ord('q'), ord('Q'), 27):
+                break
+            elif key in (ord('c'), ord('C')):
+                color_idx = (color_idx % 6) + 1
+            elif key in (ord('t'), ord('T')):
+                is_24h = not is_24h
+
+            now = time.localtime()
+            fmt = "%H:%M:%S" if is_24h else "%I:%M:%S %p"
+            t_str = time.strftime(fmt, now)
+            date_str = time.strftime("%A, %B %d, %Y", now)
+
+            big_lines = ["", "", "", "", ""]
+            for ch in t_str:
+                art = DIGITS.get(ch, DIGITS[' '])
+                for row in range(5):
+                    big_lines[row] += art[row] + "  "
+
+            max_y, max_x = stdscr.getmaxyx()
+            stdscr.erase()
+
+            start_y = max(1, (max_y // 2) - 4)
+            for row in range(5):
+                line = big_lines[row].rstrip()
+                start_x = max(0, (max_x - len(line)) // 2)
+                try:
+                    stdscr.addstr(start_y + row, start_x, line[:max_x - 1], curses.color_pair(color_idx) | curses.A_BOLD)
+                except curses.error:
+                    pass
+
+            d_x = max(0, (max_x - len(date_str)) // 2)
+            try:
+                stdscr.addstr(start_y + 6, d_x, date_str[:max_x - 1], curses.A_BOLD)
+            except curses.error:
+                pass
+
+            footer = "[C] Cycle Color  │  [T] 12/24h  │  [Q] Exit"
+            f_x = max(0, (max_x - len(footer)) // 2)
+            try:
+                stdscr.addstr(max_y - 2, f_x, footer[:max_x - 1], curses.color_pair(color_idx) | curses.A_DIM)
+            except curses.error:
+                pass
+
+            stdscr.refresh()
+            time.sleep(0.2)
+
+    import curses
+    curses.wrapper(_clock_tui)
+
+
+def builtin_matrix(extra_args: Optional[List[str]] = None):
+    if shutil.which("cmatrix") and extra_args and "-c" in extra_args:
+        subprocess.run(["cmatrix"])
+        return
+
+    def _matrix_tui(stdscr):
+        import curses, random
+        curses.curs_set(0)
+        stdscr.nodelay(True)
+        curses.start_color()
+        curses.use_default_colors()
+
+        curses.init_pair(1, curses.COLOR_WHITE, -1)
+        curses.init_pair(2, curses.COLOR_GREEN, -1)
+        curses.init_pair(3, curses.COLOR_CYAN, -1)
+        curses.init_pair(4, curses.COLOR_MAGENTA, -1)
+        curses.init_pair(5, curses.COLOR_RED, -1)
+        curses.init_pair(6, curses.COLOR_YELLOW, -1)
+
+        GLYPHS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()_+-=<>?/:;~"
+
+        color_mode = 2
+        max_y, max_x = stdscr.getmaxyx()
+
+        cols = []
+        for x in range(max_x):
+            cols.append({
+                'y': random.randint(-max_y, 0),
+                'speed': random.choice([1, 1, 2]),
+                'len': random.randint(5, max(8, max_y - 2)),
+                'step': 0,
+            })
+
+        while True:
+            key = stdscr.getch()
+            if key in (ord('q'), ord('Q'), 27):
+                break
+            elif key in (ord('c'), ord('C')):
+                color_mode = (color_mode % 6) + 1
+                if color_mode == 1:
+                    color_mode = 2
+            elif key == ord(' '):
+                while True:
+                    p_key = stdscr.getch()
+                    if p_key in (ord(' '), ord('q'), ord('Q'), 27):
+                        break
+                    time.sleep(0.05)
+                if p_key in (ord('q'), ord('Q'), 27):
+                    break
+
+            new_y, new_x = stdscr.getmaxyx()
+            if new_y != max_y or new_x != max_x:
+                max_y, max_x = new_y, new_x
+                cols = [{'y': random.randint(-max_y, 0), 'speed': random.choice([1, 1, 2]), 'len': random.randint(5, max_y), 'step': 0} for _ in range(max_x)]
+                stdscr.clear()
+
+            for x, col in enumerate(cols):
+                if x >= max_x:
+                    break
+                col['step'] += 1
+                if col['step'] % col['speed'] != 0:
+                    continue
+
+                col['y'] += 1
+                lead_y = col['y']
+
+                if 0 <= lead_y < max_y:
+                    char = random.choice(GLYPHS)
+                    try:
+                        stdscr.addstr(lead_y, x, char, curses.color_pair(1) | curses.A_BOLD)
+                    except curses.error:
+                        pass
+
+                trail_y = lead_y - 1
+                if 0 <= trail_y < max_y:
+                    char = random.choice(GLYPHS)
+                    try:
+                        stdscr.addstr(trail_y, x, char, curses.color_pair(color_mode) | curses.A_BOLD)
+                    except curses.error:
+                        pass
+
+                fade_y = lead_y - 3
+                if 0 <= fade_y < max_y:
+                    char = random.choice(GLYPHS)
+                    try:
+                        stdscr.addstr(fade_y, x, char, curses.color_pair(color_mode) | curses.A_DIM)
+                    except curses.error:
+                        pass
+
+                clear_y = lead_y - col['len']
+                if 0 <= clear_y < max_y:
+                    try:
+                        stdscr.addstr(clear_y, x, " ")
+                    except curses.error:
+                        pass
+
+                if clear_y >= max_y:
+                    col['y'] = random.randint(-15, 0)
+                    col['speed'] = random.choice([1, 1, 2])
+                    col['len'] = random.randint(6, max(8, max_y - 2))
+
+            stdscr.refresh()
+            time.sleep(0.04)
+
+    import curses
+    curses.wrapper(_matrix_tui)
+
+
+def builtin_snake():
+    def _snake_game(stdscr):
+        import curses, random
+        curses.curs_set(0)
+        stdscr.nodelay(True)
+        curses.start_color()
+        curses.use_default_colors()
+
+        curses.init_pair(1, curses.COLOR_GREEN, -1)
+        curses.init_pair(2, curses.COLOR_RED, -1)
+        curses.init_pair(3, curses.COLOR_YELLOW, -1)
+        curses.init_pair(4, curses.COLOR_CYAN, -1)
+        curses.init_pair(5, curses.COLOR_WHITE, -1)
+
+        high_score_file = Path.home() / ".local" / "share" / "corex" / "snake_highscore.txt"
+        high_score = 0
+        if high_score_file.exists():
+            try:
+                high_score = int(high_score_file.read_text().strip())
+            except Exception:
+                pass
+
+        while True:
+            max_y, max_x = stdscr.getmaxyx()
+            h, w = 20, 44
+            if max_y < h + 4 or max_x < w + 4:
+                stdscr.erase()
+                stdscr.addstr(1, 1, "Terminal too small for Snake! Please resize window.", curses.A_BOLD)
+                stdscr.refresh()
+                time.sleep(1)
+                return
+
+            start_y = (max_y - h) // 2
+            start_x = (max_x - w) // 2
+
+            snake = [[h // 2, w // 2], [h // 2, w // 2 - 1], [h // 2, w // 2 - 2]]
+            direction = curses.KEY_RIGHT
+            score = 0
+            speed = 0.10
+
+            def spawn_food():
+                while True:
+                    fy = random.randint(1, h - 2)
+                    fx = random.randint(1, w - 2)
+                    if [fy, fx] not in snake:
+                        return [fy, fx]
+
+            food = spawn_food()
+            paused = False
+
+            while True:
+                key = stdscr.getch()
+                if key in (ord('q'), ord('Q'), 27):
+                    return
+                elif key in (ord('p'), ord('P'), ord(' ')):
+                    paused = not paused
+
+                if not paused:
+                    if key in (curses.KEY_UP, ord('w'), ord('W')) and direction != curses.KEY_DOWN:
+                        direction = curses.KEY_UP
+                    elif key in (curses.KEY_DOWN, ord('s'), ord('S')) and direction != curses.KEY_UP:
+                        direction = curses.KEY_DOWN
+                    elif key in (curses.KEY_LEFT, ord('a'), ord('A')) and direction != curses.KEY_RIGHT:
+                        direction = curses.KEY_LEFT
+                    elif key in (curses.KEY_RIGHT, ord('d'), ord('D')) and direction != curses.KEY_LEFT:
+                        direction = curses.KEY_RIGHT
+
+                    head = [snake[0][0], snake[0][1]]
+                    if direction == curses.KEY_UP:
+                        head[0] -= 1
+                    elif direction == curses.KEY_DOWN:
+                        head[0] += 1
+                    elif direction == curses.KEY_LEFT:
+                        head[1] -= 1
+                    elif direction == curses.KEY_RIGHT:
+                        head[1] += 1
+
+                    if head[0] <= 0 or head[0] >= h - 1 or head[1] <= 0 or head[1] >= w - 1:
+                        break
+                    if head in snake:
+                        break
+
+                    snake.insert(0, head)
+                    if head == food:
+                        score += 10
+                        if score > high_score:
+                            high_score = score
+                            try:
+                                high_score_file.parent.mkdir(parents=True, exist_ok=True)
+                                high_score_file.write_text(str(high_score))
+                            except Exception:
+                                pass
+                        speed = max(0.04, speed * 0.97)
+                        food = spawn_food()
+                    else:
+                        snake.pop()
+
+                stdscr.erase()
+                for y in range(h):
+                    for x in range(w):
+                        if y == 0 or y == h - 1 or x == 0 or x == w - 1:
+                            try:
+                                stdscr.addstr(start_y + y, start_x + x, "█", curses.color_pair(4))
+                            except curses.error:
+                                pass
+
+                hud = f" SCORE: {score}  │  HIGH: {high_score}  │  [P] Pause  │  [Q] Quit "
+                try:
+                    stdscr.addstr(start_y, start_x + max(1, (w - len(hud)) // 2), hud, curses.color_pair(4) | curses.A_BOLD)
+                except curses.error:
+                    pass
+
+                try:
+                    stdscr.addstr(start_y + food[0], start_x + food[1], "★", curses.color_pair(2) | curses.A_BOLD)
+                except curses.error:
+                    pass
+
+                for i, seg in enumerate(snake):
+                    try:
+                        if i == 0:
+                            stdscr.addstr(start_y + seg[0], start_x + seg[1], "◆", curses.color_pair(5) | curses.A_BOLD)
+                        else:
+                            stdscr.addstr(start_y + seg[0], start_x + seg[1], "■", curses.color_pair(1))
+                    except curses.error:
+                        pass
+
+                if paused:
+                    msg = " ⏸ PAUSED "
+                    try:
+                        stdscr.addstr(start_y + h // 2, start_x + (w - len(msg)) // 2, msg, curses.color_pair(3) | curses.A_REVERSE)
+                    except curses.error:
+                        pass
+
+                stdscr.refresh()
+                time.sleep(speed)
+
+            over_box = [
+                "╔═══════════════════════════╗",
+                "║        GAME OVER!         ║",
+                f"║  Final Score: {score:<11} ║",
+                f"║  High Score:  {high_score:<11} ║",
+                "║  [R] Restart   [Q] Quit   ║",
+                "╚═══════════════════════════╝"
+            ]
+            stdscr.nodelay(False)
+            oy = start_y + (h - len(over_box)) // 2
+            ox = start_x + (w - len(over_box[0])) // 2
+            for i, line in enumerate(over_box):
+                try:
+                    stdscr.addstr(oy + i, ox, line, curses.color_pair(2 if i == 1 else 4) | curses.A_BOLD)
+                except curses.error:
+                    pass
+            stdscr.refresh()
+
+            while True:
+                k = stdscr.getch()
+                if k in (ord('r'), ord('R'), 10, 13):
+                    stdscr.nodelay(True)
+                    break
+                elif k in (ord('q'), ord('Q'), 27):
+                    return
+
+    import curses
+    curses.wrapper(_snake_game)
+
+
+TYPING_SNIPPETS = [
+    "The Linux philosophy is 'Laugh in the face of danger'. Oops. Wrong One. 'Do it yourself'. Yes, that's it.",
+    "Good code is its own best documentation. As you're about to add a comment, ask yourself how to make it obvious.",
+    "There are 10 types of people in the world: those who understand binary, and those who do not.",
+    "Any fool can write code that a computer can understand. Good programmers write code that humans can understand.",
+    "Simplicity is prerequisite for reliability. Complex systems always break in complex and surprising ways.",
+    "First, solve the problem. Then, write the code. Premature optimization is the root of all software evil.",
+    "Programs must be written for people to read, and only incidentally for machines to execute efficiently.",
+    "Unix was not designed to stop its users from doing stupid things, as that would also stop them from doing clever things.",
+    "Give a man a program, frustrate him for a day. Teach a man to program, frustrate him for a lifetime.",
+    "Talk is cheap. Show me the code. The quieter you become, the more you are able to hear in the terminal."
+]
+
+
+def builtin_type_test():
+    def _type_test_tui(stdscr):
+        import curses, random
+        curses.curs_set(1)
+        stdscr.nodelay(False)
+        curses.start_color()
+        curses.use_default_colors()
+
+        curses.init_pair(1, curses.COLOR_GREEN, -1)
+        curses.init_pair(2, curses.COLOR_RED, -1)
+        curses.init_pair(3, curses.COLOR_CYAN, -1)
+        curses.init_pair(4, curses.COLOR_YELLOW, -1)
+
+        while True:
+            target_text = random.choice(TYPING_SNIPPETS)
+            typed = []
+            start_time = None
+
+            while True:
+                stdscr.erase()
+                max_y, max_x = stdscr.getmaxyx()
+                now = time.time()
+                elapsed = (now - start_time) if start_time else 0
+                mins = elapsed / 60.0
+
+                correct_count = sum(1 for i, c in enumerate(typed) if i < len(target_text) and c == target_text[i])
+                wpm = int((correct_count / 5.0) / mins) if mins > 0.01 else 0
+                acc = int((correct_count / len(typed) * 100)) if typed else 100
+
+                try:
+                    stdscr.addstr(1, 2, "╭─ COREX TERMINAL TYPING SPEED TEST ────────────────────────────────╮", curses.color_pair(3))
+                    stats_str = f" WPM: {wpm:<3}  │  Accuracy: {acc:>3}%  │  Time: {int(elapsed)}s  │  [ESC] Exit"
+                    stdscr.addstr(2, 4, stats_str, curses.color_pair(4) | curses.A_BOLD)
+                    stdscr.addstr(3, 2, "╰───────────────────────────────────────────────────────────────────╯", curses.color_pair(3))
+                except curses.error:
+                    pass
+
+                text_y = 5
+                text_x = 4
+                curr_x = text_x
+                curr_y = text_y
+
+                for i, ch in enumerate(target_text):
+                    if i < len(typed):
+                        if typed[i] == ch:
+                            attr = curses.color_pair(1) | curses.A_BOLD
+                        else:
+                            attr = curses.color_pair(2) | curses.A_BOLD | curses.A_REVERSE
+                    else:
+                        attr = curses.A_DIM
+
+                    if curr_x >= max_x - 6:
+                        curr_y += 1
+                        curr_x = text_x
+
+                    try:
+                        stdscr.addstr(curr_y, curr_x, ch, attr)
+                    except curses.error:
+                        pass
+                    curr_x += 1
+
+                cy = text_y
+                cx = text_x
+                for i in range(len(typed)):
+                    if cx >= max_x - 6:
+                        cy += 1
+                        cx = text_x
+                    cx += 1
+                try:
+                    stdscr.move(cy, cx)
+                except curses.error:
+                    pass
+
+                stdscr.refresh()
+
+                if len(typed) >= len(target_text):
+                    break
+
+                ch = stdscr.getch()
+                if start_time is None:
+                    start_time = time.time()
+
+                if ch in (27,):
+                    return
+                elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                    if typed:
+                        typed.pop()
+                elif 32 <= ch <= 126:
+                    typed.append(chr(ch))
+
+            curses.curs_set(0)
+            final_mins = max(elapsed / 60.0, 0.01)
+            final_wpm = int((correct_count / 5.0) / final_mins)
+            final_acc = int((correct_count / len(typed) * 100)) if typed else 100
+
+            rank = "Code Ninja" if final_wpm > 80 else ("Touch Typist" if final_wpm > 55 else ("Speed Coder" if final_wpm > 35 else "Script Kiddie"))
+
+            res_y = curr_y + 3
+            try:
+                stdscr.addstr(res_y, 2, "╭─ TEST RESULTS ────────────────────────────────────────────────────╮", curses.color_pair(1) | curses.A_BOLD)
+                stdscr.addstr(res_y + 1, 4, f"Speed: {final_wpm} WPM   │   Accuracy: {final_acc}%   │   Rank: {rank}", curses.color_pair(4) | curses.A_BOLD)
+                stdscr.addstr(res_y + 2, 4, "Press [Enter] to try another text or [ESC] / [Q] to quit.", curses.A_DIM)
+                stdscr.addstr(res_y + 3, 2, "╰───────────────────────────────────────────────────────────────────╯", curses.color_pair(1) | curses.A_BOLD)
+                stdscr.refresh()
+            except curses.error:
+                pass
+
+            while True:
+                k = stdscr.getch()
+                if k in (10, 13, ord(' ')):
+                    curses.curs_set(1)
+                    break
+                elif k in (ord('q'), ord('Q'), 27):
+                    return
+
+    import curses
+    curses.wrapper(_type_test_tui)
+
+
 # --- PHASE 3 BUILT-IN POWER UTILITIES ---
 def builtin_irq_top():
     print(box_header("HARDWARE & SOFTWARE INTERRUPTS (TOP IRQs)"))
@@ -4368,7 +5056,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
         "url-short", "ask", "models", "now-playing", "song", "np", "speedtest", "speed-check",
-        "sys-update", "update"
+        "sys-update", "update", "fetch", "type-test", "typing", "snake", "quote", "zen", "clock", "matrix", "cmatrix"
     }
 
     for cid, spec in cfg.commands.items():
@@ -5457,6 +6145,18 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_sys_info()
     elif name in ("sys-update", "update"):
         builtin_sys_update(cfg, extra_args=args)
+    elif name in ("fetch", "corex-fetch"):
+        builtin_fetch()
+    elif name in ("type-test", "typing", "type"):
+        builtin_type_test()
+    elif name == "snake":
+        builtin_snake()
+    elif name in ("quote", "zen"):
+        builtin_quote(extra_args=args)
+    elif name == "clock":
+        builtin_clock()
+    elif name in ("matrix", "cmatrix"):
+        builtin_matrix(extra_args=args)
     elif name == "irq-top":
         builtin_irq_top()
     elif name == "oom-score":
@@ -5716,6 +6416,49 @@ def main():
             print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx sys-update {' '.join(b_args)}".strip())
         else:
             builtin_sys_update(cfg, extra_args=b_args)
+        sys.exit(0)
+
+    # Direct built-in shortcuts for fun workstation utilities
+    if parsed.command in ("fetch", "corex-fetch"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx fetch")
+        else:
+            builtin_fetch()
+        sys.exit(0)
+
+    if parsed.command in ("type-test", "typing", "type"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx type-test")
+        else:
+            builtin_type_test()
+        sys.exit(0)
+
+    if parsed.command == "snake":
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx snake")
+        else:
+            builtin_snake()
+        sys.exit(0)
+
+    if parsed.command in ("quote", "zen"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx quote")
+        else:
+            builtin_quote(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command == "clock":
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx clock")
+        else:
+            builtin_clock()
+        sys.exit(0)
+
+    if parsed.command in ("matrix", "cmatrix"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx matrix")
+        else:
+            builtin_matrix(extra_args=(parsed.args or []) + unknown)
         sys.exit(0)
 
     # Internal preview callback for fzf
