@@ -24,6 +24,7 @@ CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
 DEFAULT_CONFIG_TEMPLATE = Path(__file__).resolve().parent / "config.default.toml"
 NOTES_DIR = Path.home() / ".local" / "share" / "corex" / "notes"
 TODO_FILE = Path.home() / ".local" / "share" / "corex" / "todo.json"
+STATE_FILE = Path.home() / ".local" / "share" / "corex" / "state.json"
 
 CATEGORY_TAGS = {
     "AI, CUDA & Deep Learning": "@ai",
@@ -58,6 +59,7 @@ CATEGORY_COLORS = {
     "@docker": "\033[38;5;39m",    # Deep Sky Blue
     "@code": "\033[38;5;120m",     # Fresh Light Green
     "@custom": "\033[38;5;208m",   # Vivid Orange
+    "@pinned": "\033[38;5;220m",   # Star Gold / Yellow
 }
 
 
@@ -90,6 +92,343 @@ class Style:
     @classmethod
     def strip(cls, text: str) -> str:
         return re.sub(r"\033\[[0-9;]*m", "", text)
+
+
+# ---------------------------------------------------------------------------
+# USER STATE & FAVORITES MANAGEMENT
+# ---------------------------------------------------------------------------
+def load_user_state() -> Dict[str, Any]:
+    if not STATE_FILE.exists():
+        return {"pinned": [], "frequency": {}, "last_used": {}}
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if not isinstance(data, dict):
+                return {"pinned": [], "frequency": {}, "last_used": {}}
+            data.setdefault("pinned", [])
+            data.setdefault("frequency", {})
+            data.setdefault("last_used", {})
+            return data
+    except Exception:
+        return {"pinned": [], "frequency": {}, "last_used": {}}
+
+
+def save_user_state(state: Dict[str, Any]):
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp_file = STATE_FILE.with_suffix(".tmp")
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+        temp_file.replace(STATE_FILE)
+    except Exception as e:
+        log_warn(f"Failed to save state to {STATE_FILE}: {e}")
+
+
+def toggle_pin_action(cmd_id: str) -> bool:
+    state = load_user_state()
+    pinned = list(state.get("pinned", []))
+    if cmd_id in pinned:
+        pinned.remove(cmd_id)
+        now_pinned = False
+    else:
+        pinned.append(cmd_id)
+        now_pinned = True
+    state["pinned"] = pinned
+    save_user_state(state)
+    return now_pinned
+
+
+def set_pin_action(cmd_id: str, pin: bool):
+    state = load_user_state()
+    pinned = list(state.get("pinned", []))
+    if pin and cmd_id not in pinned:
+        pinned.append(cmd_id)
+    elif not pin and cmd_id in pinned:
+        pinned.remove(cmd_id)
+    state["pinned"] = pinned
+    save_user_state(state)
+
+
+def record_action_usage(cmd_id: str):
+    state = load_user_state()
+    freq = state.get("frequency", {})
+    freq[cmd_id] = freq.get(cmd_id, 0) + 1
+    state["frequency"] = freq
+    last = state.get("last_used", {})
+    last[cmd_id] = int(time.time())
+    state["last_used"] = last
+    save_user_state(state)
+
+
+# ---------------------------------------------------------------------------
+# COLOR THEMING ENGINE
+# ---------------------------------------------------------------------------
+THEMES: Dict[str, Dict[str, Any]] = {
+    "catppuccin-mocha": {
+        "name": "Catppuccin Mocha",
+        "desc": "Soothing pastel palette with high-contrast text and warm accents",
+        "styles": {
+            "RED": "\033[38;5;211m",        # Flamingo / Soft Red
+            "GREEN": "\033[38;5;150m",      # Soft Green
+            "YELLOW": "\033[38;5;222m",     # Peach / Soft Yellow
+            "BLUE": "\033[38;5;111m",       # Sapphire / Blue
+            "MAGENTA": "\033[38;5;218m",    # Pink
+            "CYAN": "\033[38;5;116m",       # Sky / Teal
+            "WHITE": "\033[38;5;253m",      # Text
+            "GRAY": "\033[38;5;246m",       # Subtext
+            "DARK_GRAY": "\033[38;5;239m",  # Surface
+            "ORANGE": "\033[38;5;215m",     # Peach
+            "PURPLE": "\033[38;5;183m",     # Mauve
+            "TEAL": "\033[38;5;116m",       # Teal
+        },
+        "category_colors": {
+            "@ai": "\033[38;5;183m",       # Mauve
+            "@audio": "\033[38;5;147m",    # Lavender
+            "@gpu": "\033[38;5;150m",      # Green
+            "@sys": "\033[38;5;111m",      # Sapphire
+            "@net": "\033[38;5;116m",      # Sky
+            "@netflow": "\033[38;5;116m",  # Teal
+            "@dev": "\033[38;5;215m",      # Peach
+            "@daily": "\033[38;5;218m",    # Pink
+            "@kernel": "\033[38;5;211m",   # Maroon
+            "@vulkan": "\033[38;5;183m",   # Mauve
+            "@mem": "\033[38;5;222m",      # Yellow
+            "@dsp": "\033[38;5;147m",      # Lavender
+            "@docker": "\033[38;5;75m",    # Blue
+            "@code": "\033[38;5;150m",     # Green
+            "@custom": "\033[38;5;215m",   # Peach
+            "@pinned": "\033[38;5;220m",   # Gold / Yellow
+        },
+        "fzf": "bg+:#313244,bg:#1e1e2e,spinner:#f5e0dc,hl:#f38ba8,fg:#cdd6f4,header:#89dceb,info:#cba6f7,pointer:#f5e0dc,marker:#b4befe,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8,selected-bg:#45475a,border:#585b70",
+    },
+    "tokyonight": {
+        "name": "Tokyo Night",
+        "desc": "Vibrant cyberpunk aesthetic with neon blues, magentas, and deep indigos",
+        "styles": {
+            "RED": "\033[38;5;204m",
+            "GREEN": "\033[38;5;113m",
+            "YELLOW": "\033[38;5;221m",
+            "BLUE": "\033[38;5;111m",
+            "MAGENTA": "\033[38;5;141m",
+            "CYAN": "\033[38;5;117m",
+            "WHITE": "\033[38;5;251m",
+            "GRAY": "\033[38;5;241m",
+            "DARK_GRAY": "\033[38;5;236m",
+            "ORANGE": "\033[38;5;215m",
+            "PURPLE": "\033[38;5;141m",
+            "TEAL": "\033[38;5;79m",
+        },
+        "category_colors": {
+            "@ai": "\033[38;5;141m",
+            "@audio": "\033[38;5;117m",
+            "@gpu": "\033[38;5;113m",
+            "@sys": "\033[38;5;111m",
+            "@net": "\033[38;5;79m",
+            "@netflow": "\033[38;5;79m",
+            "@dev": "\033[38;5;215m",
+            "@daily": "\033[38;5;204m",
+            "@kernel": "\033[38;5;203m",
+            "@vulkan": "\033[38;5;141m",
+            "@mem": "\033[38;5;221m",
+            "@dsp": "\033[38;5;117m",
+            "@docker": "\033[38;5;111m",
+            "@code": "\033[38;5;113m",
+            "@custom": "\033[38;5;215m",
+            "@pinned": "\033[38;5;221m",
+        },
+        "fzf": "bg+:#283457,bg:#1a1b26,spinner:#7dcfff,hl:#bb9af7,fg:#c0caf5,header:#7aa2f7,info:#e0af68,pointer:#7dcfff,marker:#9ece6a,fg+:#c0caf5,prompt:#7aa2f7,hl+:#bb9af7,selected-bg:#3b4261,border:#565f89",
+    },
+    "nord": {
+        "name": "Nord",
+        "desc": "Arctic, north-bluish palette with cool slates and clean frosty highlights",
+        "styles": {
+            "RED": "\033[38;5;167m",
+            "GREEN": "\033[38;5;108m",
+            "YELLOW": "\033[38;5;222m",
+            "BLUE": "\033[38;5;110m",
+            "MAGENTA": "\033[38;5;139m",
+            "CYAN": "\033[38;5;109m",
+            "WHITE": "\033[38;5;253m",
+            "GRAY": "\033[38;5;244m",
+            "DARK_GRAY": "\033[38;5;238m",
+            "ORANGE": "\033[38;5;173m",
+            "PURPLE": "\033[38;5;139m",
+            "TEAL": "\033[38;5;109m",
+        },
+        "category_colors": {
+            "@ai": "\033[38;5;139m",
+            "@audio": "\033[38;5;110m",
+            "@gpu": "\033[38;5;108m",
+            "@sys": "\033[38;5;67m",
+            "@net": "\033[38;5;109m",
+            "@netflow": "\033[38;5;109m",
+            "@dev": "\033[38;5;173m",
+            "@daily": "\033[38;5;222m",
+            "@kernel": "\033[38;5;167m",
+            "@vulkan": "\033[38;5;139m",
+            "@mem": "\033[38;5;222m",
+            "@dsp": "\033[38;5;110m",
+            "@docker": "\033[38;5;67m",
+            "@code": "\033[38;5;108m",
+            "@custom": "\033[38;5;173m",
+            "@pinned": "\033[38;5;222m",
+        },
+        "fzf": "bg+:#3b4252,bg:#2e3440,spinner:#88c0d0,hl:#81a1c1,fg:#d8dee9,header:#88c0d0,info:#ebcb8b,pointer:#eceff4,marker:#a3be8c,fg+:#eceff4,prompt:#81a1c1,hl+:#88c0d0,selected-bg:#434c5e,border:#4c566a",
+    },
+    "gruvbox": {
+        "name": "Gruvbox Dark",
+        "desc": "Retro groove warmth with rich earthy tones, amber gold, and forest greens",
+        "styles": {
+            "RED": "\033[38;5;167m",
+            "GREEN": "\033[38;5;142m",
+            "YELLOW": "\033[38;5;214m",
+            "BLUE": "\033[38;5;109m",
+            "MAGENTA": "\033[38;5;175m",
+            "CYAN": "\033[38;5;108m",
+            "WHITE": "\033[38;5;223m",
+            "GRAY": "\033[38;5;245m",
+            "DARK_GRAY": "\033[38;5;239m",
+            "ORANGE": "\033[38;5;208m",
+            "PURPLE": "\033[38;5;175m",
+            "TEAL": "\033[38;5;108m",
+        },
+        "category_colors": {
+            "@ai": "\033[38;5;175m",
+            "@audio": "\033[38;5;108m",
+            "@gpu": "\033[38;5;142m",
+            "@sys": "\033[38;5;109m",
+            "@net": "\033[38;5;108m",
+            "@netflow": "\033[38;5;108m",
+            "@dev": "\033[38;5;208m",
+            "@daily": "\033[38;5;214m",
+            "@kernel": "\033[38;5;167m",
+            "@vulkan": "\033[38;5;175m",
+            "@mem": "\033[38;5;214m",
+            "@dsp": "\033[38;5;108m",
+            "@docker": "\033[38;5;109m",
+            "@code": "\033[38;5;142m",
+            "@custom": "\033[38;5;208m",
+            "@pinned": "\033[38;5;214m",
+        },
+        "fzf": "bg+:#3c3836,bg:#282828,spinner:#d79921,hl:#fb4934,fg:#ebdbb2,header:#fe8019,info:#b8bb26,pointer:#fabd2f,marker:#8ec07c,fg+:#fbf1c7,prompt:#fe8019,hl+:#fb4934,selected-bg:#504945,border:#665c54",
+    },
+    "dracula": {
+        "name": "Dracula",
+        "desc": "High-contrast dark gothic theme with punchy purples, vibrant pinks, and cyans",
+        "styles": {
+            "RED": "\033[38;5;203m",
+            "GREEN": "\033[38;5;84m",
+            "YELLOW": "\033[38;5;228m",
+            "BLUE": "\033[38;5;117m",
+            "MAGENTA": "\033[38;5;212m",
+            "CYAN": "\033[38;5;117m",
+            "WHITE": "\033[38;5;255m",
+            "GRAY": "\033[38;5;61m",
+            "DARK_GRAY": "\033[38;5;238m",
+            "ORANGE": "\033[38;5;215m",
+            "PURPLE": "\033[38;5;141m",
+            "TEAL": "\033[38;5;84m",
+        },
+        "category_colors": {
+            "@ai": "\033[38;5;141m",
+            "@audio": "\033[38;5;212m",
+            "@gpu": "\033[38;5;84m",
+            "@sys": "\033[38;5;117m",
+            "@net": "\033[38;5;117m",
+            "@netflow": "\033[38;5;84m",
+            "@dev": "\033[38;5;215m",
+            "@daily": "\033[38;5;212m",
+            "@kernel": "\033[38;5;203m",
+            "@vulkan": "\033[38;5;141m",
+            "@mem": "\033[38;5;228m",
+            "@dsp": "\033[38;5;212m",
+            "@docker": "\033[38;5;117m",
+            "@code": "\033[38;5;84m",
+            "@custom": "\033[38;5;215m",
+            "@pinned": "\033[38;5;228m",
+        },
+        "fzf": "bg+:#44475a,bg:#282a36,spinner:#ffb86c,hl:#bd93f9,fg:#f8f8f2,header:#ff79c6,info:#8be9fd,pointer:#f1fa8c,marker:#50fa7b,fg+:#ffffff,prompt:#bd93f9,hl+:#ff79c6,selected-bg:#6272a4,border:#6272a4",
+    },
+    "rose-pine": {
+        "name": "Rosé Pine",
+        "desc": "Natural pine, muted gold, and elegant rose water aesthetic",
+        "styles": {
+            "RED": "\033[38;5;204m",
+            "GREEN": "\033[38;5;30m",
+            "YELLOW": "\033[38;5;215m",
+            "BLUE": "\033[38;5;116m",
+            "MAGENTA": "\033[38;5;181m",
+            "CYAN": "\033[38;5;116m",
+            "WHITE": "\033[38;5;253m",
+            "GRAY": "\033[38;5;245m",
+            "DARK_GRAY": "\033[38;5;236m",
+            "ORANGE": "\033[38;5;215m",
+            "PURPLE": "\033[38;5;182m",
+            "TEAL": "\033[38;5;30m",
+        },
+        "category_colors": {
+            "@ai": "\033[38;5;182m",
+            "@audio": "\033[38;5;181m",
+            "@gpu": "\033[38;5;30m",
+            "@sys": "\033[38;5;116m",
+            "@net": "\033[38;5;116m",
+            "@netflow": "\033[38;5;30m",
+            "@dev": "\033[38;5;215m",
+            "@daily": "\033[38;5;181m",
+            "@kernel": "\033[38;5;204m",
+            "@vulkan": "\033[38;5;182m",
+            "@mem": "\033[38;5;215m",
+            "@dsp": "\033[38;5;181m",
+            "@docker": "\033[38;5;116m",
+            "@code": "\033[38;5;30m",
+            "@custom": "\033[38;5;215m",
+            "@pinned": "\033[38;5;215m",
+        },
+        "fzf": "bg+:#26233a,bg:#191724,spinner:#ebbcba,hl:#eb6f92,fg:#e0def4,header:#c4a7e7,info:#f6c177,pointer:#9ccfd8,marker:#31748f,fg+:#e0def4,prompt:#c4a7e7,hl+:#eb6f92,selected-bg:#393552,border:#524f67",
+    },
+}
+
+CURRENT_THEME = "catppuccin-mocha"
+
+
+def apply_theme(name: str):
+    global CURRENT_THEME, CATEGORY_COLORS
+    theme_key = name.lower().strip()
+    if theme_key not in THEMES:
+        theme_key = "catppuccin-mocha"
+    CURRENT_THEME = theme_key
+    t = THEMES[theme_key]
+    for k, v in t["styles"].items():
+        if hasattr(Style, k):
+            setattr(Style, k, v)
+    CATEGORY_COLORS.update(t["category_colors"])
+
+
+def get_fzf_theme_colors() -> str:
+    return THEMES.get(CURRENT_THEME, THEMES["catppuccin-mocha"])["fzf"]
+
+
+def set_config_theme(theme_name: str, config_path: Optional[Path] = None) -> bool:
+    path = config_path or CONFIG_FILE
+    if not path.exists():
+        if DEFAULT_CONFIG_TEMPLATE.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"[general]\ntheme = \"{theme_name}\"\n\n[commands]\n", encoding="utf-8")
+            return True
+
+    text = path.read_text(encoding="utf-8")
+    if re.search(r'^\s*theme\s*=\s*["\'].*?["\']', text, flags=re.MULTILINE):
+        new_text = re.sub(r'^\s*theme\s*=\s*["\'].*?["\']', f'theme = "{theme_name}"', text, flags=re.MULTILINE)
+    elif re.search(r'^\s*\[general\]', text, flags=re.MULTILINE):
+        new_text = re.sub(r'(^\s*\[general\].*?\n)', rf'\1theme = "{theme_name}"\n', text, count=1, flags=re.MULTILINE)
+    else:
+        new_text = f'[general]\ntheme = "{theme_name}"\n\n' + text
+
+    path.write_text(new_text, encoding="utf-8")
+    return True
 
 
 def print_banner(dry_run: bool = False, bg_run: bool = False):
@@ -181,6 +520,7 @@ class CoreXConfig:
         self.notes_dir: Path = NOTES_DIR
         self.todo_file: Path = TODO_FILE
         self.color: bool = True
+        self.theme: str = "catppuccin-mocha"
         self.comfyui_path: Path = Path.home() / "ComfyUI"
         self.comfyui_venv: str = "venv"
         self.comfyui_port: int = 8188
@@ -216,6 +556,9 @@ def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
         cfg.notes_dir = Path(os.path.expanduser(gen.get("notes_dir", str(NOTES_DIR))))
         cfg.todo_file = Path(os.path.expanduser(gen.get("todo_file", str(TODO_FILE))))
         cfg.color = gen.get("color", True)
+        cfg.theme = str(gen.get("theme", "catppuccin-mocha")).strip()
+        if cfg.color:
+            apply_theme(cfg.theme)
 
         ai = data.get("ai", {})
         cfg.comfyui_path = Path(os.path.expanduser(ai.get("comfyui_path", "~/ComfyUI")))
@@ -288,7 +631,7 @@ def run_fzf(
         log_error("'fzf' is required for interactive navigation. Run: sudo pacman -S fzf")
         return []
 
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
+    if not sys.stdin.isatty() and not os.isatty(0):
         return [items[0]] if items else []
 
     fzf_args = [
@@ -300,10 +643,7 @@ def run_fzf(
         "--border=rounded",
         "--scrollbar=│",
         "--info=inline-right",
-        "--color=bg+:#1e1e2e,bg:#181825,spinner:#f5e0dc,hl:#89b4fa",
-        "--color=fg:#cdd6f4,header:#89dceb,info:#cba6f7,pointer:#f5e0dc",
-        "--color=marker:#b4befe,fg+:#ffffff,prompt:#89b4fa,hl+:#f38ba8",
-        "--color=border:#45475a,label:#89b4fa,preview-border:#45475a,preview-label:#cba6f7",
+        f"--color={get_fzf_theme_colors()}",
     ]
 
     if multi:
@@ -322,7 +662,7 @@ def run_fzf(
             fzf_args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=None,
             text=True,
         )
         stdout, _ = proc.communicate(input="\n".join(items))
@@ -4105,6 +4445,117 @@ def builtin_builder(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
 
 
 # ---------------------------------------------------------------------------
+# THEME STUDIO & PREVIEW CARDS
+# ---------------------------------------------------------------------------
+def render_theme_preview(theme_name: str):
+    t_info = THEMES.get(theme_name)
+    if not t_info:
+        return
+    st = t_info["styles"]
+    cc = t_info["category_colors"]
+    div = f"  {st['DARK_GRAY']}" + "─" * 52 + "\033[0m"
+
+    print(f"\n  {st['PURPLE']}◈ {st['WHITE']}{Style.BOLD}{t_info['name']}{Style.RESET}")
+    print(f"  {st['GRAY']}{t_info['desc']}{Style.RESET}\n")
+    print(div)
+
+    # Color Swatches
+    print(f"  {Style.BOLD}PALETTE SWATCHES{Style.RESET}")
+    swatches = [
+        f"{st['RED']}██{Style.RESET}",
+        f"{st['ORANGE']}██{Style.RESET}",
+        f"{st['YELLOW']}██{Style.RESET}",
+        f"{st['GREEN']}██{Style.RESET}",
+        f"{st['TEAL']}██{Style.RESET}",
+        f"{st['CYAN']}██{Style.RESET}",
+        f"{st['BLUE']}██{Style.RESET}",
+        f"{st['PURPLE']}██{Style.RESET}",
+        f"{st['MAGENTA']}██{Style.RESET}",
+        f"{st['WHITE']}██{Style.RESET}",
+        f"{st['GRAY']}██{Style.RESET}",
+        f"{st['DARK_GRAY']}██{Style.RESET}",
+    ]
+    print(f"  {' '.join(swatches)}")
+    print(div)
+
+    # Category Badges Preview
+    print(f"  {Style.BOLD}CATEGORY BADGES{Style.RESET}")
+    cats_preview = [
+        f"{cc.get('@ai', '')}@ai{Style.RESET}",
+        f"{cc.get('@audio', '')}@audio{Style.RESET}",
+        f"{cc.get('@gpu', '')}@gpu{Style.RESET}",
+        f"{cc.get('@sys', '')}@sys{Style.RESET}",
+        f"{cc.get('@dev', '')}@dev{Style.RESET}",
+        f"{cc.get('@pinned', '')}@pinned{Style.RESET}",
+    ]
+    print(f"  {'  '.join(cats_preview)}")
+    print(div)
+
+    # Action Row Sample
+    print(f"  {Style.BOLD}COCKPIT ROW SAMPLE{Style.RESET}")
+    print(f"  {cc.get('@pinned', '')}@pinned {Style.RESET} {st['YELLOW']}★{Style.RESET} {Style.BOLD}{st['WHITE']}vram-watch        {Style.RESET}{st['DARK_GRAY']}│{Style.RESET} {st['GRAY']}Continuous GPU VRAM & temp telemetry{Style.RESET}")
+    print(f"  {cc.get('@ai', '')}@ai     {Style.RESET} {st['DARK_GRAY']}•{Style.RESET} {Style.BOLD}{st['WHITE']}models            {Style.RESET}{st['DARK_GRAY']}│{Style.RESET} {st['GRAY']}Interactive AI model downloader{Style.RESET}")
+    print(div)
+    print(f"  {st['GRAY']}Press [ENTER] to activate and persist to config.toml{Style.RESET}")
+
+
+def builtin_theme(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    if args:
+        sub = args[0].lower().strip()
+        if sub in ("--list", "-l", "list"):
+            print(f"{Style.BOLD}Available CoreX Themes:{Style.RESET}")
+            for tid, tinfo in THEMES.items():
+                active = f" {Style.GREEN}★ (active){Style.RESET}" if tid == CURRENT_THEME else ""
+                print(f"  • {Style.CYAN}{tid:<18}{Style.RESET} {Style.WHITE}{tinfo['name']:<18}{Style.RESET} {Style.GRAY}{tinfo['desc']}{Style.RESET}{active}")
+            return
+        if sub in THEMES:
+            set_config_theme(sub)
+            apply_theme(sub)
+            log_success(f"Active theme set to '{sub}'. Saved to {CONFIG_FILE}.")
+            return
+        log_error(f"Unknown theme '{sub}'. Available themes: {', '.join(THEMES.keys())}")
+        return
+
+    # Interactive FZF chooser
+    self_exe = os.path.abspath(sys.argv[0])
+    items = []
+    for tid, tinfo in THEMES.items():
+        is_cur = " ★ (active)" if tid == CURRENT_THEME else ""
+        items.append(f"{tid}\t{tinfo['name']}{is_cur}\t{tinfo['desc']}")
+
+    preview_call = f"python3 '{self_exe}' __preview_theme {{1}}"
+    extra = [
+        "--delimiter=\t",
+        "--with-nth=1,2,3",
+        "--border=rounded",
+        "--border-label= 🎨 COREX THEME STUDIO ",
+        "--border-label-pos=3",
+        "--preview-window=right:50%:border-rounded:wrap",
+        "--preview-label= THEME PREVIEW ",
+        "--preview-label-pos=3",
+        "--header= Select a theme to preview live. Press [Enter] to apply. ",
+        "--header-label= PALETTES ",
+        "--header-label-pos=3",
+        "--footer= [Enter] Apply Theme  │  [ESC] Cancel ",
+        "--footer-label= CONTROLS ",
+        "--footer-label-pos=3",
+        "--prompt=  ◈ theme ❯ ",
+        "--pointer=▶ ",
+        "--marker=◈ ",
+    ]
+    sel = run_fzf(items, prompt="  ◈ theme ❯ ", preview_cmd=preview_call, preview_window="right:50%:border-rounded:wrap", extra_args=extra)
+    if not sel:
+        return
+
+    chosen_theme = sel[0].split("\t")[0].strip()
+    if chosen_theme in THEMES:
+        set_config_theme(chosen_theme)
+        apply_theme(chosen_theme)
+        log_success(f"Theme '{chosen_theme}' applied and saved to {CONFIG_FILE}.")
+
+
+# ---------------------------------------------------------------------------
 # DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
 def render_preview(cmd_id: str, cfg: CoreXConfig):
@@ -4121,7 +4572,13 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
     print(f"  {Style.GRAY}{spec.description}{Style.RESET}\n")
     print(div)
 
-    # Metadata
+    # Metadata & User State
+    state = load_user_state()
+    is_pinned = spec.id in set(state.get("pinned", []))
+    usage_count = state.get("frequency", {}).get(spec.id, 0)
+    pin_badge = f"{Style.YELLOW}★ Pinned to Favorites{Style.RESET}" if is_pinned else f"{Style.DARK_GRAY}• Unpinned [Tab]{Style.RESET}"
+    freq_str = f"{Style.CYAN}{usage_count} run{'s' if usage_count != 1 else ''}{Style.RESET}"
+    print(f"  {Style.BOLD}Cockpit:{Style.RESET}      {pin_badge}  {Style.DARK_GRAY}•{Style.RESET}  {freq_str}")
     print(f"  {Style.BOLD}Category:{Style.RESET}     {t_color}{tag}{Style.RESET} {Style.DARK_GRAY}•{Style.RESET} {Style.GRAY}{spec.category}{Style.RESET}")
 
     if spec.requires_sudo:
@@ -4196,14 +4653,27 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
 # ---------------------------------------------------------------------------
 def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
     """Formats 150+ catalog items with clean columns, colors, and minimal badges."""
+    state = load_user_state()
+    pinned_set = set(state.get("pinned", []))
+    freq_map = state.get("frequency", {})
+
+    def sort_key(c: CommandSpec):
+        is_pin = c.id in pinned_set
+        usage = freq_map.get(c.id, 0)
+        return (not is_pin, -usage, c.category, c.id)
+
+    sorted_cmds = sorted(cfg.commands.values(), key=sort_key)
     items = []
-    for c in cfg.commands.values():
+    for c in sorted_cmds:
         tag = CATEGORY_TAGS.get(c.category, "@misc")
         t_color = get_tag_color(tag)
         has_missing = any(not shutil.which(d) for d in c.deps)
+        is_pinned = c.id in pinned_set
 
         if has_missing:
             badge = f"{Style.RED}▲{Style.RESET} "
+        elif is_pinned:
+            badge = f"{Style.YELLOW}★{Style.RESET} "
         elif c.requires_sudo:
             badge = f"{Style.YELLOW}⚡{Style.RESET} "
         else:
@@ -4212,20 +4682,21 @@ def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
         # Delimiter: tab
         # 1: id (hidden from display via --with-nth)
         # 2: colored tag (e.g. @audio)
-        # 3: status badge (▲ or ⚡ or •)
+        # 3: status badge (★ or ▲ or ⚡ or •)
         # 4: command id (bold white)
         # 5: subtle vertical separator
-        # 6: description
+        # 6: description (+ @pinned @favorites virtual tag if pinned)
+        pin_tag = f" {Style.YELLOW}@pinned @favorites{Style.RESET}" if is_pinned else ""
         items.append(
-            f"{c.id}\t{t_color}{tag:<8}{Style.RESET}\t{badge}\t{Style.BOLD}{Style.WHITE}{c.id:<18}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description}{Style.RESET}"
+            f"{c.id}\t{t_color}{tag:<8}{Style.RESET}\t{badge}\t{Style.BOLD}{Style.WHITE}{c.id:<18}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description}{Style.RESET}{pin_tag}"
         )
     return items
 
 
-def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
+def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False, select_mode: bool = False, select_raw: bool = False):
     """
     Unified, lightning-fast cockpit with @category fuzzy filtering,
-    in-app command builder (Ctrl+N), and hotkey bindings.
+    in-app command builder (Ctrl+N), favorites/pinning (Tab), and hotkey bindings.
     """
     self_exe = os.path.abspath(sys.argv[0])
     items = format_cockpit_items(cfg)
@@ -4241,10 +4712,10 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
         "--preview-window=right:50%:border-rounded:wrap",
         "--preview-label= ACTION DETAILS ",
         "--preview-label-pos=3",
-        "--header= Filter: @ai  @audio  @gpu  @sys  @net  @dev  @daily  @docker  @code ",
+        "--header= Filter: @pinned  @ai  @audio  @gpu  @sys  @net  @dev  @daily  @docker  @code ",
         "--header-label= CATEGORIES ",
         "--header-label-pos=3",
-        "--footer= [Enter] Run  │  [^N] Builder  │  [^Y] Copy  │  [^D] Dry-Run  │  [^E] Edit  │  [ESC] Quit ",
+        "--footer= [Enter] Run  │  [Tab] Pin/Unpin  │  [^N] Builder  │  [^Y] Copy  │  [^D] Dry-Run  │  [^E] Edit  │  [ESC] Quit ",
         "--footer-label= KEYBINDINGS ",
         "--footer-label-pos=3",
         "--prompt=  ◈ cx ❯ ",
@@ -4252,6 +4723,7 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
         "--marker=◈ ",
         "--scrollbar=│",
         "--info=inline-right",
+        f"--bind=tab:execute(python3 '{self_exe}' __toggle_pin {{1}})+reload(python3 '{self_exe}' __fzf_items)",
         f"--bind=ctrl-n:execute(python3 '{self_exe}' builder)+reload(python3 '{self_exe}' __fzf_items)",
         f"--bind=ctrl-r:reload(python3 '{self_exe}' __fzf_items)",
         f"--bind=ctrl-y:execute-silent(python3 '{self_exe}' __get_cmd {{1}} | wl-copy 2>/dev/null || python3 '{self_exe}' __get_cmd {{1}} | xclip -selection clipboard 2>/dev/null)",
@@ -4262,9 +4734,22 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
 
     sel = run_fzf(items, prompt="  ◈ cx ❯ ", preview_cmd=preview_call, preview_window="right:50%:border-rounded:wrap", extra_args=extra)
     if not sel:
+        if select_mode or select_raw:
+            sys.exit(130)
         return
 
     chosen_cmd_id = sel[0].split("\t")[0].strip()
+    if select_raw:
+        spec = cfg.commands.get(chosen_cmd_id)
+        if spec:
+            print(spec.command, end="")
+        else:
+            print(f"cx {chosen_cmd_id}", end="")
+        return
+    if select_mode:
+        print(f"cx {chosen_cmd_id}", end="")
+        return
+
     execute_command(chosen_cmd_id, cfg, dry_run=dry_run)
 
 
@@ -4313,6 +4798,9 @@ def execute_command(
     if not spec:
         log_error(f"Unknown command '{cmd_id}'. Run 'cx --list' or 'cx --help' for available actions.")
         sys.exit(1)
+
+    if not dry_run:
+        record_action_usage(actual_id)
 
     # Dependency check
     for d in spec.deps:
@@ -4550,9 +5038,16 @@ def generate_fish_completions(cfg: CoreXConfig) -> str:
         "complete -c cx -l list -d 'Output tab-delimited command list'",
         "complete -c cx -l dry-run -d 'Preview commands without executing them'",
         "complete -c cx -l bg -d 'Detach command into background daemon scope'",
+        "complete -c cx -l select -d 'Run interactive launcher and output selected command'",
+        "complete -c cx -l select-raw -d 'Run interactive launcher and output raw shell command'",
+        "complete -c cx -l pinned -d 'List all pinned favorite actions'",
         "complete -c cx -l no-color -d 'Disable ANSI terminal styling'",
         "complete -c cx -l config -r -F -d 'Custom TOML configuration path'",
         "complete -c cx -s y -l yes -d 'Bypass confirmation prompts'",
+        "complete -c cx -n '__fish_use_subcommand' -a 'theme' -d 'Interactive theme switcher and palette previewer'",
+        "complete -c cx -n '__fish_use_subcommand' -a 'pin' -d 'Pin an action to favorites'",
+        "complete -c cx -n '__fish_use_subcommand' -a 'unpin' -d 'Unpin an action from favorites'",
+        "complete -c cx -n '__fish_use_subcommand' -a 'pinned' -d 'List all pinned favorite actions'",
     ]
     for cid, spec in cfg.commands.items():
         desc_escaped = spec.description.replace("'", "\\'")
@@ -4568,7 +5063,7 @@ _cx_completions() {{
     local cur prev words cword
     _init_completion || return
 
-    local commands="{cmds} --dry-run --bg --help --version --list --yes"
+    local commands="{cmds} theme pin unpin pinned --select --select-raw --pinned --dry-run --bg --help --version --list --yes"
 
     if [[ $cword -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -4589,6 +5084,10 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
     for cid, spec in cfg.commands.items():
         clean_desc = spec.description.replace("'", "").replace(":", "-")
         lines.append(f"        '{cid}:{clean_desc}'")
+    lines.append("        'theme:Interactive theme switcher'")
+    lines.append("        'pin:Pin an action to favorites'")
+    lines.append("        'unpin:Unpin an action from favorites'")
+    lines.append("        'pinned:List pinned favorites'")
     lines.extend([
         "    )",
         "    _arguments -C \\",
@@ -4596,6 +5095,8 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
         "        '(-v --version)'{-v,--version}'[Show version]' \\",
         "        '--dry-run[Preview commands]' \\",
         "        '--bg[Detach command in background]' \\",
+        "        '--select[Run interactive launcher and output selected command]' \\",
+        "        '--pinned[List pinned favorites]' \\",
         "        '--list[List all commands]' \\",
         "        '1: :->command' \\",
         "        '*:: :->args'",
@@ -4609,7 +5110,7 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
 
 
 class ParsedArgs:
-    __slots__ = ("command", "args", "help", "version", "dry_run", "bg", "yes", "list", "no_color", "config")
+    __slots__ = ("command", "args", "help", "version", "dry_run", "bg", "yes", "list", "no_color", "config", "select", "select_raw")
 
     def __init__(self):
         self.command: Optional[str] = None
@@ -4622,6 +5123,8 @@ class ParsedArgs:
         self.list: bool = False
         self.no_color: bool = False
         self.config: Optional[Path] = None
+        self.select: bool = False
+        self.select_raw: bool = False
 
 
 def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
@@ -4641,9 +5144,18 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
         elif arg in ("-y", "--yes"):
             parsed.yes = True
         elif arg == "--list":
-            parsed.list = True
+            if parsed.command is not None:
+                parsed.args.append("--list")
+            else:
+                parsed.list = True
         elif arg == "--no-color":
             parsed.no_color = True
+        elif arg == "--select":
+            parsed.select = True
+        elif arg == "--select-raw":
+            parsed.select_raw = True
+        elif arg in ("--pinned", "--favorites", "--fav"):
+            parsed.command = "pinned"
         elif arg == "--config":
             if i + 1 < len(argv):
                 parsed.config = Path(argv[i + 1])
@@ -4716,6 +5228,61 @@ def main():
         render_radio_preview(target, cfg)
         sys.exit(0)
 
+    # Internal preview callback for theme studio
+    if parsed.command == "__preview_theme":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        render_theme_preview(target)
+        sys.exit(0)
+
+    # Internal helper: toggle pin for Tab key
+    if parsed.command == "__toggle_pin":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        if target:
+            toggle_pin_action(target)
+        sys.exit(0)
+
+    # Theme switcher command
+    if parsed.command == "theme":
+        t_args = (parsed.args or []) + unknown
+        builtin_theme(cfg, extra_args=t_args)
+        sys.exit(0)
+
+    # Favorites management commands
+    if parsed.command == "pin":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        if not target:
+            log_error("Usage: cx pin <action>")
+            sys.exit(1)
+        if target not in cfg.commands:
+            log_warn(f"Action '{target}' is not registered in catalog, but added to pinned list.")
+        set_pin_action(target, True)
+        log_success(f"Pinned '{target}' to favorites.")
+        sys.exit(0)
+
+    if parsed.command == "unpin":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        if not target:
+            log_error("Usage: cx unpin <action>")
+            sys.exit(1)
+        set_pin_action(target, False)
+        log_success(f"Unpinned '{target}' from favorites.")
+        sys.exit(0)
+
+    if parsed.command in ("pinned", "favorites", "favs"):
+        state = load_user_state()
+        pinned_list = state.get("pinned", [])
+        if not pinned_list:
+            print(f"{Style.GRAY}No actions currently pinned to favorites. Use 'cx pin <action>' or press [Tab] in cockpit.{Style.RESET}")
+        else:
+            print(f"{Style.BOLD}{Style.YELLOW}★ PINNED FAVORITES ({len(pinned_list)}){Style.RESET}")
+            for pid in pinned_list:
+                spec = cfg.commands.get(pid)
+                desc = spec.description if spec else "Custom action"
+                tag = CATEGORY_TAGS.get(spec.category, "@misc") if spec else "@custom"
+                t_color = get_tag_color(tag)
+                print(f"  {Style.YELLOW}★{Style.RESET} {Style.BOLD}{pid:<18}{Style.RESET} {t_color}{tag:<8}{Style.RESET} {Style.GRAY}{desc}{Style.RESET}")
+        sys.exit(0)
+
     # Internal helper: get raw command string for Ctrl+Y clipboard
     if parsed.command == "__get_cmd":
         target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
@@ -4762,6 +5329,11 @@ def main():
 USAGE:
   cx                              Launch 150+ action interactive Mission Control TUI
   cx <command> [args...]          Execute command directly with zero latency
+  cx --select                     Launch picker and print selected command (for shell hotkeys)
+  cx theme [name]                 Switch color theme or open interactive Theme Studio
+  cx pin <command>                Pin an action to favorites (starred at top of TUI)
+  cx unpin <command>              Remove an action from favorites
+  cx pinned                       List all currently pinned favorite actions
   cx new [name]                   Launch In-App Command Builder wizard
   cx builder                      Open Command Builder & Action Studio menu
   cx edit <command>               Edit an existing action
@@ -4771,7 +5343,8 @@ USAGE:
   cx --list                       Print all {len(cfg.commands)} registered commands and category tags
 
 TUI HOTKEYS:
-  • ENTER:   Execute action immediately
+  • ENTER:   Execute action immediately (or output command in --select mode)
+  • TAB:     Toggle Favorite / Pin on highlighted action live
   • CTRL-N:  Open In-App Command Builder (Create & register new action)
   • CTRL-R:  Reload command catalog in-place
   • CTRL-D:  Preview with --dry-run without leaving TUI
@@ -4779,7 +5352,11 @@ TUI HOTKEYS:
   • CTRL-E:  Open command in $EDITOR before running
   • ?:       Toggle action preview pane
 
+THEMES:
+  • catppuccin-mocha (default), tokyonight, nord, gruvbox, dracula, rose-pine
+
 CATEGORIES & FILTER TAGS:
+  • @pinned   Pinned favorite actions                      (Tab to toggle)
   • @kernel   Kernel Tracing, Interrupts & eBPF            (11 actions)
   • @vulkan   Vulkan, 3D & Graphics Telemetry              (11 actions)
   • @mem      Memory, HugePages & Storage Forensics        (11 actions)
@@ -4796,6 +5373,9 @@ CATEGORIES & FILTER TAGS:
   • @daily    Daily Driver Quality-of-Life & Crypto/Files  (15 actions)
 
 FLAGS:
+  --select                        Picker selection mode (outputs selected command to stdout)
+  --select-raw                    Picker selection mode (outputs raw shell command string)
+  --pinned                        List all pinned favorite actions
   --dry-run                       Preview command execution without running
   --bg                            Detach command in background (systemd-run / nohup)
   -y, --yes                       Bypass confirmation prompts
@@ -4806,9 +5386,9 @@ FLAGS:
 """)
         sys.exit(0)
 
-    # Naked execution: launch interactive mission-control cockpit
-    if not parsed.command:
-        run_interactive_cockpit(cfg, dry_run=parsed.dry_run)
+    # Selection mode or naked execution
+    if parsed.select or parsed.select_raw or not parsed.command:
+        run_interactive_cockpit(cfg, dry_run=parsed.dry_run, select_mode=parsed.select, select_raw=parsed.select_raw)
         sys.exit(0)
 
     # Direct subshell execution

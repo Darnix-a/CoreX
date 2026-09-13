@@ -6,6 +6,7 @@ editor = ""                            # Default text editor ($EDITOR, nvim, mic
 notes_dir = "~/.local/share/corex/notes" # Notes directory
 todo_file = "~/.local/share/corex/todo.json" # Todo tracking file
 color = true
+theme = "catppuccin-mocha"             # Active theme: catppuccin-mocha, tokyonight, nord, gruvbox, dracula, rose-pine
 
 [ai]
 comfyui_path = "~/ComfyUI"             # Root directory of ComfyUI

@@ -39,6 +39,7 @@ cx
 ```
 - Type anything to fuzzy-search across all 150+ actions.
 - Filter by category by typing `@tag` directly:
+  - `@pinned` — Pinned favorite actions (hit `Tab` to toggle favorites)
   - `@gpu` — GPU clocks, power limits, displays, GameMode
   - `@ai` — ComfyUI boot/sync, Ollama VRAM drop/models, HuggingFace/Civitai fetch
   - `@audio` — PipeWire patching, streaming YouTube audio to mpv, FLAC ripper
@@ -55,7 +56,8 @@ cx
 
 ### 2. In-Menu Hotkeys
 While inside `cx`:
-- `Enter` — Run selected command
+- `Enter` — Run selected command (or insert in `--select` mode)
+- `Tab` — Pin or unpin the highlighted action live (starred `★ ` at top of list)
 - `Ctrl+N` — Open the In-App Command Builder (make & register a new action on the fly)
 - `Ctrl+R` — Reload the action catalog in-place
 - `Ctrl+Y` — Copy the raw shell command to your clipboard (`wl-copy` / `xclip`)
@@ -63,7 +65,26 @@ While inside `cx`:
 - `Ctrl+D` — Run in `--dry-run` mode so you can see what it actually runs
 - `?` — Toggle the action details preview pane
 
-### 3. Direct Command Execution
+### 3. Global Terminal Hotkey (`Alt+C` / `Ctrl+Space`)
+Press `Alt+C` or `Ctrl+Space` anywhere in your terminal prompt (Fish, Bash, or Zsh) to open the floating CoreX picker overlay. Selecting any action instantly inserts it into your active command line buffer!
+
+### 4. Themes & Theme Studio
+Switch between 6 color palettes (`catppuccin-mocha`, `tokyonight`, `nord`, `gruvbox`, `dracula`, `rose-pine`) with live preview cards:
+```bash
+cx theme                  # Interactive Theme Studio with live color swatches
+cx theme tokyonight       # Switch theme directly and save to config.toml
+cx theme --list           # View all available themes and active status
+```
+
+### 5. Favorites & Pinning
+Pin your most frequent actions to keep them starred at the top of the TUI:
+```bash
+cx pin trim-video         # Pin action to favorites
+cx unpin trim-video       # Remove action from favorites
+cx pinned                 # List all pinned favorites
+```
+
+### 6. Direct Command Execution
 You don't have to open the menu every time. Direct commands bypass the UI instantly:
 ```bash
 cx vram-watch             # Live 1s GPU VRAM & power draw
@@ -79,7 +100,7 @@ cx new                    # Guided wizard to build and add a new action
 cx doctor                 # Test all 150+ commands & auto-install missing packages
 ```
 
-### 4. Background Runner (`--bg`)
+### 7. Background Runner (`--bg`)
 Want to run something detached as a systemd user service?
 ```bash
 cx --bg stream-radio
@@ -87,7 +108,7 @@ cx --bg weather
 ```
 Spawns via `systemd-run --user` so it stays alive cleanly and cleans up when done.
 
-### 5. Dry Run
+### 8. Dry Run
 Not sure what a command does? Preview it safely:
 ```bash
 cx --dry-run btrfs-scrub
