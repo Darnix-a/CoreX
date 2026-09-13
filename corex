@@ -4077,7 +4077,12 @@ def builtin_sys_update(cfg: CoreXConfig, extra_args: Optional[List[str]] = None)
     print(box_footer())
 
 
-def builtin_fetch():
+def builtin_fetch(extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    if ("-f" in args or "--fast" in args or "--fastfetch" in args) and shutil.which("fastfetch"):
+        subprocess.run(["fastfetch"])
+        return
+
     distro_name = "Linux"
     try:
         if Path("/etc/os-release").exists():
@@ -4089,7 +4094,8 @@ def builtin_fetch():
         pass
 
     uname = os.uname()
-    host_str = f"{os.environ.get('USER', 'user')}@{uname.nodename}"
+    u = os.environ.get("USER", "user")
+    host_str = f"{u}@{uname.nodename}"
 
     uptime_sec = 0
     try:
@@ -4125,7 +4131,7 @@ def builtin_fetch():
                 gpu_name = parts[0]
                 tot_v = int(parts[1].replace("MiB", "").strip())
                 free_v = int(parts[2].replace("MiB", "").strip())
-                vram_str = f" ({tot_v - free_v} / {tot_v} MiB VRAM)"
+                vram_str = f" ({tot_v - free_v} / {tot_v} MiB)"
     except Exception:
         pass
 
@@ -4182,50 +4188,52 @@ def builtin_fetch():
     except Exception:
         pass
 
-    c1 = Style.CYAN
-    c2 = Style.BLUE
-    c3 = Style.MAGENTA
-    rst = Style.RESET
-    bld = Style.BOLD
+    c1 = "\033[38;2;137;180;250m"
+    c2 = "\033[38;2;180;190;254m"
+    c3 = "\033[38;2;203;166;247m"
+    c4 = "\033[38;2;148;226;213m"
+    rst = "\033[0m"
+    bld = "\033[1m"
+    dim = "\033[2m"
 
     logo = [
-        f"{c1}       ____            {rst}",
-        f"{c1}      / ___|___  _ __  {rst}",
-        f"{c2}     | |   / _ \\| '__/ {rst}",
-        f"{c2}     | |__| (_) | |    {rst}",
-        f"{c3}      \\____\\___/|_|    {rst}",
-        f"{c3}     ╭────────────────╮{rst}",
-        f"{c3}     │  {bld}{Style.WHITE}C O R E X{rst}{c3}   │{rst}",
-        f"{c3}     ╰────────────────╯{rst}",
+        f"{c1}          /\\          {rst}",
+        f"{c1}         /  \\         {rst}",
+        f"{c1}        / /\\ \\        {rst}",
+        f"{c2}       / /  \\ \\       {rst}",
+        f"{c2}      / /    \\ \\      {rst}",
+        f"{c2}     / /  /\\  \\ \\     {rst}",
+        f"{c3}    / /  /  \\  \\ \\    {rst}",
+        f"{c3}    \\ \\  \\  /  / /    {rst}",
+        f"{c3}     \\ \\  \\/  / /     {rst}",
+        f"{c4}      \\ \\    / /      {rst}",
+        f"{c4}       \\ \\__/ /       {rst}",
+        f"{c4}        \\____/        {rst}",
     ]
 
-    info_lines = [
+    info = [
         f"{bld}{c1}{host_str}{rst}",
-        f"{Style.DARK_GRAY}{'─' * max(len(host_str), 28)}{rst}",
-        f"{bld}{c2}OS:{rst}        {distro_name} {uname.machine}",
-        f"{bld}{c2}Kernel:{rst}    {uname.release}",
-        f"{bld}{c2}Uptime:{rst}    {up_str}",
-        f"{bld}{c2}Packages:{rst}  {pkg_str}",
-        f"{bld}{c2}Shell:{rst}     {shell_str} ({desktop_str})",
-        f"{bld}{c2}CPU:{rst}       {cpu_name}",
-        f"{bld}{c2}GPU:{rst}       {gpu_name}{vram_str}",
-        f"{bld}{c2}Memory:{rst}    {ram_str}",
-        f"{bld}{c2}Audio:{rst}     {pw_status}",
-        f"{bld}{c2}Theme:{rst}     {CURRENT_THEME}",
+        f"{dim}──────────────────────────────{rst}",
+        f"{bld}{c1}OS:{rst}        {distro_name} {uname.machine}",
+        f"{bld}{c1}Kernel:{rst}    {uname.release}",
+        f"{bld}{c1}Uptime:{rst}    {up_str}",
+        f"{bld}{c1}Packages:{rst}  {pkg_str}",
+        f"{bld}{c1}Shell:{rst}     {shell_str}",
+        f"{bld}{c1}DE/WM:{rst}     {desktop_str}",
+        f"{bld}{c1}CPU:{rst}       {cpu_name}",
+        f"{bld}{c1}GPU:{rst}       {gpu_name}{vram_str}",
+        f"{bld}{c1}Memory:{rst}    {ram_str}",
+        f"{bld}{c1}Audio:{rst}     {pw_status}",
     ]
 
     print()
-    max_l = max(len(logo), len(info_lines))
-    for i in range(max_l):
-        l_part = logo[i] if i < len(logo) else " " * 23
-        r_part = info_lines[i] if i < len(info_lines) else ""
-        print(f"  {l_part}   {r_part}")
+    for i in range(12):
+        print(f"  {logo[i]}  {info[i]}")
 
-    palette = (
-        f"\033[40m   \033[41m   \033[42m   \033[43m   \033[44m   \033[45m   \033[46m   \033[47m   \033[0m\n"
-        f"  {' ' * 23}   \033[100m   \033[101m   \033[102m   \033[103m   \033[104m   \033[105m   \033[106m   \033[107m   \033[0m"
-    )
-    print(f"\n  {' ' * 23}   {palette}\n")
+    dots1 = "".join([f"\033[38;5;{c}m●   " for c in [1, 2, 3, 4, 5, 6, 7]])
+    dots2 = "".join([f"\033[38;5;{c}m●   " for c in [9, 10, 11, 12, 13, 14, 15]])
+    print(f"\n                      {dots1}{rst}")
+    print(f"                      {dots2}{rst}\n")
 
 
 DEV_QUOTES = [
@@ -4281,25 +4289,36 @@ def builtin_clock():
         curses.init_pair(6, curses.COLOR_BLUE, -1)
 
         DIGITS = {
-            '0': ["████", "█  █", "█  █", "█  █", "████"],
-            '1': ["  ██", "   █", "   █", "   █", "  ███"],
-            '2': ["████", "   █", "████", "█   ", "████"],
-            '3': ["████", "   █", "████", "   █", "████"],
-            '4': ["█  █", "█  █", "████", "   █", "   █"],
-            '5': ["████", "█   ", "████", "   █", "████"],
-            '6': ["████", "█   ", "████", "█  █", "████"],
-            '7': ["████", "   █", "  ██", "   █", "   █"],
-            '8': ["████", "█  █", "████", "█  █", "████"],
-            '9': ["████", "█  █", "████", "   █", "████"],
-            ':': ["    ", "  █ ", "    ", "  █ ", "    "],
-            ' ': ["    ", "    ", "    ", "    ", "    "],
-            'A': [" ██ ", "█  █", "████", "█  █", "█  █"],
-            'P': ["████", "█  █", "████", "█   ", "█   "],
-            'M': ["█  █", "████", "█  █", "█  █", "█  █"],
+            "0": [" ▄████▄ ", "██    ██", "██    ██", "██    ██", " ▀████▀ "],
+            "1": ["   ██   ", " ▄▄██   ", "   ██   ", "   ██   ", " ▀▀██▀▀ "],
+            "2": [" ▄████▄ ", "      ██", " ▄████▀ ", "██      ", "████████"],
+            "3": [" ▄████▄ ", "      ██", "  ▄███▄ ", "      ██", " ▀████▀ "],
+            "4": ["██    ██", "██    ██", "████████", "      ██", "      ██"],
+            "5": ["████████", "██      ", "██████▄ ", "      ██", "██████▀ "],
+            "6": [" ▄████▄ ", "██      ", "██████▄ ", "██    ██", " ▀████▀ "],
+            "7": ["████████", "     ▄█▀", "    ▄█▀ ", "   ▄█▀  ", "  ▄█▀   "],
+            "8": [" ▄████▄ ", "██    ██", " ▄████▄ ", "██    ██", " ▀████▀ "],
+            "9": [" ▄████▄ ", "██    ██", " ▀██████", "      ██", " ▀████▀ "],
+            ":": ["   ", " █ ", "   ", " █ ", "   "],
+            " ": ["  ", "  ", "  ", "  ", "  "],
+            "A": [" ▄████▄ ", "██    ██", "████████", "██    ██", "██    ██"],
+            "P": ["██████▄ ", "██    ██", "██████▀ ", "██      ", "██      "],
+            "M": ["██    ██", "███  ███", "██ ██ ██", "██    ██", "██    ██"],
         }
 
         color_idx = 1
         is_24h = True
+
+        uptime_str = ""
+        try:
+            with open("/proc/uptime") as f:
+                up_sec = float(f.readline().split()[0])
+            hrs, rem = divmod(int(up_sec), 3600)
+            mins, _ = divmod(rem, 60)
+            days, hrs = divmod(hrs, 24)
+            uptime_str = f"System Uptime: {days}d {hrs}h {mins}m" if days > 0 else f"System Uptime: {hrs}h {mins}m"
+        except Exception:
+            uptime_str = "System Uptime: Active"
 
         while True:
             key = stdscr.getch()
@@ -4317,37 +4336,59 @@ def builtin_clock():
 
             big_lines = ["", "", "", "", ""]
             for ch in t_str:
-                art = DIGITS.get(ch, DIGITS[' '])
+                art = DIGITS.get(ch, DIGITS[" "])
                 for row in range(5):
-                    big_lines[row] += art[row] + "  "
+                    big_lines[row] += art[row] + " "
 
             max_y, max_x = stdscr.getmaxyx()
             stdscr.erase()
 
-            start_y = max(1, (max_y // 2) - 4)
-            for row in range(5):
-                line = big_lines[row].rstrip()
-                start_x = max(0, (max_x - len(line)) // 2)
-                try:
-                    stdscr.addstr(start_y + row, start_x, line[:max_x - 1], curses.color_pair(color_idx) | curses.A_BOLD)
-                except curses.error:
-                    pass
+            clock_w = len(big_lines[0].rstrip())
+            box_w = min(max_x - 4, max(clock_w + 8, 68))
+            box_h = 13
 
-            d_x = max(0, (max_x - len(date_str)) // 2)
+            start_y = max(1, (max_y - box_h) // 2)
+            start_x = max(0, (max_x - box_w) // 2)
+
+            title = " COREX WORKSTATION CLOCK "
+            border_top = "╭─" + title + "─" * max(0, box_w - len(title) - 3) + "╮"
+            border_bot = "╰" + "─" * max(0, box_w - 2) + "╯"
+
             try:
-                stdscr.addstr(start_y + 6, d_x, date_str[:max_x - 1], curses.A_BOLD)
+                stdscr.addstr(start_y, start_x, border_top[:max_x - start_x - 1], curses.color_pair(color_idx) | curses.A_BOLD)
+                for i in range(1, box_h - 1):
+                    stdscr.addstr(start_y + i, start_x, "│", curses.color_pair(color_idx))
+                    if start_x + box_w - 1 < max_x:
+                        stdscr.addstr(start_y + i, start_x + box_w - 1, "│", curses.color_pair(color_idx))
+                stdscr.addstr(start_y + box_h - 1, start_x, border_bot[:max_x - start_x - 1], curses.color_pair(color_idx) | curses.A_BOLD)
             except curses.error:
                 pass
 
-            footer = "[C] Cycle Color  │  [T] 12/24h  │  [Q] Exit"
-            f_x = max(0, (max_x - len(footer)) // 2)
+            digit_start_x = start_x + max(2, (box_w - clock_w) // 2)
+            for row in range(5):
+                line = big_lines[row].rstrip()
+                try:
+                    stdscr.addstr(start_y + 2 + row, digit_start_x, line[:box_w - 4], curses.color_pair(color_idx) | curses.A_BOLD)
+                except curses.error:
+                    pass
+
+            d_x = start_x + max(1, (box_w - len(date_str)) // 2)
+            u_x = start_x + max(1, (box_w - len(uptime_str)) // 2)
             try:
-                stdscr.addstr(max_y - 2, f_x, footer[:max_x - 1], curses.color_pair(color_idx) | curses.A_DIM)
+                stdscr.addstr(start_y + 8, d_x, date_str[:box_w - 4], curses.A_BOLD)
+                stdscr.addstr(start_y + 9, u_x, uptime_str[:box_w - 4], curses.A_DIM)
+            except curses.error:
+                pass
+
+            ctrl = "[C] Cycle Color  │  [T] 12/24h Toggle  │  [Q] Quit"
+            c_x = start_x + max(1, (box_w - len(ctrl)) // 2)
+            try:
+                stdscr.addstr(start_y + 11, c_x, ctrl[:box_w - 4], curses.color_pair(color_idx) | curses.A_DIM)
             except curses.error:
                 pass
 
             stdscr.refresh()
-            time.sleep(0.2)
+            time.sleep(0.1)
 
     import curses
     curses.wrapper(_clock_tui)
