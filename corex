@@ -94,6 +94,39 @@ class Style:
         return re.sub(r"\033\[[0-9;]*m", "", text)
 
 
+COMMAND_ALIASES: Dict[str, str] = {
+    "comfy": "comfy-boot",
+    "comfyui": "comfy-boot",
+    "stream": "stream-yt",
+    "rip": "rip-flac",
+    "kill": "fkill",
+    "vram": "vram-watch",
+    "snap": "snap-now",
+    "snapshot": "snap-now",
+    "scratch": "notes",
+    "ai": "ask",
+    "copilot": "ask",
+    "model": "models",
+    "ai-models": "models",
+    "docker": "docker-fzf",
+    "test-all": "doctor",
+    "health-check": "doctor",
+    "new": "builder",
+    "add": "builder",
+    "edit": "builder",
+    "delete": "builder",
+    "remove": "builder",
+    "shorten": "url-short",
+    "short": "url-short",
+}
+
+REVERSE_COMMAND_ALIASES: Dict[str, List[str]] = {}
+for _alias, _target in COMMAND_ALIASES.items():
+    if _alias != _target:
+        REVERSE_COMMAND_ALIASES.setdefault(_target, []).append(_alias)
+
+
+
 # ---------------------------------------------------------------------------
 # USER STATE & FAVORITES MANAGEMENT
 # ---------------------------------------------------------------------------
@@ -4853,16 +4886,25 @@ def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
         else:
             badge = f"{Style.DARK_GRAY}•{Style.RESET} "
 
+        # Real option display: command name + alias
+        aliases = REVERSE_COMMAND_ALIASES.get(c.id, [])
+        primary_alias = aliases[0] if aliases else ""
+        alias_disp = f" {Style.GRAY}({primary_alias}){Style.RESET}" if primary_alias else ""
+        raw_name = f"{c.id} ({primary_alias})" if primary_alias else c.id
+        pad_len = max(1, 23 - len(raw_name))
+        cmd_col = f"{Style.BOLD}{Style.WHITE}{c.id}{Style.RESET}{alias_disp}{' ' * pad_len}"
+
+        pin_tag = f" {Style.YELLOW}@pinned @favorites{Style.RESET}" if is_pinned else ""
+
         # Delimiter: tab
-        # 1: id (hidden from display via --with-nth)
-        # 2: colored tag (e.g. @audio)
-        # 3: status badge (★ or ▲ or ⚡ or •)
-        # 4: command id (bold white)
+        # 1: id (hidden from display via --with-nth, used by {1} actions & preview)
+        # 2: status badge (★, ▲, ⚡, •)
+        # 3: command id with alias (real option primary match target)
+        # 4: category tag (e.g. @audio, @sys)
         # 5: subtle vertical separator
         # 6: description (+ @pinned @favorites virtual tag if pinned)
-        pin_tag = f" {Style.YELLOW}@pinned @favorites{Style.RESET}" if is_pinned else ""
         items.append(
-            f"{c.id}\t{t_color}{tag:<8}{Style.RESET}\t{badge}\t{Style.BOLD}{Style.WHITE}{c.id:<18}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description}{Style.RESET}{pin_tag}"
+            f"{c.id}\t{badge}\t{cmd_col}\t{t_color}{tag:<8}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description}{Style.RESET}{pin_tag}"
         )
     return items
 
@@ -4880,6 +4922,10 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
     extra = [
         "--delimiter=\t",
         "--with-nth=2,3,4,5,6",
+        "--exact",
+        "--no-hscroll",
+        "--scheme=history",
+        "--tiebreak=begin",
         "--border=rounded",
         "--border-label= CoreX ",
         "--border-label-pos=3",
@@ -4924,36 +4970,7 @@ def execute_command(
     bg_run: bool = False,
     extra_args: Optional[List[str]] = None,
 ):
-    alias_map = {
-        "comfy": "comfy-boot",
-        "comfyui": "comfy-boot",
-        "stream": "stream-yt",
-        "rip": "rip-flac",
-        "kill": "fkill",
-        "vram": "vram-watch",
-        "snap": "snap-now",
-        "snapshot": "snap-now",
-        "scratch": "notes",
-        "ai": "ask",
-        "ask": "ask",
-        "copilot": "ask",
-        "models": "models",
-        "model": "models",
-        "ai-models": "models",
-        "docker": "docker-fzf",
-        "doctor": "doctor",
-        "test-all": "doctor",
-        "health-check": "doctor",
-        "builder": "builder",
-        "new": "builder",
-        "add": "builder",
-        "edit": "builder",
-        "delete": "builder",
-        "remove": "builder",
-        "shorten": "url-short",
-        "short": "url-short",
-    }
-    actual_id = alias_map.get(cmd_id, cmd_id)
+    actual_id = COMMAND_ALIASES.get(cmd_id, cmd_id)
     spec = cfg.commands.get(actual_id)
 
     if not spec:
