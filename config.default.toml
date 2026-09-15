@@ -1583,9 +1583,9 @@ deps = []
 
 [commands.bonsai]
 category = "Daily Driver Quality-of-Life & Crypto/Files"
-description = "Procedural ANSI ASCII bonsai tree generator with live growth and sakura modes"
+description = "Living botanical studio & ambient bonsai (Sakura, Momiji, Matsu, Wisteria, Fuyu) for 2nd monitor"
 command = "cx __builtin bonsai"
-preview_cmd = "echo 'Procedural bonsai tree generator: --live for animation, --sakura for cherry blossom'"
+preview_cmd = "echo 'Living botanical tree & ambient zen garden with interactive studio menu, custom timer, and 5 varieties'"
 requires_sudo = false
 confirm = false
 deps = []

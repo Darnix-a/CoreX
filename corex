@@ -4821,34 +4821,245 @@ def builtin_type_test():
 
 def builtin_bonsai(extra_args: Optional[List[str]] = None):
     args = extra_args or []
-    static = any(a in args for a in ("-s", "--static"))
-    fast = any(a in args for a in ("-f", "--fast"))
 
-    duration = 1.0 if fast else 2.5
+    VARIETIES = {
+        "sakura": {
+            "name": "Sakura (Cherry Blossom)",
+            "icon": "🌸",
+            "title": "SAKURA ZEN GARDEN",
+            "tag": "───[ ✿ COREX SAKURA ZEN GARDEN ✿ ]───",
+            "leaf_colors": [
+                "\033[38;2;245;194;231m",  # soft pink
+                "\033[38;2;243;139;168m",  # rose
+                "\033[38;2;255;240;245m",  # blossom white
+                "\033[38;2;166;227;161m",  # leaf bud
+            ],
+            "leaf_glyphs": ["✿", "*", "@", "%", "o"],
+            "falling_glyphs": [".", "·", "*", "o"],
+            "accent": "\033[38;2;245;194;231m",
+        },
+        "momiji": {
+            "name": "Momiji (Autumn Maple)",
+            "icon": "🍁",
+            "title": "MOMIJI AUTUMN GARDEN",
+            "tag": "───[ 🍁 COREX MOMIJI AUTUMN GARDEN 🍁 ]───",
+            "leaf_colors": [
+                "\033[38;2;245;140;50m",   # fiery amber
+                "\033[38;2;235;80;80m",    # crimson red
+                "\033[38;2;250;200;60m",   # golden yellow
+                "\033[38;2;190;100;40m",   # rust
+            ],
+            "leaf_glyphs": ["🍁", "*", "▲", "✦", "&"],
+            "falling_glyphs": ["·", "▲", "*", "."],
+            "accent": "\033[38;2;245;140;50m",
+        },
+        "matsu": {
+            "name": "Matsu (Black Pine / Evergreen)",
+            "icon": "🌲",
+            "title": "MATSU EVERGREEN BONSAI",
+            "tag": "───[ 🌲 COREX MATSU EVERGREEN BONSAI 🌲 ]───",
+            "leaf_colors": [
+                "\033[38;2;50;150;80m",    # deep emerald
+                "\033[38;2;90;190;120m",   # jade green
+                "\033[38;2;30;100;55m",    # dark forest
+                "\033[38;2;150;220;170m",  # mint needle
+            ],
+            "leaf_glyphs": ["*", "#", "x", "^", "+"],
+            "falling_glyphs": [".", "·", "^", "*"],
+            "accent": "\033[38;2;90;190;120m",
+        },
+        "wisteria": {
+            "name": "Wisteria (Fuji Lavender Vines)",
+            "icon": "💜",
+            "title": "WISTERIA VINE ARBOR",
+            "tag": "───[ 💜 COREX WISTERIA VINE ARBOR 💜 ]───",
+            "leaf_colors": [
+                "\033[38;2;215;180;255m",  # soft lavender
+                "\033[38;2;175;110;235m",  # royal violet
+                "\033[38;2;203;166;247m",  # mauve
+                "\033[38;2;137;180;250m",  # sky blue
+            ],
+            "leaf_glyphs": ["✿", "o", "*", "v", "§"],
+            "falling_glyphs": [".", "·", "v", "o"],
+            "accent": "\033[38;2;203;166;247m",
+        },
+        "fuyu": {
+            "name": "Fuyu (Winter Frost / Snow Willow)",
+            "icon": "❄️",
+            "title": "FUYU WINTER FROST",
+            "tag": "───[ ❄️ COREX FUYU WINTER FROST ❄️ ]───",
+            "leaf_colors": [
+                "\033[38;2;255;255;255m",  # crystal white
+                "\033[38;2;148;226;213m",  # ice cyan
+                "\033[38;2;137;220;250m",  # sky frost
+                "\033[38;2;180;190;210m",  # cool slate
+            ],
+            "leaf_glyphs": ["❄", "*", "+", "·", "✧"],
+            "falling_glyphs": [".", "·", "*", "❄"],
+            "accent": "\033[38;2;148;226;213m",
+        },
+    }
+
+    DUR_PRESETS = [
+        (300.0, "5 Minutes  (Ambient 2nd Monitor - Relaxing Zen)", "300s"),
+        (180.0, "3 Minutes  (Medium Ambient Workstation)", "180s"),
+        (60.0,  "1 Minute   (Short Focus Break)", "60s"),
+        (30.0,  "30 Seconds (Quick Break)", "30s"),
+        (10.0,  "10 Seconds (Showcase Demo)", "10s"),
+        (0.0,   "Instant    (Static Artwork Only)", "0s"),
+    ]
+
+    selected_var = "sakura"
+    selected_dur = 300.0  # Default 5 minutes for second monitor
+
+    # CLI Direct Flag Parsing
+    direct_run = False
+    if any(a in args for a in ("-s", "--static")):
+        selected_dur = 0.0
+        direct_run = True
+    elif any(a in args for a in ("-f", "--fast")):
+        selected_dur = 3.0
+        direct_run = True
+    elif any(a in args for a in ("-q", "--quick")):
+        selected_dur = 10.0
+        direct_run = True
+
     for i, a in enumerate(args):
         if a in ("-t", "--time") and i + 1 < len(args):
             try:
-                duration = max(0.5, float(args[i + 1]))
+                selected_dur = max(0.0, float(args[i + 1]))
+                direct_run = True
             except ValueError:
                 pass
 
-    is_interactive = sys.stdout.isatty() and not static
+    if any(a in args for a in ("--sakura", "--cherry")):
+        selected_var = "sakura"
+        direct_run = True
+    elif any(a in args for a in ("--momiji", "--maple", "-m")):
+        selected_var = "momiji"
+        direct_run = True
+    elif any(a in args for a in ("--matsu", "--pine", "-p")):
+        selected_var = "matsu"
+        direct_run = True
+    elif any(a in args for a in ("--wisteria", "--fuji", "-w")):
+        selected_var = "wisteria"
+        direct_run = True
+    elif any(a in args for a in ("--fuyu", "--frost", "--winter")):
+        selected_var = "fuyu"
+        direct_run = True
 
+    # Helper for non-blocking key read
+    def _read_char_nb(timeout: float = 0.05) -> Optional[str]:
+        if not sys.stdin.isatty():
+            return None
+        import select, termios, tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            r, _, _ = select.select([sys.stdin], [], [], timeout)
+            if r:
+                return sys.stdin.read(1)
+            return None
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    # Interactive Menu if no explicit CLI flags given
+    if not direct_run and sys.stdin.isatty():
+        dur_idx = 0  # 5 minutes default
+        var_keys = list(VARIETIES.keys())
+        v_idx = 0
+
+        menu_h = 19
+        first_draw = True
+
+        sys.stdout.write("\033[?25l")
+        sys.stdout.flush()
+
+        try:
+            while True:
+                dur_val, dur_label, _ = DUR_PRESETS[dur_idx]
+                var_key = var_keys[v_idx]
+                v_spec = VARIETIES[var_key]
+
+                c_hi = "\033[38;2;137;180;250m"
+                c_acc = v_spec["accent"]
+                rst = "\033[0m"
+                bld = "\033[1m"
+                dim = "\033[2m"
+
+                lines = []
+                lines.append(f" ╭─ {bld}{c_hi}COREX BOTANICAL STUDIO & AMBIENT ZEN GARDEN{rst} ────────────────────────╮")
+                lines.append(f" │ {dim}Configure your living ambient tree for your workstation or second monitor:{rst}    │")
+                lines.append(f" │                                                                            │")
+                lines.append(f" │ {bld}Growth Duration:{rst}                                                          │")
+                for di, (d_sec, d_lbl, _) in enumerate(DUR_PRESETS):
+                    sel = f"{c_hi}❯{rst}" if di == dur_idx else " "
+                    txt = f"{bld}{c_hi}{d_lbl}{rst}" if di == dur_idx else f"{dim}{d_lbl}{rst}"
+                    lines.append(f" │  {sel} [{di+1}] {txt:<67} │")
+                lines.append(f" │                                                                            │")
+                lines.append(f" │ {bld}Tree Variety & Foliage:{rst}                                                  │")
+                for vk, v_data in VARIETIES.items():
+                    k_char = vk[0].upper()
+                    sel = f"{c_acc}❯{rst}" if vk == var_key else " "
+                    name_str = f"{v_data['icon']} {v_data['name']}"
+                    txt = f"{bld}{c_acc}{name_str}{rst}" if vk == var_key else f"{dim}{name_str}{rst}"
+                    lines.append(f" │  {sel} [{k_char}] {txt:<67} │")
+                lines.append(f" │                                                                            │")
+                lines.append(f" │ {dim}Press [1-6] for Duration  │  [S/M/P/W/F] for Variety{rst}                         │")
+                lines.append(f" │ {bld}{c_hi}Press [ENTER] to Begin Growth{rst}  │  {dim}[Q] Exit{rst}                               │")
+                lines.append(f" ╰────────────────────────────────────────────────────────────────────────────╯")
+
+                if not first_draw:
+                    sys.stdout.write(f"\033[{menu_h}A\r")
+                first_draw = False
+
+                for line in lines:
+                    sys.stdout.write(line + "\033[K\n")
+                sys.stdout.flush()
+
+                k = _read_char_nb(0.15)
+                if k:
+                    if k in ("\r", "\n", " "):
+                        selected_dur = dur_val
+                        selected_var = var_key
+                        break
+                    elif k in ("q", "Q", "\x1b"):
+                        print(f"\n {dim}Zen Garden cancelled.{rst}\n")
+                        return
+                    elif k in ("1", "2", "3", "4", "5", "6"):
+                        dur_idx = int(k) - 1
+                    elif k.lower() == "s":
+                        v_idx = var_keys.index("sakura")
+                    elif k.lower() == "m":
+                        v_idx = var_keys.index("momiji")
+                    elif k.lower() == "p":
+                        v_idx = var_keys.index("matsu")
+                    elif k.lower() == "w":
+                        v_idx = var_keys.index("wisteria")
+                    elif k.lower() == "f":
+                        v_idx = var_keys.index("fuyu")
+        finally:
+            sys.stdout.write("\033[?25h")
+            sys.stdout.flush()
+
+    # Retrieve selected variety config
+    v_info = VARIETIES.get(selected_var, VARIETIES["sakura"])
+    accent_col = v_info["accent"]
+
+    # Terminal dimensions
     cols = shutil.get_terminal_size((80, 24)).columns
-    width = min(68, max(52, cols - 4))
-    height = 20
+    lines = shutil.get_terminal_size((80, 24)).lines
+    width = min(100, max(74, cols - 4))
+    height = min(32, max(24, lines - 8))
     ground_y = height - 1
 
     c1 = "\033[38;2;137;180;250m"  # Blue
     c2 = "\033[38;2;180;190;254m"  # Lavender
     c3 = "\033[38;2;203;166;247m"  # Mauve
-    c4 = "\033[38;2;245;194;231m"  # Sakura Pink
-    c_rose = "\033[38;2;243;139;168m"
-    c_white = "\033[38;2;255;240;245m"
-    c_green = "\033[38;2;166;227;161m"
-    c_trunk = "\033[38;2;160;105;60m"
-    c_branch = "\033[38;2;190;130;75m"
-    c_twig = "\033[38;2;215;160;100m"
+    c_trunk = "\033[38;2;150;95;50m"
+    c_branch = "\033[38;2;180;120;70m"
+    c_twig = "\033[38;2;210;150;95m"
     c_ground = "\033[38;2;147;153;178m"
     rst = "\033[0m"
     dim = "\033[2m"
@@ -4863,23 +5074,35 @@ def builtin_bonsai(extra_args: Optional[List[str]] = None):
     blossom_cells = []
     petal_cells = []
 
-    # 1. Trunk
-    cx, cy = float(trunk_x), float(trunk_y)
-    dx, dy = random.uniform(-0.12, 0.12), -1.0
-    for _ in range(7):
+    # 1. Roots on ground line
+    root_patterns = [(-4, "/"), (-3, "/"), (-2, "/"), (-1, "|"), (0, "|"), (1, "|"), (2, "\\"), (3, "\\"), (4, "\\")]
+    for rx, rch in root_patterns:
+        gx = trunk_x + rx
+        if 0 <= gx < width:
+            trunk_cells.append((ground_y - 1, gx, rch, c_trunk))
+
+    # 2. Main trunk (8-10 rows)
+    cx, cy = float(trunk_x), float(ground_y - 2)
+    dx, dy = random.uniform(-0.1, 0.1), -1.0
+    trunk_len = max(7, min(10, height // 3))
+    for step in range(trunk_len):
         ix, iy = int(round(cx)), int(round(cy))
-        if 0 <= iy < ground_y and 1 <= ix < width - 1:
-            ch = "/" if dx < -0.3 else ("\\" if dx > 0.3 else "|")
+        if 0 <= iy < ground_y and 2 <= ix < width - 2:
+            ch = "|" if abs(dx) < 0.25 else ("/" if dx < 0 else "\\")
             trunk_cells.append((iy, ix, ch, c_trunk))
-            trunk_cells.append((iy, ix + 1, ch, c_trunk))
-        cx += dx + random.uniform(-0.15, 0.15)
+            if step < 5:
+                trunk_cells.append((iy, ix - 1, ch, c_trunk))
+                trunk_cells.append((iy, ix + 1, ch, c_trunk))
+            else:
+                trunk_cells.append((iy, ix + 1, ch, c_trunk))
+        cx += dx + random.uniform(-0.12, 0.12)
         cy += dy
 
-    # 2. Main & secondary branches
+    # 3. Sweeping multi-tiered branch hierarchy (3 generations)
     branch_queue = [
-        (cx - 1, cy, -0.9, -0.7, 8, 2, 1),
-        (cx + 1, cy, 0.9, -0.7, 8, 2, 1),
-        (cx, cy - 1, random.uniform(-0.3, 0.3), -0.8, 6, 1, 1),
+        (cx - 2, cy, -1.0, -0.65, 12, 2, 1),
+        (cx + 2, cy, 1.0, -0.65, 12, 2, 1),
+        (cx, cy - 1, random.uniform(-0.3, 0.3), -0.85, 9, 2, 1),
     ]
 
     endpoints = []
@@ -4890,23 +5113,24 @@ def builtin_bonsai(extra_args: Optional[List[str]] = None):
         for _ in range(blen):
             ix, iy = int(round(cur_x)), int(round(cur_y))
             if 0 <= iy < ground_y and 1 <= ix < width - 1:
-                ch = "/" if bdx < -0.3 else ("\\" if bdx > 0.3 else "|")
+                ch = "/" if bdx < -0.35 else ("\\" if bdx > 0.35 else "|")
                 branch_cells.append((iy, ix, ch, bcol))
                 if bthick > 1 and ix + 1 < width - 1:
                     branch_cells.append((iy, ix + 1, ch, bcol))
-            cur_x += bdx + random.uniform(-0.2, 0.2)
-            cur_y += bdy + random.uniform(-0.1, 0.05)
+            cur_x += bdx + random.uniform(-0.18, 0.18)
+            cur_y += bdy + random.uniform(-0.08, 0.04)
         ex, ey = int(round(cur_x)), int(round(cur_y))
         endpoints.append((ex, ey, bdepth))
         if bdepth < 3:
-            for i in range(2):
-                angle = -1.0 if i == 0 else 1.0
-                ndx = angle * random.uniform(0.6, 1.2) + bdx * 0.2
+            num_c = 3 if bdepth == 1 else 2
+            for i in range(num_c):
+                ang = -1.1 if i == 0 else (1.1 if i == 1 else random.uniform(-0.4, 0.4))
+                ndx = ang * random.uniform(0.7, 1.2) + bdx * 0.25
                 ndy = random.uniform(-0.7, -0.3)
-                nlen = max(3, int(blen * 0.75))
+                nlen = max(4, int(blen * 0.72))
                 branch_queue.append((ex, ey, ndx, ndy, nlen, max(1, bthick - 1), bdepth + 1))
 
-    # 3. Blossoms
+    # 4. Dense blossom clusters
     seen_blossoms = set()
     for ex, ey, bdepth in endpoints:
         if bdepth >= 2:
@@ -4915,27 +5139,27 @@ def builtin_bonsai(extra_args: Optional[List[str]] = None):
                 for dx in range(-r * 2, r * 2 + 1):
                     if (dx / (r * 2.0)) ** 2 + (dy / float(r)) ** 2 <= 1.0:
                         gx, gy = ex + dx, ey + dy
-                        if 0 <= gy < ground_y and 1 <= gx < width - 1:
+                        if 0 <= gy < ground_y - 2 and 1 <= gx < width - 1:
                             if (gy, gx) not in seen_blossoms:
                                 seen_blossoms.add((gy, gx))
-                                c = random.choices([c4, c_rose, c_white, c_green], weights=[48, 32, 15, 5])[0]
-                                glyph = random.choice(["✿", "*", "@", "%", "o"])
+                                c = random.choice(v_info["leaf_colors"])
+                                glyph = random.choice(v_info["leaf_glyphs"])
                                 blossom_cells.append((gy, gx, glyph, c))
     random.shuffle(blossom_cells)
 
-    # 4. Falling petals
-    for _ in range(18):
-        px = random.randint(trunk_x - 24, trunk_x + 24)
-        py = random.randint(ground_y // 2, ground_y - 1)
+    # 5. Falling petals / leaves
+    for _ in range(32):
+        px = random.randint(trunk_x - 34, trunk_x + 34)
+        py = random.randint(ground_y // 3, ground_y - 1)
         if 0 <= py < ground_y and 1 <= px < width - 1:
-            petal_cells.append((py, px, random.choice([".", "·", "*", "o"]), random.choice([c4, c_rose])))
+            petal_cells.append((py, px, random.choice(v_info["falling_glyphs"]), random.choice(v_info["leaf_colors"])))
 
     # Base grid
     grid = [[" " for _ in range(width)] for _ in range(height)]
     colors = [["" for _ in range(width)] for _ in range(height)]
 
-    # Ground Zen border
-    garden_tag = "───[ ✿ COREX SAKURA ZEN GARDEN ✿ ]───"
+    # Ground Zen border line
+    garden_tag = v_info["tag"]
     pad_total = max(0, width - len(garden_tag) - 2)
     p_left = pad_total // 2
     p_right = pad_total - p_left
@@ -4945,71 +5169,98 @@ def builtin_bonsai(extra_args: Optional[List[str]] = None):
         colors[ground_y][i] = c_ground
 
     def _print_header():
+        title_banner = f"v3.0 • {v_info['title']}"
         print(f"   {c1}   ______                     _  __{rst}")
         print(f"   {c1}  / ____/____   _____ ___     | |/ /{rst}")
         print(f"   {c2} / /    / __ \\ / ___// _ \\    |   / {rst}")
         print(f"   {c2}/ /___ / /_/ // /   /  __/   /   |  {rst}")
-        print(f"   {c3}\\____/ \\____//_/    \\___/   /_/|_|  {c4}v3.0 • SAKURA ZEN GARDEN{rst}")
-        print(f"   {dim}──────────────────────────────────────────────────────────────────{rst}")
+        print(f"   {c3}\\____/ \\____//_/    \\___/   /_/|_|  {accent_col}{title_banner}{rst}")
+        print(f"   {dim}{'─' * max(width, 70)}{rst}")
 
     total_blossoms = len(blossom_cells)
 
-    if not is_interactive:
-        # Static direct output
+    # Static Mode
+    if selected_dur <= 0.0 or not sys.stdout.isatty():
         _print_header()
         for iy, ix, ch, col in trunk_cells + branch_cells + blossom_cells + petal_cells:
             grid[iy][ix] = ch
             colors[iy][ix] = col
         for r in range(height):
             row = "".join(colors[r][c] + grid[r][c] for c in range(width))
-            print("   " + row + rst)
-        bar = f"{c4}{'█' * 26}{rst}"
-        print(f"\n   🌸 {bld}Sakura:{rst} [{bar}] 100% • {c4}✔ Bloom Complete!{rst} ({total_blossoms} blossoms in full bloom)\n")
+            print("  " + row + rst)
+        bar = f"{accent_col}{'█' * 28}{rst}"
+        print(f"\n   {v_info['icon']} {bld}{v_info['name']}:{rst} [{bar}] 100% • {accent_col}✔ Bloom Complete!{rst} ({total_blossoms} nodes in full splendor)\n")
         return
 
-    # Live animation with countdown
-    total_frames = 40
-    frame_delay = duration / total_frames
+    # Live Ambient Growth Mode
+    total_frames = min(120, max(40, int(selected_dur * 4)))
+    frame_delay = selected_dur / float(total_frames)
 
     _print_header()
-    # Print initial blank canvas + status
     for r in range(height):
         row = "".join(colors[r][c] + grid[r][c] for c in range(width))
-        print("   " + row + rst)
-    print("   🌸 Initializing sakura seeds...\033[K")
+        print("  " + row + rst)
+    print(f"   {v_info['icon']} Initializing botanical roots... (Duration: {int(selected_dur)}s)\033[K")
 
     sys.stdout.write("\033[?25l")  # Hide cursor
     sys.stdout.flush()
 
     try:
         t_start = time.time()
-        for f in range(1, total_frames + 1):
-            pct = int((f / total_frames) * 100)
-            elapsed = time.time() - t_start
-            rem_sec = max(0.0, duration - elapsed)
+        paused = False
+        pause_start = 0.0
+        total_paused_time = 0.0
 
-            # 1. Trunk growth (0% -> 25%)
-            t_slice = int(len(trunk_cells) * min(1.0, f / (total_frames * 0.25)))
+        f = 1
+        while f <= total_frames:
+            # Check keyboard input
+            key = _read_char_nb(0.0)
+            if key:
+                if key in ("q", "Q"):
+                    break  # Fast-forward to 100%
+                elif key in (" ", "p", "P"):
+                    paused = not paused
+                    if paused:
+                        pause_start = time.time()
+                    else:
+                        total_paused_time += (time.time() - pause_start)
+                elif key in ("\x1b",):
+                    # Exit immediately
+                    sys.stdout.write("\033[?25h")
+                    sys.stdout.flush()
+                    print(f"\n {dim}Ambient session closed.{rst}\n")
+                    return
+
+            if paused:
+                time.sleep(0.15)
+                continue
+
+            elapsed = (time.time() - t_start) - total_paused_time
+            rem_sec = max(0.0, selected_dur - elapsed)
+            pct = int((f / total_frames) * 100)
+
+            # 1. Trunk growth (0% -> 22%)
+            t_slice = int(len(trunk_cells) * min(1.0, f / (total_frames * 0.22)))
             for iy, ix, ch, col in trunk_cells[:t_slice]:
                 grid[iy][ix] = ch
                 colors[iy][ix] = col
 
-            # 2. Branching growth (20% -> 60%)
-            b_progress = max(0.0, min(1.0, (f - total_frames * 0.20) / (total_frames * 0.40)))
+            # 2. Branching growth (18% -> 60%)
+            b_progress = max(0.0, min(1.0, (f - total_frames * 0.18) / (total_frames * 0.42)))
             b_slice = int(len(branch_cells) * b_progress)
             for iy, ix, ch, col in branch_cells[:b_slice]:
                 grid[iy][ix] = ch
                 colors[iy][ix] = col
 
-            # 3. Blossoms budding (50% -> 90%)
-            fl_progress = max(0.0, min(1.0, (f - total_frames * 0.50) / (total_frames * 0.40)))
+            # 3. Blossoms budding (50% -> 92%)
+            fl_progress = max(0.0, min(1.0, (f - total_frames * 0.50) / (total_frames * 0.42)))
             fl_slice = int(len(blossom_cells) * fl_progress)
             for iy, ix, ch, col in blossom_cells[:fl_slice]:
                 grid[iy][ix] = ch
                 colors[iy][ix] = col
 
-            # 4. Petals drifting (80% -> 100%)
-            pt_progress = max(0.0, min(1.0, (f - total_frames * 0.80) / (total_frames * 0.20)))
+            # 4. Petals drifting (75% -> 100%)
+            pt_progress = max(0.0, min(1.0, (f - total_frames * 0.75) / (total_frames * 0.25)))
             pt_slice = int(len(petal_cells) * pt_progress)
             for iy, ix, ch, col in petal_cells[:pt_slice]:
                 grid[iy][ix] = ch
@@ -5019,34 +5270,40 @@ def builtin_bonsai(extra_args: Optional[List[str]] = None):
             sys.stdout.write(f"\033[{height + 1}A\r")
             for r in range(height):
                 row = "".join(colors[r][c] + grid[r][c] for c in range(width))
-                sys.stdout.write("   " + row + f"{rst}\033[K\n")
+                sys.stdout.write("  " + row + f"{rst}\033[K\n")
 
             bar_len = 26
             filled = int((pct / 100.0) * bar_len)
-            bar_str = f"{c4}{'█' * filled}{dim}{'░' * (bar_len - filled)}{rst}"
+            bar_str = f"{accent_col}{'█' * filled}{dim}{'░' * (bar_len - filled)}{rst}"
+
+            # Format remaining time
+            rem_m, rem_s = divmod(int(rem_sec), 60)
+            time_str = f"{rem_m:02d}:{rem_s:02d}" if selected_dur >= 60 else f"{rem_sec:4.1f}s"
 
             if f < total_frames:
-                status_str = f"   🌸 {bld}Blooming:{rst} [{bar_str}] {pct:>3}% • {c4}{rem_sec:3.1f}s remaining{rst} • {fl_slice} blossoms\033[K"
+                status_str = f"   {v_info['icon']} {bld}Living Ambient:{rst} [{bar_str}] {pct:>3}% • {accent_col}{time_str} remaining{rst} • {fl_slice} buds • {dim}[Q] Finish  [Space] Pause{rst}\033[K"
             else:
-                status_str = f"   🌸 {bld}Blooming:{rst} [{bar_str}] 100% • {c4}✔ Bloom Complete!{rst} ({total_blossoms} blossoms in full bloom)\033[K"
+                status_str = f"   {v_info['icon']} {bld}Living Ambient:{rst} [{bar_str}] 100% • {accent_col}✔ Bloom Complete!{rst} ({total_blossoms} nodes in full splendor)\033[K"
 
             sys.stdout.write(status_str + "\n")
             sys.stdout.flush()
+
             time.sleep(frame_delay)
+            f += 1
 
     except KeyboardInterrupt:
-        # Fast-forward to 100%
+        pass
+    finally:
+        # Render 100% full detail
         for iy, ix, ch, col in trunk_cells + branch_cells + blossom_cells + petal_cells:
             grid[iy][ix] = ch
             colors[iy][ix] = col
         sys.stdout.write(f"\033[{height + 1}A\r")
         for r in range(height):
             row = "".join(colors[r][c] + grid[r][c] for c in range(width))
-            sys.stdout.write("   " + row + f"{rst}\033[K\n")
-        bar_str = f"{c4}{'█' * 26}{rst}"
-        sys.stdout.write(f"   🌸 {bld}Blooming:{rst} [{bar_str}] 100% • {c4}✔ Bloom Complete!{rst} ({total_blossoms} blossoms in full bloom)\033[K\n")
-        sys.stdout.flush()
-    finally:
+            sys.stdout.write("  " + row + f"{rst}\033[K\n")
+        bar_str = f"{accent_col}{'█' * 26}{rst}"
+        sys.stdout.write(f"   {v_info['icon']} {bld}Living Ambient:{rst} [{bar_str}] 100% • {accent_col}✔ Bloom Complete!{rst} ({total_blossoms} nodes in full splendor)\033[K\n")
         sys.stdout.write("\033[?25h")  # Restore cursor
         sys.stdout.flush()
 
