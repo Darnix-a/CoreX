@@ -4821,103 +4821,235 @@ def builtin_type_test():
 
 def builtin_bonsai(extra_args: Optional[List[str]] = None):
     args = extra_args or []
-    cherry = any(a in args for a in ("-c", "--cherry", "--sakura", "cherry", "sakura"))
-    live = any(a in args for a in ("-l", "--live"))
     static = any(a in args for a in ("-s", "--static"))
+    fast = any(a in args for a in ("-f", "--fast"))
+
+    duration = 1.0 if fast else 2.5
+    for i, a in enumerate(args):
+        if a in ("-t", "--time") and i + 1 < len(args):
+            try:
+                duration = max(0.5, float(args[i + 1]))
+            except ValueError:
+                pass
 
     is_interactive = sys.stdout.isatty() and not static
 
     cols = shutil.get_terminal_size((80, 24)).columns
-    width = min(64, max(44, cols - 6))
+    width = min(68, max(52, cols - 4))
     height = 20
+    ground_y = height - 1
 
-    grid = [[" " for _ in range(width)] for _ in range(height)]
-    color_grid = [["" for _ in range(width)] for _ in range(height)]
-
-    c_wood1 = "\033[38;2;180;120;70m"
-    c_wood2 = "\033[38;2;140;90;50m"
-    if cherry:
-        leaf_colors = ["\033[38;2;245;194;231m", "\033[38;2;243;139;168m", "\033[38;2;250;210;230m"]
-        leaf_chars = ["&", "@", "*", "%", "o"]
-    else:
-        leaf_colors = ["\033[38;2;166;227;161m", "\033[38;2;130;200;120m", "\033[38;2;90;160;80m"]
-        leaf_chars = ["&", "%", "@", "*", "#"]
-
-    c_pot = "\033[38;2;203;166;247m"
-    c_pot_base = "\033[38;2;147;153;178m"
+    c1 = "\033[38;2;137;180;250m"  # Blue
+    c2 = "\033[38;2;180;190;254m"  # Lavender
+    c3 = "\033[38;2;203;166;247m"  # Mauve
+    c4 = "\033[38;2;245;194;231m"  # Sakura Pink
+    c_rose = "\033[38;2;243;139;168m"
+    c_white = "\033[38;2;255;240;245m"
+    c_green = "\033[38;2;166;227;161m"
+    c_trunk = "\033[38;2;160;105;60m"
+    c_branch = "\033[38;2;190;130;75m"
+    c_twig = "\033[38;2;215;160;100m"
+    c_ground = "\033[38;2;147;153;178m"
     rst = "\033[0m"
+    dim = "\033[2m"
+    bld = "\033[1m"
 
-    pot_cx = width // 2
-    tag = "COREX-SAKURA" if cherry else "COREX-ZEN"
-    pot_w = 27
-    pad_l = (pot_w - len(tag)) // 2
-    pad_r = pot_w - len(tag) - pad_l
-    inner = " " * pad_l + tag + " " * pad_r
+    # Pre-generate entire tree structure
+    trunk_x = width // 2 + random.randint(-2, 2)
+    trunk_y = ground_y - 1
 
-    pot_lines = [
-        ("╭" + "─" * pot_w + "╮", c_pot),
-        ("│" + inner + "│", c_pot),
-        ("╰─┬" + "─" * (pot_w - 4) + "┬─╯", c_pot_base)
+    trunk_cells = []
+    branch_cells = []
+    blossom_cells = []
+    petal_cells = []
+
+    # 1. Trunk
+    cx, cy = float(trunk_x), float(trunk_y)
+    dx, dy = random.uniform(-0.12, 0.12), -1.0
+    for _ in range(7):
+        ix, iy = int(round(cx)), int(round(cy))
+        if 0 <= iy < ground_y and 1 <= ix < width - 1:
+            ch = "/" if dx < -0.3 else ("\\" if dx > 0.3 else "|")
+            trunk_cells.append((iy, ix, ch, c_trunk))
+            trunk_cells.append((iy, ix + 1, ch, c_trunk))
+        cx += dx + random.uniform(-0.15, 0.15)
+        cy += dy
+
+    # 2. Main & secondary branches
+    branch_queue = [
+        (cx - 1, cy, -0.9, -0.7, 8, 2, 1),
+        (cx + 1, cy, 0.9, -0.7, 8, 2, 1),
+        (cx, cy - 1, random.uniform(-0.3, 0.3), -0.8, 6, 1, 1),
     ]
 
-    for r_idx, (pline, pcolor) in enumerate(pot_lines):
-        r = height - 3 + r_idx
-        start_c = pot_cx - len(pline) // 2
-        for i, ch in enumerate(pline):
-            if 0 <= start_c + i < width:
-                grid[r][start_c + i] = ch
-                color_grid[r][start_c + i] = pcolor
+    endpoints = []
+    while branch_queue:
+        bx, by, bdx, bdy, blen, bthick, bdepth = branch_queue.pop(0)
+        cur_x, cur_y = float(bx), float(by)
+        bcol = c_branch if bdepth == 1 else c_twig
+        for _ in range(blen):
+            ix, iy = int(round(cur_x)), int(round(cur_y))
+            if 0 <= iy < ground_y and 1 <= ix < width - 1:
+                ch = "/" if bdx < -0.3 else ("\\" if bdx > 0.3 else "|")
+                branch_cells.append((iy, ix, ch, bcol))
+                if bthick > 1 and ix + 1 < width - 1:
+                    branch_cells.append((iy, ix + 1, ch, bcol))
+            cur_x += bdx + random.uniform(-0.2, 0.2)
+            cur_y += bdy + random.uniform(-0.1, 0.05)
+        ex, ey = int(round(cur_x)), int(round(cur_y))
+        endpoints.append((ex, ey, bdepth))
+        if bdepth < 3:
+            for i in range(2):
+                angle = -1.0 if i == 0 else 1.0
+                ndx = angle * random.uniform(0.6, 1.2) + bdx * 0.2
+                ndy = random.uniform(-0.7, -0.3)
+                nlen = max(3, int(blen * 0.75))
+                branch_queue.append((ex, ey, ndx, ndy, nlen, max(1, bthick - 1), bdepth + 1))
 
-    branch_tips = []
+    # 3. Blossoms
+    seen_blossoms = set()
+    for ex, ey, bdepth in endpoints:
+        if bdepth >= 2:
+            r = random.randint(2, 4)
+            for dy in range(-r, r + 1):
+                for dx in range(-r * 2, r * 2 + 1):
+                    if (dx / (r * 2.0)) ** 2 + (dy / float(r)) ** 2 <= 1.0:
+                        gx, gy = ex + dx, ey + dy
+                        if 0 <= gy < ground_y and 1 <= gx < width - 1:
+                            if (gy, gx) not in seen_blossoms:
+                                seen_blossoms.add((gy, gx))
+                                c = random.choices([c4, c_rose, c_white, c_green], weights=[48, 32, 15, 5])[0]
+                                glyph = random.choice(["✿", "*", "@", "%", "o"])
+                                blossom_cells.append((gy, gx, glyph, c))
+    random.shuffle(blossom_cells)
 
-    def grow_branch(x, y, dx, dy, life, thickness):
-        cx, cy = float(x), float(y)
-        for _ in range(life):
-            ix, iy = int(round(cx)), int(round(cy))
-            if 0 <= iy < height - 3 and 0 <= ix < width:
-                char = "/" if dx < -0.3 else ("\\" if dx > 0.3 else "|")
-                col = c_wood1 if random.random() > 0.35 else c_wood2
-                grid[iy][ix] = char
-                color_grid[iy][ix] = col
-                if thickness > 1 and 0 <= ix + 1 < width:
-                    grid[iy][ix + 1] = char
-                    color_grid[iy][ix + 1] = col
+    # 4. Falling petals
+    for _ in range(18):
+        px = random.randint(trunk_x - 24, trunk_x + 24)
+        py = random.randint(ground_y // 2, ground_y - 1)
+        if 0 <= py < ground_y and 1 <= px < width - 1:
+            petal_cells.append((py, px, random.choice([".", "·", "*", "o"]), random.choice([c4, c_rose])))
 
-            cx += dx + random.uniform(-0.35, 0.35)
-            cy += dy + random.uniform(-0.15, 0.05)
+    # Base grid
+    grid = [[" " for _ in range(width)] for _ in range(height)]
+    colors = [["" for _ in range(width)] for _ in range(height)]
 
-            if life > 3 and random.random() < 0.28:
-                branch_tips.append((int(round(cx)), int(round(cy))))
-                new_dx = -dx * random.uniform(0.6, 1.3) if abs(dx) > 0.2 else random.choice([-0.8, 0.8])
-                grow_branch(cx, cy, new_dx, dy * 0.75, life // 2, max(1, thickness - 1))
+    # Ground Zen border
+    garden_tag = "───[ ✿ COREX SAKURA ZEN GARDEN ✿ ]───"
+    pad_total = max(0, width - len(garden_tag) - 2)
+    p_left = pad_total // 2
+    p_right = pad_total - p_left
+    border_line = "─" * p_left + garden_tag + "─" * p_right
+    for i, ch in enumerate(border_line[:width]):
+        grid[ground_y][i] = ch
+        colors[ground_y][i] = c_ground
 
-        branch_tips.append((int(round(cx)), int(round(cy))))
+    def _print_header():
+        print(f"   {c1}   ______                     _  __{rst}")
+        print(f"   {c1}  / ____/____   _____ ___     | |/ /{rst}")
+        print(f"   {c2} / /    / __ \\ / ___// _ \\    |   / {rst}")
+        print(f"   {c2}/ /___ / /_/ // /   /  __/   /   |  {rst}")
+        print(f"   {c3}\\____/ \\____//_/    \\___/   /_/|_|  {c4}v3.0 • SAKURA ZEN GARDEN{rst}")
+        print(f"   {dim}──────────────────────────────────────────────────────────────────{rst}")
 
-    grow_branch(pot_cx, height - 4, random.uniform(-0.25, 0.25), -0.9, 13, 2)
-    side = random.choice([-1, 1])
-    grow_branch(pot_cx + side, height - 6, side * random.uniform(0.6, 0.9), -0.6, 8, 1)
+    total_blossoms = len(blossom_cells)
 
-    for bx, by in branch_tips:
-        radius = random.randint(2, 4)
-        for dy in range(-radius + 1, radius):
-            for dx in range(-radius * 2, radius * 2 + 1):
-                if (dx / (radius * 2.0)) ** 2 + (dy / float(radius)) ** 2 <= 1.0:
-                    gx, gy = bx + dx, by + dy
-                    if 0 <= gy < height - 3 and 0 <= gx < width:
-                        if grid[gy][gx] == " " or random.random() < 0.35:
-                            grid[gy][gx] = random.choice(leaf_chars)
-                            color_grid[gy][gx] = random.choice(leaf_colors)
-
-    print()
-    if is_interactive and live:
+    if not is_interactive:
+        # Static direct output
+        _print_header()
+        for iy, ix, ch, col in trunk_cells + branch_cells + blossom_cells + petal_cells:
+            grid[iy][ix] = ch
+            colors[iy][ix] = col
         for r in range(height):
-            row_str = "".join(color_grid[r][c] + grid[r][c] for c in range(width))
-            print("  " + row_str + rst)
-            time.sleep(0.04)
-    else:
+            row = "".join(colors[r][c] + grid[r][c] for c in range(width))
+            print("   " + row + rst)
+        bar = f"{c4}{'█' * 26}{rst}"
+        print(f"\n   🌸 {bld}Sakura:{rst} [{bar}] 100% • {c4}✔ Bloom Complete!{rst} ({total_blossoms} blossoms in full bloom)\n")
+        return
+
+    # Live animation with countdown
+    total_frames = 40
+    frame_delay = duration / total_frames
+
+    _print_header()
+    # Print initial blank canvas + status
+    for r in range(height):
+        row = "".join(colors[r][c] + grid[r][c] for c in range(width))
+        print("   " + row + rst)
+    print("   🌸 Initializing sakura seeds...\033[K")
+
+    sys.stdout.write("\033[?25l")  # Hide cursor
+    sys.stdout.flush()
+
+    try:
+        t_start = time.time()
+        for f in range(1, total_frames + 1):
+            pct = int((f / total_frames) * 100)
+            elapsed = time.time() - t_start
+            rem_sec = max(0.0, duration - elapsed)
+
+            # 1. Trunk growth (0% -> 25%)
+            t_slice = int(len(trunk_cells) * min(1.0, f / (total_frames * 0.25)))
+            for iy, ix, ch, col in trunk_cells[:t_slice]:
+                grid[iy][ix] = ch
+                colors[iy][ix] = col
+
+            # 2. Branching growth (20% -> 60%)
+            b_progress = max(0.0, min(1.0, (f - total_frames * 0.20) / (total_frames * 0.40)))
+            b_slice = int(len(branch_cells) * b_progress)
+            for iy, ix, ch, col in branch_cells[:b_slice]:
+                grid[iy][ix] = ch
+                colors[iy][ix] = col
+
+            # 3. Blossoms budding (50% -> 90%)
+            fl_progress = max(0.0, min(1.0, (f - total_frames * 0.50) / (total_frames * 0.40)))
+            fl_slice = int(len(blossom_cells) * fl_progress)
+            for iy, ix, ch, col in blossom_cells[:fl_slice]:
+                grid[iy][ix] = ch
+                colors[iy][ix] = col
+
+            # 4. Petals drifting (80% -> 100%)
+            pt_progress = max(0.0, min(1.0, (f - total_frames * 0.80) / (total_frames * 0.20)))
+            pt_slice = int(len(petal_cells) * pt_progress)
+            for iy, ix, ch, col in petal_cells[:pt_slice]:
+                grid[iy][ix] = ch
+                colors[iy][ix] = col
+
+            # Redraw in place
+            sys.stdout.write(f"\033[{height + 1}A\r")
+            for r in range(height):
+                row = "".join(colors[r][c] + grid[r][c] for c in range(width))
+                sys.stdout.write("   " + row + f"{rst}\033[K\n")
+
+            bar_len = 26
+            filled = int((pct / 100.0) * bar_len)
+            bar_str = f"{c4}{'█' * filled}{dim}{'░' * (bar_len - filled)}{rst}"
+
+            if f < total_frames:
+                status_str = f"   🌸 {bld}Blooming:{rst} [{bar_str}] {pct:>3}% • {c4}{rem_sec:3.1f}s remaining{rst} • {fl_slice} blossoms\033[K"
+            else:
+                status_str = f"   🌸 {bld}Blooming:{rst} [{bar_str}] 100% • {c4}✔ Bloom Complete!{rst} ({total_blossoms} blossoms in full bloom)\033[K"
+
+            sys.stdout.write(status_str + "\n")
+            sys.stdout.flush()
+            time.sleep(frame_delay)
+
+    except KeyboardInterrupt:
+        # Fast-forward to 100%
+        for iy, ix, ch, col in trunk_cells + branch_cells + blossom_cells + petal_cells:
+            grid[iy][ix] = ch
+            colors[iy][ix] = col
+        sys.stdout.write(f"\033[{height + 1}A\r")
         for r in range(height):
-            row_str = "".join(color_grid[r][c] + grid[r][c] for c in range(width))
-            print("  " + row_str + rst)
+            row = "".join(colors[r][c] + grid[r][c] for c in range(width))
+            sys.stdout.write("   " + row + f"{rst}\033[K\n")
+        bar_str = f"{c4}{'█' * 26}{rst}"
+        sys.stdout.write(f"   🌸 {bld}Blooming:{rst} [{bar_str}] 100% • {c4}✔ Bloom Complete!{rst} ({total_blossoms} blossoms in full bloom)\033[K\n")
+        sys.stdout.flush()
+    finally:
+        sys.stdout.write("\033[?25h")  # Restore cursor
+        sys.stdout.flush()
+
     print()
 
 
