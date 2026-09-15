@@ -8,6 +8,7 @@ Nvidia GPU, BTRFS/Snapper, Dev & AI workflows).
 
 import json
 import os
+import random
 import re
 import shutil
 import signal
@@ -4818,6 +4819,527 @@ def builtin_type_test():
     curses.wrapper(_type_test_tui)
 
 
+def builtin_bonsai(extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    cherry = any(a in args for a in ("-c", "--cherry", "--sakura", "cherry", "sakura"))
+    live = any(a in args for a in ("-l", "--live"))
+    static = any(a in args for a in ("-s", "--static"))
+
+    is_interactive = sys.stdout.isatty() and not static
+
+    cols = shutil.get_terminal_size((80, 24)).columns
+    width = min(64, max(44, cols - 6))
+    height = 20
+
+    grid = [[" " for _ in range(width)] for _ in range(height)]
+    color_grid = [["" for _ in range(width)] for _ in range(height)]
+
+    c_wood1 = "\033[38;2;180;120;70m"
+    c_wood2 = "\033[38;2;140;90;50m"
+    if cherry:
+        leaf_colors = ["\033[38;2;245;194;231m", "\033[38;2;243;139;168m", "\033[38;2;250;210;230m"]
+        leaf_chars = ["&", "@", "*", "%", "o"]
+    else:
+        leaf_colors = ["\033[38;2;166;227;161m", "\033[38;2;130;200;120m", "\033[38;2;90;160;80m"]
+        leaf_chars = ["&", "%", "@", "*", "#"]
+
+    c_pot = "\033[38;2;203;166;247m"
+    c_pot_base = "\033[38;2;147;153;178m"
+    rst = "\033[0m"
+
+    pot_cx = width // 2
+    tag = "COREX-SAKURA" if cherry else "COREX-ZEN"
+    pot_w = 27
+    pad_l = (pot_w - len(tag)) // 2
+    pad_r = pot_w - len(tag) - pad_l
+    inner = " " * pad_l + tag + " " * pad_r
+
+    pot_lines = [
+        ("╭" + "─" * pot_w + "╮", c_pot),
+        ("│" + inner + "│", c_pot),
+        ("╰─┬" + "─" * (pot_w - 4) + "┬─╯", c_pot_base)
+    ]
+
+    for r_idx, (pline, pcolor) in enumerate(pot_lines):
+        r = height - 3 + r_idx
+        start_c = pot_cx - len(pline) // 2
+        for i, ch in enumerate(pline):
+            if 0 <= start_c + i < width:
+                grid[r][start_c + i] = ch
+                color_grid[r][start_c + i] = pcolor
+
+    branch_tips = []
+
+    def grow_branch(x, y, dx, dy, life, thickness):
+        cx, cy = float(x), float(y)
+        for _ in range(life):
+            ix, iy = int(round(cx)), int(round(cy))
+            if 0 <= iy < height - 3 and 0 <= ix < width:
+                char = "/" if dx < -0.3 else ("\\" if dx > 0.3 else "|")
+                col = c_wood1 if random.random() > 0.35 else c_wood2
+                grid[iy][ix] = char
+                color_grid[iy][ix] = col
+                if thickness > 1 and 0 <= ix + 1 < width:
+                    grid[iy][ix + 1] = char
+                    color_grid[iy][ix + 1] = col
+
+            cx += dx + random.uniform(-0.35, 0.35)
+            cy += dy + random.uniform(-0.15, 0.05)
+
+            if life > 3 and random.random() < 0.28:
+                branch_tips.append((int(round(cx)), int(round(cy))))
+                new_dx = -dx * random.uniform(0.6, 1.3) if abs(dx) > 0.2 else random.choice([-0.8, 0.8])
+                grow_branch(cx, cy, new_dx, dy * 0.75, life // 2, max(1, thickness - 1))
+
+        branch_tips.append((int(round(cx)), int(round(cy))))
+
+    grow_branch(pot_cx, height - 4, random.uniform(-0.25, 0.25), -0.9, 13, 2)
+    side = random.choice([-1, 1])
+    grow_branch(pot_cx + side, height - 6, side * random.uniform(0.6, 0.9), -0.6, 8, 1)
+
+    for bx, by in branch_tips:
+        radius = random.randint(2, 4)
+        for dy in range(-radius + 1, radius):
+            for dx in range(-radius * 2, radius * 2 + 1):
+                if (dx / (radius * 2.0)) ** 2 + (dy / float(radius)) ** 2 <= 1.0:
+                    gx, gy = bx + dx, by + dy
+                    if 0 <= gy < height - 3 and 0 <= gx < width:
+                        if grid[gy][gx] == " " or random.random() < 0.35:
+                            grid[gy][gx] = random.choice(leaf_chars)
+                            color_grid[gy][gx] = random.choice(leaf_colors)
+
+    print()
+    if is_interactive and live:
+        for r in range(height):
+            row_str = "".join(color_grid[r][c] + grid[r][c] for c in range(width))
+            print("  " + row_str + rst)
+            time.sleep(0.04)
+    else:
+        for r in range(height):
+            row_str = "".join(color_grid[r][c] + grid[r][c] for c in range(width))
+            print("  " + row_str + rst)
+    print()
+
+
+def _fmt_bytes(b: float) -> str:
+    for unit in ["B", "KiB", "MiB", "GiB", "TiB"]:
+        if abs(b) < 1024.0:
+            return f"{b:3.1f} {unit}"
+        b /= 1024.0
+    return f"{b:.1f} PiB"
+
+
+def builtin_share(target: Optional[str] = None, extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    all_args = ([target] if target else []) + args
+
+    file_to_upload = None
+    text_content = None
+
+    if not sys.stdin.isatty():
+        try:
+            text_content = sys.stdin.read()
+        except Exception:
+            pass
+
+    if not text_content and all_args:
+        cand = all_args[0]
+        p = Path(cand)
+        if p.is_file():
+            file_to_upload = p
+        else:
+            text_content = " ".join(all_args)
+
+    if not file_to_upload and not text_content:
+        print(f"{Style.RED}✖ Error: No file or text provided to share.{Style.RESET}")
+        print(f"  Usage: cx share <file> | cx share \"text snippet\" | cat file | cx share")
+        return
+
+    print(box_header("COREX EPHEMERAL SECURE SHARE"))
+
+    url = None
+    service_name = None
+    tmp_file = None
+
+    try:
+        if file_to_upload:
+            upload_path = file_to_upload
+            size_str = _fmt_bytes(upload_path.stat().st_size) if hasattr(upload_path.stat(), "st_size") else "N/A"
+            filename = upload_path.name
+        else:
+            tmp_dir = Path("/tmp/corex_share")
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp_file = tmp_dir / f"snippet_{int(time.time())}.txt"
+            tmp_file.write_text(text_content, encoding="utf-8")
+            upload_path = tmp_file
+            size_str = _fmt_bytes(len(text_content.encode("utf-8")))
+            filename = tmp_file.name
+
+        print(f" {Style.BOLD}Target:{Style.RESET}   {filename} ({size_str})")
+        print(f" {Style.BOLD}Status:{Style.RESET}   Uploading...", end="", flush=True)
+
+        try:
+            res = subprocess.run(
+                ["curl", "-s", "-F", f"file=@{upload_path}", "https://temp.sh/upload"],
+                capture_output=True, text=True, timeout=20
+            )
+            if res.returncode == 0 and res.stdout.strip().startswith("http"):
+                url = res.stdout.strip()
+                service_name = "temp.sh"
+        except Exception:
+            pass
+
+        if not url:
+            try:
+                res = subprocess.run(
+                    ["curl", "-s", "-F", "reqtype=fileupload", "-F", f"fileToUpload=@{upload_path}", "https://catbox.moe/user/api.php"],
+                    capture_output=True, text=True, timeout=20
+                )
+                if res.returncode == 0 and res.stdout.strip().startswith("http"):
+                    url = res.stdout.strip()
+                    service_name = "catbox.moe"
+            except Exception:
+                pass
+
+        if not url:
+            print(f"\r {Style.BOLD}Status:{Style.RESET}   {Style.RED}✖ Failed to upload to sharing services.{Style.RESET}")
+            print(box_footer())
+            return
+
+        print(f"\r {Style.BOLD}Status:{Style.RESET}   {Style.GREEN}✔ Upload Successful!{Style.RESET}  (Host: {service_name})")
+        print(f" {Style.BOLD}Link:{Style.RESET}     {Style.CYAN}{Style.BOLD}{url}{Style.RESET}")
+
+        copied = False
+        if shutil.which("wl-copy"):
+            subprocess.run(["wl-copy"], input=url.encode(), check=False)
+            copied = True
+        elif shutil.which("xclip"):
+            subprocess.run(["xclip", "-selection", "clipboard"], input=url.encode(), check=False)
+            copied = True
+        elif shutil.which("xsel"):
+            subprocess.run(["xsel", "-b"], input=url.encode(), check=False)
+            copied = True
+
+        if copied:
+            print(f" {Style.BOLD}Buffer:{Style.RESET}   {Style.GREEN}✔ Copied link to system clipboard!{Style.RESET}")
+        else:
+            print(f" {Style.BOLD}Buffer:{Style.RESET}   {Style.DIM}(Clipboard tool not found: install wl-copy or xclip){Style.RESET}")
+
+    finally:
+        if tmp_file and tmp_file.exists():
+            try:
+                tmp_file.unlink()
+            except Exception:
+                pass
+
+    print(box_footer())
+
+
+def builtin_disks(extra_args: Optional[List[str]] = None):
+    print(box_header("STORAGE & PARTITION TELEMETRY"))
+
+    mounts = []
+    seen_dev_mnts = set()
+
+    try:
+        res = subprocess.run(["df", "-h", "-T", "-P"], capture_output=True, text=True, timeout=3)
+        lines = res.stdout.strip().splitlines()
+        if len(lines) > 1:
+            for line in lines[1:]:
+                parts = line.split()
+                if len(parts) >= 7:
+                    dev, fstype, size, used, avail, use_pct, mnt = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]
+                    if fstype in ("tmpfs", "devtmpfs", "squashfs", "overlay", "efivarfs", "cgroup"):
+                        continue
+                    if not dev.startswith("/dev/"):
+                        continue
+                    # Keep /, /home, /boot, and avoid duplicate subvolumes like /srv, /var/log for the same dev
+                    if dev in seen_dev_mnts and mnt not in ("/", "/home", "/boot") and not mnt.startswith(("/mnt", "/media", "/run/media")):
+                        continue
+                    seen_dev_mnts.add(dev)
+                    mounts.append({
+                        "dev": dev,
+                        "fs": fstype,
+                        "size": size,
+                        "used": used,
+                        "avail": avail,
+                        "pct": int(use_pct.rstrip("%")),
+                        "mnt": mnt
+                    })
+    except Exception as e:
+        log_error(f"Failed to query filesystem stats: {e}")
+        return
+
+    def _mnt_key(m):
+        if m["mnt"] == "/": return 0
+        if m["mnt"] == "/home": return 1
+        if m["mnt"].startswith("/boot"): return 2
+        return 10
+    mounts.sort(key=_mnt_key)
+
+    bar_len = 18
+    print(f" {Style.BOLD}{'MOUNT':<14} {'DEVICE':<16} {'FS':<7} {'SIZE':<8} {'USED':<8} {'AVAIL':<8} {'CAPACITY'}{Style.RESET}")
+    print(f" {Style.DARK_GRAY}{'─' * 76}{Style.RESET}")
+
+    for m in mounts:
+        pct = m["pct"]
+        filled = int((pct / 100.0) * bar_len)
+        empty = bar_len - filled
+
+        if pct >= 85:
+            bar_col = Style.RED
+        elif pct >= 70:
+            bar_col = Style.YELLOW
+        else:
+            bar_col = Style.GREEN
+
+        bar_str = f"{bar_col}{'█' * filled}{Style.DARK_GRAY}{'░' * empty}{Style.RESET}"
+        print(f" {Style.CYAN}{m['mnt']:<14}{Style.RESET} {m['dev']:<16} {m['fs']:<7} {m['size']:<8} {m['used']:<8} {m['avail']:<8} [{bar_str}] {bar_col}{pct:>3}%{Style.RESET}")
+
+    cwd = Path.cwd()
+    print(f"\n {Style.BOLD}Working Directory:{Style.RESET} {Style.CYAN}{cwd}{Style.RESET}")
+    try:
+        cwd_usage = shutil.disk_usage(cwd)
+        cwd_pct = int((cwd_usage.used / cwd_usage.total) * 100)
+        print(f"  {Style.DIM}Partition Capacity: {_fmt_bytes(cwd_usage.used)} used / {_fmt_bytes(cwd_usage.total)} total ({cwd_pct}%){Style.RESET}")
+    except Exception:
+        pass
+
+    try:
+        top_items = []
+        for item in cwd.iterdir():
+            try:
+                if item.is_file() and not item.name.startswith("."):
+                    top_items.append((item.stat().st_size, item.name))
+            except Exception:
+                pass
+        top_items.sort(reverse=True)
+        if top_items:
+            print(f"\n {Style.BOLD}Largest Files In Current Directory:{Style.RESET}")
+            for sz, name in top_items[:5]:
+                print(f"  • {_fmt_bytes(sz):<10} {name}")
+    except Exception:
+        pass
+
+    print(box_footer())
+
+
+def builtin_audio_test(extra_args: Optional[List[str]] = None):
+    import wave, struct, math
+    print(box_header("COREX SPATIAL STEREO AUDIO VERIFICATION"))
+
+    player = None
+    for p in ("pw-play", "paplay", "aplay"):
+        if shutil.which(p):
+            player = p
+            break
+
+    if not player:
+        print(f" {Style.RED}✖ Error: No audio player found (pw-play, paplay, or aplay required).{Style.RESET}")
+        print(box_footer())
+        return
+
+    server = "PipeWire" if shutil.which("pw-cli") else ("PulseAudio" if shutil.which("pactl") else "ALSA")
+    print(f" {Style.BOLD}Audio Subsystem:{Style.RESET} {Style.GREEN}{server}{Style.RESET}  (Engine: {player})")
+
+    sink_info = "Default Stereo Sink"
+    try:
+        res = subprocess.run(["pactl", "get-default-sink"], capture_output=True, text=True, timeout=1.5)
+        if res.returncode == 0 and res.stdout.strip():
+            sink_info = res.stdout.strip()
+    except Exception:
+        pass
+    print(f" {Style.BOLD}Output Device:{Style.RESET}   {Style.CYAN}{sink_info}{Style.RESET}")
+    print(f" {Style.DARK_GRAY}{'─' * 66}{Style.RESET}\n")
+
+    tmp_dir = Path("/tmp/corex_audiotest")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    f_left = tmp_dir / "left.wav"
+    f_right = tmp_dir / "right.wav"
+    f_center = tmp_dir / "center.wav"
+
+    def _create_wav(path, freq, dur=0.55, ch="both"):
+        sr = 44100
+        n_samples = int(sr * dur)
+        with wave.open(str(path), "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(sr)
+            buf = bytearray()
+            for i in range(n_samples):
+                t = float(i) / sr
+                env = 0.5 * (1.0 - math.cos(2.0 * math.pi * i / n_samples))
+                val = int(env * 16000.0 * math.sin(2.0 * math.pi * freq * t))
+                l = val if ch in ("left", "both") else 0
+                r = val if ch in ("right", "both") else 0
+                buf.extend(struct.pack("<hh", l, r))
+            w.writeframes(buf)
+
+    _create_wav(f_left, 440.0, 0.55, "left")
+    _create_wav(f_right, 880.0, 0.55, "right")
+    _create_wav(f_center, 587.33, 0.70, "both")
+
+    try:
+        print(f"  {Style.CYAN}{Style.BOLD}◄◄ [ LEFT CHANNEL: 440 Hz (A4) ]{Style.RESET}                  ", end="", flush=True)
+        subprocess.run([player, str(f_left)], capture_output=True)
+        print(f"{Style.GREEN}✔ OK{Style.RESET}")
+        time.sleep(0.3)
+
+        print(f"                     {Style.MAGENTA}{Style.BOLD}[ RIGHT CHANNEL: 880 Hz (A5) ] ►►{Style.RESET}  ", end="", flush=True)
+        subprocess.run([player, str(f_right)], capture_output=True)
+        print(f"{Style.GREEN}✔ OK{Style.RESET}")
+        time.sleep(0.3)
+
+        print(f"        {Style.YELLOW}{Style.BOLD}◄◄◄ [ STEREO CENTER HARMONIC ] ►►►{Style.RESET}        ", end="", flush=True)
+        subprocess.run([player, str(f_center)], capture_output=True)
+        print(f"{Style.GREEN}✔ OK{Style.RESET}")
+
+        print(f"\n {Style.GREEN}✔ Spatial stereo channel test completed successfully.{Style.RESET}")
+    except Exception as e:
+        print(f"\n {Style.RED}✖ Audio test interrupted: {e}{Style.RESET}")
+    finally:
+        for f in (f_left, f_right, f_center):
+            if f.exists():
+                try: f.unlink()
+                except Exception: pass
+
+    print(box_footer())
+
+
+def builtin_sensors(extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    watch = any(a in args for a in ("-w", "--watch", "watch"))
+
+    def _render_frame():
+        lines = []
+        lines.append(box_header("HARDWARE THERMAL & FAN SENSOR TELEMETRY"))
+
+        cpu_items = []
+        for p in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
+            name = (p / "name").read_text().strip() if (p / "name").exists() else ""
+            if name in ("coretemp", "k10temp", "zenpower", "acpitz"):
+                for f in sorted(p.glob("temp*_input")):
+                    idx = f.name.replace("temp", "").replace("_input", "")
+                    lbl_file = p / f"temp{idx}_label"
+                    lbl = lbl_file.read_text().strip() if lbl_file.exists() else f"Sensor {idx}"
+                    try:
+                        val = int(f.read_text().strip()) / 1000.0
+                        cpu_items.append((lbl, val))
+                    except Exception:
+                        pass
+
+        if cpu_items:
+            lines.append(f" {Style.BOLD}CPU Thermal Zones:{Style.RESET}")
+            for lbl, temp in cpu_items[:10]:
+                col = Style.RED if temp >= 80 else (Style.YELLOW if temp >= 60 else Style.GREEN)
+                bar = "█" * int(temp / 5)
+                lines.append(f"  • {lbl:<16} {col}{temp:>5.1f}°C{Style.RESET}  {col}{bar:<20}{Style.RESET}")
+
+        if shutil.which("nvidia-smi"):
+            try:
+                res = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=name,temperature.gpu,fan.speed,power.draw,utilization.gpu", "--format=csv,noheader,nounits"],
+                    capture_output=True, text=True, timeout=1.5
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    parts = [p.strip() for p in res.stdout.strip().split(",")]
+                    if len(parts) >= 5:
+                        g_name, g_temp, g_fan, g_pow, g_util = parts[0], float(parts[1]), parts[2], parts[3], parts[4]
+                        lines.append(f"\n {Style.BOLD}GPU Telemetry ({g_name}):{Style.RESET}")
+                        col = Style.RED if g_temp >= 80 else (Style.YELLOW if g_temp >= 60 else Style.GREEN)
+                        fan_str = f"{g_fan}%" if g_fan != "[Not Supported]" and g_fan != "N/A" else "Passive/Auto"
+                        lines.append(f"  • Temperature:    {col}{g_temp:.1f}°C{Style.RESET}")
+                        lines.append(f"  • Fan Speed:      {Style.CYAN}{fan_str}{Style.RESET}")
+                        lines.append(f"  • Power Draw:     {Style.YELLOW}{g_pow} W{Style.RESET}")
+                        lines.append(f"  • Core Load:      {Style.CYAN}{g_util}%{Style.RESET}")
+            except Exception:
+                pass
+
+        nvme_items = []
+        for p in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
+            name = (p / "name").read_text().strip() if (p / "name").exists() else ""
+            if "nvme" in name:
+                for f in sorted(p.glob("temp*_input")):
+                    idx = f.name.replace("temp", "").replace("_input", "")
+                    lbl_file = p / f"temp{idx}_label"
+                    lbl = lbl_file.read_text().strip() if lbl_file.exists() else f"Sensor {idx}"
+                    try:
+                        val = int(f.read_text().strip()) / 1000.0
+                        nvme_items.append((lbl, val))
+                    except Exception:
+                        pass
+
+        if nvme_items:
+            lines.append(f"\n {Style.BOLD}NVMe Solid-State Storage:{Style.RESET}")
+            for lbl, temp in nvme_items[:4]:
+                col = Style.RED if temp >= 70 else (Style.YELLOW if temp >= 50 else Style.GREEN)
+                lines.append(f"  • {lbl:<16} {col}{temp:>5.1f}°C{Style.RESET}")
+
+        if watch:
+            lines.append(f"\n {Style.DIM}Live polling every 1.5s. Press Ctrl+C to exit.{Style.RESET}")
+        lines.append(box_footer())
+        return "\n".join(lines)
+
+    if not watch:
+        print(_render_frame())
+    else:
+        try:
+            while True:
+                print("\033[H\033[J" + _render_frame(), end="", flush=True)
+                time.sleep(1.5)
+        except KeyboardInterrupt:
+            print(f"\n{Style.RESET}")
+
+
+def builtin_colors(extra_args: Optional[List[str]] = None):
+    print(box_header("TERMINAL COLOR PALETTE & GLYPH CAPABILITY"))
+
+    print(f" {Style.BOLD}Standard & High-Intensity ANSI Colors (0-15):{Style.RESET}")
+    for row in [range(0, 8), range(8, 16)]:
+        row_blocks = []
+        for c in row:
+            fg = "\033[30m" if c in (7, 10, 11, 14, 15) else "\033[37m"
+            row_blocks.append(f"\033[48;5;{c}m{fg} {c:>2} \033[0m")
+        print("  " + " ".join(row_blocks))
+
+    print(f"\n {Style.BOLD}256-Color Palette Grid (6x6x6 Cube):{Style.RESET}")
+    for r in range(6):
+        line = ""
+        for g in range(6):
+            for b in range(6):
+                idx = 16 + (r * 36) + (g * 6) + b
+                line += f"\033[48;5;{idx}m  \033[0m"
+            line += " "
+        print("  " + line)
+
+    print(f"\n {Style.BOLD}Grayscale Gradient Ramp (232-255):{Style.RESET}")
+    gray_line = "".join([f"\033[48;5;{c}m \033[0m" for c in range(232, 256)])
+    print("  " + gray_line * 2)
+
+    print(f"\n {Style.BOLD}24-bit TrueColor RGB Spectrum (Direct 24-bit Canvas):{Style.RESET}")
+    rainbow = ""
+    for i in range(54):
+        h = (i / 54.0) * 6
+        x = int(255 * (1 - abs(h % 2 - 1)))
+        if h < 1: r, g, b = 255, x, 0
+        elif h < 2: r, g, b = x, 255, 0
+        elif h < 3: r, g, b = 0, 255, x
+        elif h < 4: r, g, b = 0, x, 255
+        elif h < 5: r, g, b = x, 0, 255
+        else: r, g, b = 255, 0, x
+        rainbow += f"\033[48;2;{r};{g};{b}m \033[0m"
+    print("  " + rainbow)
+
+    print(f"\n {Style.BOLD}Font Glyph & Box-Drawing Render Test:{Style.RESET}")
+    print(f"  • Box curves:    ╭───┬───╮  ┌───┬───┐  ╔═══╦═══╗")
+    print(f"  • Box joints:    ├───┼───┤  ├───┼───┤  ╠═══╬═══╣")
+    print(f"  • Box corners:   ╰───┴───╯  └───┴───┘  ╚═══╩═══╝")
+    print(f"  • Block shaders: █ ▓ ▒ ░  and circles: ● ◕ ◐ ◔ ○")
+    print(f"  • Symbols:       ⚡ ✔ ✖ ★ ◈ ▲ ▼ ➜ λ ❄ ✿")
+
+    print(box_footer())
+
+
 # --- PHASE 3 BUILT-IN POWER UTILITIES ---
 def builtin_irq_top():
     print(box_header("HARDWARE & SOFTWARE INTERRUPTS (TOP IRQs)"))
@@ -5114,7 +5636,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
         "url-short", "ask", "models", "now-playing", "song", "np", "speedtest", "speed-check",
-        "sys-update", "update", "fetch", "type-test", "typing", "snake", "quote", "zen", "clock", "matrix", "cmatrix"
+        "sys-update", "update", "fetch", "type-test", "typing", "snake", "quote", "zen", "clock", "matrix", "cmatrix",
+        "bonsai", "tree", "share", "upload", "paste", "disks", "disk", "df", "audio-test", "sound-test", "sensors", "thermals", "colors", "palette", "colortest"
     }
 
     for cid, spec in cfg.commands.items():
@@ -6215,6 +6738,18 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_clock()
     elif name in ("matrix", "cmatrix"):
         builtin_matrix(extra_args=args)
+    elif name in ("bonsai", "tree"):
+        builtin_bonsai(extra_args=args)
+    elif name in ("share", "upload", "paste"):
+        builtin_share(target=args[0] if args else None, extra_args=args[1:] if len(args) > 1 else [])
+    elif name in ("disks", "disk", "df"):
+        builtin_disks(extra_args=args)
+    elif name in ("audio-test", "sound-test"):
+        builtin_audio_test(extra_args=args)
+    elif name in ("sensors", "thermals"):
+        builtin_sensors(extra_args=args)
+    elif name in ("colors", "palette", "colortest"):
+        builtin_colors(extra_args=args)
     elif name == "irq-top":
         builtin_irq_top()
     elif name == "oom-score":
@@ -6517,6 +7052,51 @@ def main():
             print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx matrix")
         else:
             builtin_matrix(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("bonsai", "tree"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx bonsai")
+        else:
+            builtin_bonsai(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("share", "upload", "paste"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx share")
+        else:
+            combined_args = (parsed.args or []) + unknown
+            target = combined_args[0] if combined_args else None
+            extra = combined_args[1:] if len(combined_args) > 1 else []
+            builtin_share(target=target, extra_args=extra)
+        sys.exit(0)
+
+    if parsed.command in ("disks", "disk", "df"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx disks")
+        else:
+            builtin_disks(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("audio-test", "sound-test"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx audio-test")
+        else:
+            builtin_audio_test(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("sensors", "thermals"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx sensors")
+        else:
+            builtin_sensors(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("colors", "palette", "colortest"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx colors")
+        else:
+            builtin_colors(extra_args=(parsed.args or []) + unknown)
         sys.exit(0)
 
     # Internal preview callback for fzf

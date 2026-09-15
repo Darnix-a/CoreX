@@ -1581,6 +1581,56 @@ requires_sudo = false
 confirm = false
 deps = []
 
+[commands.bonsai]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Procedural ANSI ASCII bonsai tree generator with live growth and sakura modes"
+command = "cx __builtin bonsai"
+preview_cmd = "echo 'Procedural bonsai tree generator: --live for animation, --sakura for cherry blossom'"
+requires_sudo = false
+confirm = false
+deps = []
 
+[commands.share]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Upload file or text snippet to ephemeral sharing service with clipboard link"
+command = "cx __builtin share"
+preview_cmd = "echo 'Ephemeral file & snippet uploader: auto-copies shareable link to system clipboard'"
+requires_sudo = false
+confirm = false
+deps = ["curl"]
 
+[commands.disks]
+category = "Memory, HugePages & Storage Forensics"
+description = "Visual storage dashboard with partition usage bars, mount points, and directory sizes"
+command = "cx __builtin disks"
+preview_cmd = "echo 'Visual disk dashboard: shows partition capacity bars, mount points, and directory sizes'"
+requires_sudo = false
+confirm = false
+deps = ["df"]
 
+[commands.audio-test]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Spatial stereo channel balance and DAC latency verification test"
+command = "cx __builtin audio-test"
+preview_cmd = "echo 'Spatial stereo test: plays isolated Left, Right, and Center audio pulses'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.sensors]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Real-time thermal dashboard for CPU, GPU hotspot, NVMe, and fan speeds"
+command = "cx __builtin sensors"
+preview_cmd = "echo 'Hardware sensors dashboard: CPU, GPU, NVMe temperatures and fan telemetry (--watch for live)'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.colors]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Terminal color capability card with ANSI 16, 256-color cube, and TrueColor RGB gradients"
+command = "cx __builtin colors"
+preview_cmd = "echo 'Terminal color & glyph test card: ANSI 16, 256-color grid, TrueColor RGB, and Unicode fonts'"
+requires_sudo = false
+confirm = false
+deps = []
