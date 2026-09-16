@@ -151,7 +151,17 @@ if [ -d "$HOME/.zsh" ] || command -v zsh >/dev/null 2>&1; then
     echo -e "  [${GREEN}✔${RESET}] Zsh completions written to ${CYAN}${ZSH_COMP_DIR}/_cx${RESET}"
 fi
 
-# 6. Verification Self-Test
+# 6. Desktop Entry Installation
+echo -e "\n${CYAN}λ${RESET} ${BOLD}Installing XDG Desktop Entry...${RESET}"
+APP_DIR="${HOME}/.local/share/applications"
+mkdir -p "$APP_DIR"
+cp "${SCRIPT_DIR}/packaging/corex.desktop" "${APP_DIR}/corex.desktop"
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$APP_DIR" 2>/dev/null || true
+fi
+echo -e "  [${GREEN}✔${RESET}] Desktop entry written to ${CYAN}${APP_DIR}/corex.desktop${RESET}"
+
+# 7. Verification Self-Test
 echo -e "\n${CYAN}λ${RESET} ${BOLD}Verifying Installation...${RESET}"
 INSTALLED_VER=$("${BIN_DIR}/cx" --version)
 CMD_COUNT=$("${BIN_DIR}/cx" --list | wc -l)

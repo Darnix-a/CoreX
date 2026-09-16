@@ -1,0 +1,45 @@
+# Maintainer: Darnix <Darnix-a@users.noreply.github.com>
+pkgname=corex-git
+pkgver=3.2.0.r0
+pkgrel=1
+pkgdesc="Fast modular CLI multitool, terminal launcher and workstation engine"
+arch=('any')
+url="https://github.com/Darnix-a/CoreX"
+license=('MIT')
+depends=('python' 'fzf')
+optdepends=(
+    'mpv: Audio and video streaming actions'
+    'ffmpeg: Media transcoding and recording'
+    'yt-dlp: Media streaming and extraction'
+    'snapper: BTRFS snapshot orchestration'
+    'docker: Container management actions'
+    'playerctl: Media MPRIS playback integration'
+    'wl-clipboard: Wayland clipboard support'
+    'xclip: X11 clipboard support'
+)
+provides=('corex' 'cx')
+conflicts=('corex')
+source=("git+https://github.com/Darnix-a/CoreX.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "${srcdir}/CoreX"
+    printf "3.1.0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+package() {
+    cd "${srcdir}/CoreX"
+    install -Dm755 corex "${pkgdir}/usr/bin/corex"
+    ln -sf corex "${pkgdir}/usr/bin/cx"
+
+    install -Dm644 config.default.toml "${pkgdir}/usr/share/corex/config.default.toml"
+    install -Dm644 packaging/corex.desktop "${pkgdir}/usr/share/applications/corex.desktop"
+
+    # Shell Completions
+    install -Dm644 completions/cx.fish "${pkgdir}/usr/share/fish/vendor_completions.d/cx.fish"
+    install -Dm644 completions/cx.bash "${pkgdir}/usr/share/bash-completion/completions/cx"
+    install -Dm644 completions/_cx "${pkgdir}/usr/share/zsh/site-functions/_cx"
+
+    # Documentation
+    install -Dm644 README.md "${pkgdir}/usr/share/doc/corex/README.md"
+}

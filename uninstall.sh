@@ -110,6 +110,15 @@ if [ -f "${ZSH_COMP_DIR}/_cx" ]; then
     echo -e "  [${GREEN}✔${RESET}] Removed ${CYAN}${ZSH_COMP_DIR}/_cx${RESET}"
 fi
 
+# Desktop Entry
+if [ -f "${HOME}/.local/share/applications/corex.desktop" ]; then
+    rm -f "${HOME}/.local/share/applications/corex.desktop"
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "${HOME}/.local/share/applications" 2>/dev/null || true
+    fi
+    echo -e "  [${GREEN}✔${RESET}] Removed ${CYAN}${HOME}/.local/share/applications/corex.desktop${RESET}"
+fi
+
 echo -e "\n${CYAN}λ${RESET} ${BOLD}Removing Configurations & User Data...${RESET}"
 if [ -d "$CONFIG_DIR" ]; then
     rm -rf "$CONFIG_DIR"

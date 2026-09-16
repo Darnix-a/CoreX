@@ -1634,3 +1634,58 @@ preview_cmd = "echo 'Terminal color & glyph test card: ANSI 16, 256-color grid, 
 requires_sudo = false
 confirm = false
 deps = []
+
+[commands.stats]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Execution telemetry, action frequency profiling & catalog discovery dashboard"
+command = "cx __builtin stats"
+preview_cmd = "echo 'Workstation telemetry: view top executed actions, frequency bars, and recent history'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.find]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Fast CLI cheatsheet search across action names, descriptions, and commands"
+command = "cx __builtin find"
+preview_cmd = "echo 'Fast cheatsheet finder: syntax cx find <query> (e.g. cx find audio, cx find gpu)'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.export]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Export user configuration, pinned favorites, theme and custom actions to JSON"
+command = "cx __builtin export"
+preview_cmd = "echo 'Profile exporter: serializes your preferences, pinned items, and custom commands to JSON'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.import]
+category = "Daily Driver Quality-of-Life & Crypto/Files"
+description = "Restore and synchronize configuration and pinned favorites from a profile JSON"
+command = "cx __builtin import"
+preview_cmd = "echo 'Profile importer: merges custom actions, pinned favorites, and themes from backup JSON'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.integrations]
+category = "Gaming, Hardware & Display Orchestration"
+description = "Display ready-to-paste floating window rules & keybindings for Hyprland, Sway, and i3"
+command = "cx __builtin integrations"
+preview_cmd = "echo 'Window manager integration: displays Hyprland, Sway, i3, and Rofi/Wofi configuration snippets'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.upgrade]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Automated git synchronization, completion refresh, and system doctor audit"
+command = "cx __builtin upgrade"
+preview_cmd = "echo 'Self-updater: checks git remote, pulls updates, updates shell completions & verifies doctor'"
+requires_sudo = false
+confirm = false
+deps = ["git"]
+

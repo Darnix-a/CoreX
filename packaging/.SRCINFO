@@ -1,0 +1,24 @@
+pkgbase = corex-git
+	pkgdesc = Fast modular CLI multitool, terminal launcher and workstation engine
+	pkgver = 3.2.0.r0
+	pkgrel = 1
+	url = https://github.com/Darnix-a/CoreX
+	arch = any
+	license = MIT
+	depends = python
+	depends = fzf
+	optdepends = mpv: Audio and video streaming actions
+	optdepends = ffmpeg: Media transcoding and recording
+	optdepends = yt-dlp: Media streaming and extraction
+	optdepends = snapper: BTRFS snapshot orchestration
+	optdepends = docker: Container management actions
+	optdepends = playerctl: Media MPRIS playback integration
+	optdepends = wl-clipboard: Wayland clipboard support
+	optdepends = xclip: X11 clipboard support
+	provides = corex
+	provides = cx
+	conflicts = corex
+	source = git+https://github.com/Darnix-a/CoreX.git
+	sha256sums = SKIP
+
+pkgname = corex-git

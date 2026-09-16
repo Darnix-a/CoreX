@@ -16,17 +16,24 @@ import socket
 import subprocess
 import sys
 import time
-import urllib.request
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "3.0.0"
+VERSION = "3.2.0"
 CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
 DEFAULT_CONFIG_TEMPLATE = Path(__file__).resolve().parent / "config.default.toml"
+CONFIG_CACHE_FILE = Path.home() / ".cache" / "corex" / "config_cache.pickle"
 NOTES_DIR = Path.home() / ".local" / "share" / "corex" / "notes"
 TODO_FILE = Path.home() / ".local" / "share" / "corex" / "todo.json"
 STATE_FILE = Path.home() / ".local" / "share" / "corex" / "state.json"
+
+
+def invalidate_config_cache():
+    try:
+        if CONFIG_CACHE_FILE.exists():
+            CONFIG_CACHE_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 CATEGORY_TAGS = {
     "AI, CUDA & Deep Learning": "@ai",
@@ -471,6 +478,7 @@ def set_config_theme(theme_name: str, config_path: Optional[Path] = None) -> boo
         new_text = f'[general]\ntheme = "{theme_name}"\n\n' + text
 
     path.write_text(new_text, encoding="utf-8")
+    invalidate_config_cache()
     return True
 
 
@@ -579,7 +587,7 @@ class CoreXConfig:
         self.commands: Dict[str, CommandSpec] = {}
 
 
-def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
+def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) -> CoreXConfig:
     path = custom_path or CONFIG_FILE
     if not path.exists():
         if DEFAULT_CONFIG_TEMPLATE.exists():
@@ -587,6 +595,30 @@ def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
             shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
         else:
             return CoreXConfig()
+
+    # Fast binary cache path (sub-1ms cold starts)
+    if not ignore_cache and custom_path is None and CONFIG_CACHE_FILE.exists():
+        try:
+            import pickle
+            path_stat = path.stat()
+            tmpl_stat = DEFAULT_CONFIG_TEMPLATE.stat() if DEFAULT_CONFIG_TEMPLATE.exists() else None
+            with open(CONFIG_CACHE_FILE, "rb") as cf:
+                cache_meta = pickle.load(cf)
+            if (
+                cache_meta.get("version") == VERSION
+                and cache_meta.get("user_mtime") == path_stat.st_mtime
+                and cache_meta.get("user_size") == path_stat.st_size
+                and (tmpl_stat is None or (
+                    cache_meta.get("tmpl_mtime") == tmpl_stat.st_mtime
+                    and cache_meta.get("tmpl_size") == tmpl_stat.st_size
+                ))
+            ):
+                cached_cfg = cache_meta["cfg"]
+                if cached_cfg.color:
+                    apply_theme(cached_cfg.theme)
+                return cached_cfg
+        except Exception:
+            pass
 
     cfg = CoreXConfig()
     try:
@@ -640,6 +672,27 @@ def load_config(custom_path: Optional[Path] = None) -> CoreXConfig:
                 confirm=bool(cdef.get("confirm", False)),
                 deps=list(cdef.get("deps", [])),
             )
+
+        # Save to fast cache
+        if custom_path is None:
+            try:
+                import pickle
+                CONFIG_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+                path_stat = path.stat()
+                tmpl_stat = DEFAULT_CONFIG_TEMPLATE.stat() if DEFAULT_CONFIG_TEMPLATE.exists() else None
+                cache_meta = {
+                    "version": VERSION,
+                    "user_mtime": path_stat.st_mtime,
+                    "user_size": path_stat.st_size,
+                    "tmpl_mtime": tmpl_stat.st_mtime if tmpl_stat else None,
+                    "tmpl_size": tmpl_stat.st_size if tmpl_stat else None,
+                    "cfg": cfg,
+                }
+                with open(CONFIG_CACHE_FILE, "wb") as cf:
+                    pickle.dump(cache_meta, cf, protocol=pickle.HIGHEST_PROTOCOL)
+            except Exception:
+                pass
+
     except Exception as e:
         log_warn(f"Config parse warning ({path}): {e}")
 
@@ -6111,7 +6164,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
         "url-short", "ask", "models", "now-playing", "song", "np", "speedtest", "speed-check",
         "sys-update", "update", "fetch", "type-test", "typing", "snake", "quote", "zen", "clock", "matrix", "cmatrix",
-        "bonsai", "tree", "share", "upload", "paste", "disks", "disk", "df", "audio-test", "sound-test", "sensors", "thermals", "colors", "palette", "colortest"
+        "bonsai", "tree", "share", "upload", "paste", "disks", "disk", "df", "audio-test", "sound-test", "sensors", "thermals", "colors", "palette", "colortest",
+        "stats", "top", "telemetry", "find", "search", "lookup", "export", "import", "integrations", "wm", "install-desktop", "desktop", "upgrade", "update-self", "self-update"
     }
 
     for cid, spec in cfg.commands.items():
@@ -6295,6 +6349,7 @@ def save_command_to_config(
             new_text = text.rstrip() + "\n\n" + block
 
     path.write_text(new_text, encoding="utf-8")
+    invalidate_config_cache()
     return True
 
 
@@ -6310,6 +6365,7 @@ def remove_command_from_config(cid: str, config_path: Optional[Path] = None) -> 
     new_text = re.sub(pattern, "", text)
     new_text = re.sub(r"\n{3,}", "\n\n", new_text)
     path.write_text(new_text, encoding="utf-8")
+    invalidate_config_cache()
     return True
 
 
@@ -6810,6 +6866,475 @@ def builtin_theme(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
 
 
 # ---------------------------------------------------------------------------
+# WORKSTATION TELEMETRY & STATS
+# ---------------------------------------------------------------------------
+def builtin_stats(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    state = load_user_state()
+
+    if "--reset" in args:
+        state["frequency"] = {}
+        state["last_used"] = {}
+        save_user_state(state)
+        print(f"\n {Style.GREEN}{Style.BOLD}✔ Execution telemetry & statistics have been reset.{Style.RESET}\n")
+        return
+
+    freq = state.get("frequency", {})
+    last_used = state.get("last_used", {})
+    pinned = state.get("pinned", [])
+
+    total_runs = sum(freq.values())
+    unique_run = len([k for k, v in freq.items() if v > 0 and k in cfg.commands])
+    total_catalog = len(cfg.commands)
+
+    c_blue = "\033[38;2;137;180;250m"
+    c_mauve = "\033[38;2;203;166;247m"
+    c_green = "\033[38;2;166;227;161m"
+    c_yellow = "\033[38;2;249;226;175m"
+    c_peach = "\033[38;2;250;179;135m"
+    rst = Style.RESET
+    bld = Style.BOLD
+    dim = Style.DIM
+
+    print(f"\n {c_blue}{bld}╭─ COREX WORKSTATION TELEMETRY & USAGE AUDITOR ───────────────────────╮{rst}")
+    print(f" {c_blue}│{rst} {dim}Execution analytics, frequency profiling and catalog discovery{rst}      {c_blue}│{rst}")
+    print(f" {c_blue}╰─────────────────────────────────────────────────────────────────────╯{rst}\n")
+
+    pct_catalog = (unique_run / max(1, total_catalog)) * 100
+    theme_name = THEMES.get(cfg.theme, {}).get("name", cfg.theme)
+    print(f"  {bld}OVERVIEW METRICS:{rst}")
+    print(f"   • {bld}Total Executions:{rst}       {c_blue}{bld}{total_runs}{rst} runs recorded")
+    print(f"   • {bld}Distinct Actions Used:{rst}  {c_green}{bld}{unique_run}{rst} / {total_catalog} ({pct_catalog:.1f}% catalog coverage)")
+    print(f"   • {bld}Pinned Favorites:{rst}       {c_yellow}{bld}{len(pinned)}{rst} starred actions")
+    print(f"   • {bld}Active Theme Palette:{rst}   {c_mauve}{bld}{theme_name}{rst}")
+
+    if total_runs == 0:
+        print(f"\n  {dim}No command execution telemetry recorded yet.{rst}")
+        print(f"  {dim}As you run actions via 'cx <cmd>' or the interactive menu, usage metrics appear here.{rst}\n")
+        return
+
+    sorted_freq = sorted(
+        [(k, v) for k, v in freq.items() if k in cfg.commands],
+        key=lambda x: x[1],
+        reverse=True
+    )[:10]
+
+    max_count = sorted_freq[0][1] if sorted_freq else 1
+    bar_width = 20
+
+    print(f"\n  {bld}TOP EXECUTED ACTIONS:{rst}")
+    for idx, (cid, count) in enumerate(sorted_freq, 1):
+        spec = cfg.commands.get(cid)
+        desc = spec.description if spec else ""
+        tag = CATEGORY_TAGS.get(spec.category, "@misc") if spec else "@custom"
+        t_col = get_tag_color(tag)
+
+        bar_filled = int((count / max_count) * bar_width)
+        bar_str = f"{c_blue}{'█' * bar_filled}{dim}{'░' * (bar_width - bar_filled)}{rst}"
+        pct_share = (count / total_runs) * 100
+
+        print(f"   {dim}#{idx:<2}{rst} {bld}{cid:<18}{rst} {t_col}{tag:<8}{rst} [{bar_str}] {c_blue}{bld}{count:>3}{rst} {dim}({pct_share:4.1f}%){rst}  {dim}{desc}{rst}")
+
+    cat_counts: Dict[str, int] = {}
+    for cid, count in freq.items():
+        if cid in cfg.commands:
+            spec = cfg.commands[cid]
+            tag = CATEGORY_TAGS.get(spec.category, "@misc")
+            cat_counts[tag] = cat_counts.get(tag, 0) + count
+
+    sorted_cats = sorted(cat_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    if sorted_cats:
+        print(f"\n  {bld}TOP ACTIVE CATEGORIES:{rst}")
+        for tag, c_cnt in sorted_cats:
+            t_col = get_tag_color(tag)
+            c_pct = (c_cnt / total_runs) * 100
+            c_bar_filled = int((c_cnt / total_runs) * bar_width)
+            c_bar = f"{t_col}{'█' * c_bar_filled}{dim}{'░' * (bar_width - c_bar_filled)}{rst}"
+            print(f"   • {t_col}{bld}{tag:<10}{rst} [{c_bar}] {t_col}{bld}{c_cnt:>3}{rst} {dim}({c_pct:4.1f}% of all runs){rst}")
+
+    now_ts = int(time.time())
+    sorted_recent = sorted(
+        [(k, v) for k, v in last_used.items() if k in cfg.commands],
+        key=lambda x: x[1],
+        reverse=True
+    )[:5]
+
+    def _fmt_ago(ts: int) -> str:
+        diff = max(0, now_ts - ts)
+        if diff < 60:
+            return "just now"
+        elif diff < 3600:
+            return f"{diff // 60}m ago"
+        elif diff < 86400:
+            return f"{diff // 3600}h ago"
+        else:
+            return f"{diff // 86400}d ago"
+
+    if sorted_recent:
+        print(f"\n  {bld}RECENTLY RUN ACTIONS:{rst}")
+        for cid, ts in sorted_recent:
+            spec = cfg.commands.get(cid)
+            desc = spec.description if spec else ""
+            tag = CATEGORY_TAGS.get(spec.category, "@misc") if spec else "@custom"
+            t_col = get_tag_color(tag)
+            ago_str = _fmt_ago(ts)
+            print(f"   • {bld}{cid:<18}{rst} {t_col}{tag:<8}{rst} {c_peach}{ago_str:<9}{rst} {dim}{desc}{rst}")
+
+    unused = [cid for cid in cfg.commands.keys() if freq.get(cid, 0) == 0]
+    if unused:
+        import random
+        sample_unused = random.sample(unused, min(3, len(unused)))
+        print(f"\n  {bld}✨ EXPLORE UNUSED ACTIONS:{rst}")
+        for cid in sample_unused:
+            spec = cfg.commands[cid]
+            tag = CATEGORY_TAGS.get(spec.category, "@misc")
+            t_col = get_tag_color(tag)
+            print(f"   • {bld}{cid:<18}{rst} {t_col}{tag:<8}{rst} {dim}{spec.description}{rst}")
+
+    print(f"\n  {dim}Controls: 'cx stats --reset' to clear history  │  'cx pin <action>' to star{rst}\n")
+
+
+# ---------------------------------------------------------------------------
+# DIRECT CHEATSHEET ACTION FINDER
+# ---------------------------------------------------------------------------
+def builtin_find(cfg: CoreXConfig, query: str = "", extra_args: Optional[List[str]] = None):
+    all_terms = ([query] if query else []) + (extra_args or [])
+    clean_query = " ".join(all_terms).strip().lower()
+
+    c_blue = "\033[38;2;137;180;250m"
+    c_mauve = "\033[38;2;203;166;247m"
+    rst = Style.RESET
+    bld = Style.BOLD
+    dim = Style.DIM
+
+    if not clean_query:
+        print(f"\n {Style.YELLOW}Usage:{rst} cx find <term> [e.g. cx find audio, cx find gpu, cx find docker]\n")
+        return
+
+    matches = []
+    for cid, spec in cfg.commands.items():
+        tag = CATEGORY_TAGS.get(spec.category, "@misc")
+        haystack = f"{cid} {tag} {spec.category} {spec.description} {spec.command}".lower()
+        if clean_query in haystack:
+            score = 0
+            if cid == clean_query:
+                score = 100
+            elif cid.startswith(clean_query):
+                score = 80
+            elif clean_query in cid:
+                score = 60
+            elif clean_query in tag.lower():
+                score = 50
+            elif clean_query in spec.description.lower():
+                score = 40
+            else:
+                score = 20
+            matches.append((score, cid, spec, tag))
+
+    for alias, target in COMMAND_ALIASES.items():
+        if clean_query in alias.lower() and target in cfg.commands:
+            spec = cfg.commands[target]
+            tag = CATEGORY_TAGS.get(spec.category, "@misc")
+            matches.append((70, alias, spec, tag))
+
+    seen = {}
+    for score, cid, spec, tag in matches:
+        if cid not in seen or score > seen[cid][0]:
+            seen[cid] = (score, cid, spec, tag)
+
+    ranked = sorted(seen.values(), key=lambda x: x[0], reverse=True)
+
+    print(f"\n {c_blue}{bld}╭─ COREX ACTION FINDER ───────────────────────────────────────────────╮{rst}")
+    print(f" {c_blue}│{rst} Results for query: {c_mauve}{bld}'{clean_query}'{rst} ({len(ranked)} actions found){' ' * max(0, 36 - len(clean_query) - len(str(len(ranked))))}{c_blue}│{rst}")
+    print(f" {c_blue}╰─────────────────────────────────────────────────────────────────────╯{rst}\n")
+
+    if not ranked:
+        print(f"   {dim}No actions matched '{clean_query}'.{rst}")
+        print(f"   {dim}Run 'cx --list' to browse all {len(cfg.commands)} available commands.{rst}\n")
+        return
+
+    for _, cid, spec, tag in ranked[:25]:
+        t_col = get_tag_color(tag)
+        is_alias = cid in COMMAND_ALIASES
+        target_info = f" {dim}(alias for {COMMAND_ALIASES[cid]}){rst}" if is_alias else ""
+        print(f"   • {bld}{cid:<18}{rst}{target_info} {t_col}{tag:<8}{rst} {dim}{spec.description}{rst}")
+        cmd_snippet = spec.command.strip().replace("\n", " ")
+        if len(cmd_snippet) > 70:
+            cmd_snippet = cmd_snippet[:67] + "..."
+        print(f"     {dim}Command:{rst} {Style.GRAY}{cmd_snippet}{rst}")
+
+    if len(ranked) > 25:
+        print(f"\n   {dim}... and {len(ranked) - 25} more actions. Run 'cx' for full interactive fuzzy menu.{rst}")
+
+    print(f"\n   {dim}Tip: Run any action directly with 'cx <action>' or preview with 'cx --dry-run <action>'{rst}\n")
+
+
+# ---------------------------------------------------------------------------
+# PROFILE & DOTFILES SYNCHRONIZATION
+# ---------------------------------------------------------------------------
+def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None):
+    out_path = Path(target_path).expanduser() if target_path else Path.home() / ".local" / "share" / "corex" / f"corex-profile-{int(time.time())}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    state = load_user_state()
+    custom_cmds = {}
+    default_cmd_keys = set()
+    if DEFAULT_CONFIG_TEMPLATE.exists():
+        try:
+            import tomllib
+            with open(DEFAULT_CONFIG_TEMPLATE, "rb") as df:
+                d_data = tomllib.load(df)
+                default_cmd_keys = set(d_data.get("commands", {}).keys())
+        except Exception:
+            pass
+
+    for cid, spec in cfg.commands.items():
+        if cid not in default_cmd_keys:
+            custom_cmds[cid] = {
+                "category": spec.category,
+                "description": spec.description,
+                "command": spec.command,
+                "preview_cmd": spec.preview_cmd,
+                "requires_sudo": spec.requires_sudo,
+                "confirm": spec.confirm,
+                "deps": spec.deps,
+            }
+
+    export_data = {
+        "format": "corex-profile",
+        "version": VERSION,
+        "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "hostname": socket.gethostname(),
+        "theme": cfg.theme,
+        "editor": cfg.editor,
+        "pinned": state.get("pinned", []),
+        "custom_commands": custom_cmds,
+        "total_catalog_count": len(cfg.commands),
+    }
+
+    with open(out_path, "w") as f:
+        json.dump(export_data, f, indent=2)
+
+    c_green = "\033[38;2;166;227;161m"
+    print(f"\n {c_green}{Style.BOLD}✔ CoreX Profile Successfully Exported!{Style.RESET}")
+    print(f"   • Destination: {Style.CYAN}{out_path}{Style.RESET}")
+    print(f"   • Theme:       {Style.BOLD}{cfg.theme}{Style.RESET}")
+    print(f"   • Pinned:      {len(export_data['pinned'])} favorites")
+    print(f"   • Custom Cmds: {len(custom_cmds)} custom actions")
+    print(f"\n   To restore on another machine: {Style.CYAN}cx import {out_path}{Style.RESET}\n")
+
+
+def builtin_import(cfg: CoreXConfig, source_path: Optional[str] = None):
+    if not source_path:
+        log_error("Usage: cx import <path-to-profile.json>")
+        return
+
+    in_path = Path(source_path).expanduser()
+    if not in_path.is_file():
+        log_error(f"Import file not found: {in_path}")
+        return
+
+    try:
+        with open(in_path, "r") as f:
+            data = json.load(f)
+    except Exception as e:
+        log_error(f"Failed to parse profile JSON: {e}")
+        return
+
+    if data.get("format") != "corex-profile":
+        log_error("Invalid profile format. File must be generated by 'cx export'.")
+        return
+
+    bak_path = CONFIG_FILE.parent / f"config.toml.bak.{int(time.time())}"
+    if CONFIG_FILE.exists():
+        shutil.copy(CONFIG_FILE, bak_path)
+
+    imp_theme = data.get("theme")
+    if imp_theme and imp_theme in THEMES:
+        set_config_theme(imp_theme)
+        apply_theme(imp_theme)
+
+    imp_pinned = data.get("pinned", [])
+    if isinstance(imp_pinned, list):
+        state = load_user_state()
+        state["pinned"] = imp_pinned
+        save_user_state(state)
+
+    imp_custom = data.get("custom_commands", {})
+    restored_count = 0
+    if isinstance(imp_custom, dict):
+        for cid, cdef in imp_custom.items():
+            save_command_to_config(
+                cid=cid,
+                category=cdef.get("category", "General"),
+                description=cdef.get("description", ""),
+                command=cdef.get("command", ""),
+                preview_cmd=cdef.get("preview_cmd", ""),
+                requires_sudo=bool(cdef.get("requires_sudo", False)),
+                confirm=bool(cdef.get("confirm", False)),
+                deps=list(cdef.get("deps", []))
+            )
+            restored_count += 1
+
+    invalidate_config_cache()
+
+    c_green = "\033[38;2;166;227;161m"
+    print(f"\n {c_green}{Style.BOLD}✔ CoreX Profile Successfully Imported!{Style.RESET}")
+    print(f"   • Backup created:   {Style.GRAY}{bak_path}{Style.RESET}")
+    print(f"   • Theme applied:    {Style.BOLD}{imp_theme or 'unchanged'}{Style.RESET}")
+    print(f"   • Pinned favorites: {len(imp_pinned)} restored")
+    print(f"   • Custom actions:   {restored_count} added to catalog")
+    print(f"\n   Run {Style.CYAN}cx{Style.RESET} to open your updated menu.\n")
+
+
+# ---------------------------------------------------------------------------
+# DESKTOP & WINDOW MANAGER INTEGRATION
+# ---------------------------------------------------------------------------
+def builtin_install_desktop():
+    desktop_dir = Path.home() / ".local" / "share" / "applications"
+    desktop_dir.mkdir(parents=True, exist_ok=True)
+    target = desktop_dir / "corex.desktop"
+
+    content = """[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CoreX
+GenericName=Terminal Launcher & Workstation Engine
+Comment=Fast modular CLI multitool, terminal launcher and workstation engine
+Exec=cx
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;
+Keywords=launcher;terminal;system;gpu;ai;tools;orchestration;
+StartupNotify=false
+"""
+    target.write_text(content)
+
+    if shutil.which("update-desktop-database"):
+        try:
+            subprocess.run(["update-desktop-database", str(desktop_dir)], capture_output=True, timeout=2)
+        except Exception:
+            pass
+
+    c_green = "\033[38;2;166;227;161m"
+    print(f"\n {c_green}{Style.BOLD}✔ CoreX Desktop Entry Installed!{Style.RESET}")
+    print(f"   • Location: {Style.CYAN}{target}{Style.RESET}")
+    print(f"   • CoreX is now discoverable in Rofi, Wofi, Walker, Fuzzel, KDE, and GNOME application menus.")
+    print(f"   • Run {Style.CYAN}cx integrations{Style.RESET} for Hyprland and Sway floating window rules.\n")
+
+
+def builtin_integrations():
+    c_blue = "\033[38;2;137;180;250m"
+    rst = Style.RESET
+    bld = Style.BOLD
+    dim = Style.DIM
+
+    print(f"\n {c_blue}{bld}╭─ COREX DESKTOP & WINDOW MANAGER INTEGRATIONS ──────────────────────╮{rst}")
+    print(f" {c_blue}│{rst} {dim}Ready-to-paste configurations for Hyprland, Sway, and i3{rst}       {c_blue}│{rst}")
+    print(f" {c_blue}╰─────────────────────────────────────────────────────────────────────╯{rst}\n")
+
+    print(f"  {bld}1. Hyprland Configuration (~/.config/hypr/hyprland.conf):{rst}")
+    print(f"""{Style.CYAN}# Floating launcher window rules for CoreX
+windowrulev2 = float, class:^(corex-launcher)$
+windowrulev2 = size 1020 650, class:^(corex-launcher)$
+windowrulev2 = center, class:^(corex-launcher)$
+windowrulev2 = dimaround, class:^(corex-launcher)$
+
+# Global Hotkey (Mod + Space or Mod + C)
+bind = $mainMod, Space, exec, kitty --class corex-launcher -e cx{rst}
+""")
+
+    print(f"  {bld}2. Sway / i3 Configuration (~/.config/sway/config):{rst}")
+    print(f"""{Style.CYAN}# Floating launcher window rule
+for_window [app_id="corex-launcher"] floating enable, resize set 1020 650, move position center
+bindsym $mod+space exec kitty --class corex-launcher -e cx{rst}
+""")
+
+    print(f"  {bld}3. Rofi / Wofi Custom Action Mode:{rst}")
+    print(f"""{Style.CYAN}# Launch CoreX directly from Rofi:
+rofi -show drun -modi drun,run -display-drun "CoreX"{rst}
+""")
+
+    print(f"  {dim}Tip: Run 'cx install-desktop' to add CoreX to your app launcher menus.{rst}\n")
+
+
+# ---------------------------------------------------------------------------
+# AUTOMATED REPOSITORY UPDATER
+# ---------------------------------------------------------------------------
+def builtin_upgrade(dry_run: bool = False):
+    c_blue = "\033[38;2;137;180;250m"
+    c_green = "\033[38;2;166;227;161m"
+    c_yellow = "\033[38;2;249;226;175m"
+    rst = Style.RESET
+    bld = Style.BOLD
+    dim = Style.DIM
+
+    print(f"\n {c_blue}{bld}╭─ COREX AUTOMATED UPDATER & RELEASE SYNC ───────────────────────────╮{rst}")
+    print(f" {c_blue}│{rst} {dim}Synchronizing source repository, shell completions, and catalog{rst}      {c_blue}│{rst}")
+    print(f" {c_blue}╰─────────────────────────────────────────────────────────────────────╯{rst}\n")
+
+    repo_dir = Path(__file__).resolve().parent
+    is_git = (repo_dir / ".git").is_dir()
+
+    if not is_git:
+        print(f"  {c_yellow}{bld}▲ Notice:{rst} CoreX is installed from package distribution.")
+        print(f"  To update, run your package manager:")
+        print(f"    • Arch / CachyOS: {Style.CYAN}paru -S corex-git{rst} or {Style.CYAN}yay -S corex-git{rst}\n")
+        return
+
+    try:
+        cur_commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, capture_output=True, text=True, check=True).stdout.strip()
+        branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir, capture_output=True, text=True, check=True).stdout.strip()
+    except Exception as e:
+        log_error(f"Git status check failed: {e}")
+        return
+
+    print(f"  • Current Version:  {c_blue}{bld}v{VERSION}{rst} ({cur_commit} on {branch})")
+    print(f"  • Checking remote:  {dim}git fetch origin {branch}...{rst}")
+
+    if dry_run:
+        print(f"\n  {c_yellow}{bld}[DRY-RUN]{rst} Would fetch and fast-forward pull from origin/{branch},")
+        print(f"            rebuild configuration cache, update shell completions, and verify system doctor.\n")
+        return
+
+    try:
+        subprocess.run(["git", "fetch", "origin", branch], cwd=repo_dir, check=True, capture_output=True, timeout=15)
+        behind_count = int(subprocess.run(["git", "rev-list", f"HEAD..origin/{branch}", "--count"], cwd=repo_dir, capture_output=True, text=True, check=True).stdout.strip())
+
+        if behind_count == 0:
+            print(f"\n  {c_green}{bld}✔ CoreX is already on the latest commit!{rst} ({cur_commit})\n")
+            invalidate_config_cache()
+            return
+
+        print(f"  • Updates found:    {c_yellow}{bld}{behind_count} new commit(s) available.{rst}")
+        print(f"  • Pulling changes:  {dim}git pull --ff-only origin {branch}...{rst}")
+        subprocess.run(["git", "pull", "--ff-only", "origin", branch], cwd=repo_dir, capture_output=True, text=True, check=True)
+        new_commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, capture_output=True, text=True, check=True).stdout.strip()
+
+        invalidate_config_cache()
+
+        if (repo_dir / "install.sh").exists():
+            print(f"  • Re-indexing:      {dim}Refreshing shell completions & symlinks...{rst}")
+            try:
+                subprocess.run([str(repo_dir / "install.sh")], capture_output=True, timeout=10)
+            except Exception:
+                pass
+
+        print(f"\n  {c_green}{bld}✔ CoreX successfully updated to commit {new_commit}!{rst}")
+        print(f"  • Doctor check:     {dim}Running verification...{rst}")
+        doc_res = subprocess.run([str(repo_dir / "corex"), "doctor", "--dry-run"], capture_output=True, text=True)
+        if "173 / 173" in doc_res.stdout or "100.0%" in doc_res.stdout:
+            print(f"  • Catalog Status:   {c_green}✔ 100% Operational{rst}\n")
+        else:
+            print(f"  • Catalog Status:   {c_yellow}Review 'cx doctor' for details{rst}\n")
+
+    except subprocess.CalledProcessError as e:
+        log_error(f"Update failed during git command: {e.stderr or e}")
+    except Exception as e:
+        log_error(f"Unexpected error during upgrade: {e}")
+
+
+# ---------------------------------------------------------------------------
 # DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
 def render_preview(cmd_id: str, cfg: CoreXConfig):
@@ -7023,7 +7548,26 @@ def execute_command(
     spec = cfg.commands.get(actual_id)
 
     if not spec:
-        log_error(f"Unknown command '{cmd_id}'. Run 'cx --list' or 'cx --help' for available actions.")
+        import difflib
+        candidates = list(cfg.commands.keys()) + list(COMMAND_ALIASES.keys())
+        matches = difflib.get_close_matches(cmd_id, candidates, n=4, cutoff=0.45)
+        sub_matches = [c for c in candidates if cmd_id in c and c not in matches]
+        all_matches = (matches + sub_matches)[:4]
+
+        log_error(f"Unknown action '{cmd_id}'.")
+        if all_matches:
+            print(f"\n {Style.BOLD}{Style.YELLOW}💡 Did you mean one of these?{Style.RESET}")
+            for m in all_matches:
+                resolved = COMMAND_ALIASES.get(m, m)
+                mspec = cfg.commands.get(resolved)
+                desc = mspec.description if mspec else ""
+                tag = CATEGORY_TAGS.get(mspec.category, "@misc") if mspec else "@custom"
+                t_col = get_tag_color(tag)
+                alias_note = f" {Style.DIM}(alias for {resolved}){Style.RESET}" if m != resolved else ""
+                print(f"    • {Style.BOLD}{Style.CYAN}cx {m}{Style.RESET}{alias_note}  {t_col}{tag:<8}{Style.RESET}  {Style.GRAY}{desc}{Style.RESET}")
+            print()
+        else:
+            print(f"   {Style.DIM}Run 'cx --list' or 'cx find <query>' to browse available actions.{Style.RESET}\n")
         sys.exit(1)
 
     if not dry_run:
@@ -7224,6 +7768,23 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         builtin_sensors(extra_args=args)
     elif name in ("colors", "palette", "colortest"):
         builtin_colors(extra_args=args)
+    elif name in ("stats", "top", "telemetry"):
+        builtin_stats(cfg, extra_args=args)
+    elif name in ("find", "search", "lookup"):
+        q = args[0] if args else ""
+        builtin_find(cfg, query=q, extra_args=args[1:] if len(args) > 1 else [])
+    elif name == "export":
+        target = args[0] if args else None
+        builtin_export(cfg, target_path=target)
+    elif name == "import":
+        src = args[0] if args else None
+        builtin_import(cfg, source_path=src)
+    elif name in ("install-desktop", "desktop"):
+        builtin_install_desktop()
+    elif name in ("integrations", "wm", "hyprland", "sway", "i3"):
+        builtin_integrations()
+    elif name in ("upgrade", "update-self", "self-update"):
+        builtin_upgrade(dry_run=dry_run)
     elif name == "irq-top":
         builtin_irq_top()
     elif name == "oom-score":
@@ -7364,7 +7925,7 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
 
 
 class ParsedArgs:
-    __slots__ = ("command", "args", "help", "version", "dry_run", "bg", "yes", "list", "no_color", "config", "select", "select_raw")
+    __slots__ = ("command", "args", "help", "version", "dry_run", "bg", "yes", "list", "no_color", "no_cache", "config", "select", "select_raw")
 
     def __init__(self):
         self.command: Optional[str] = None
@@ -7376,6 +7937,7 @@ class ParsedArgs:
         self.yes: bool = False
         self.list: bool = False
         self.no_color: bool = False
+        self.no_cache: bool = False
         self.config: Optional[Path] = None
 
 
@@ -7395,6 +7957,8 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
             parsed.bg = True
         elif arg in ("-y", "--yes"):
             parsed.yes = True
+        elif arg in ("--no-cache", "--reload"):
+            parsed.no_cache = True
         elif arg == "--list":
             if parsed.command is not None:
                 parsed.args.append("--list")
@@ -7433,7 +7997,7 @@ def main():
         print(f"CoreX (cx) v{VERSION} - 150+ Action Workstation Engine")
         sys.exit(0)
 
-    cfg = load_config(parsed.config)
+    cfg = load_config(parsed.config, ignore_cache=parsed.no_cache)
 
     if parsed.list:
         for cid, spec in sorted(cfg.commands.items()):
@@ -7646,6 +8210,42 @@ def main():
                 print(f"  {Style.YELLOW}★{Style.RESET} {Style.BOLD}{pid:<18}{Style.RESET} {t_color}{tag:<8}{Style.RESET} {Style.GRAY}{desc}{Style.RESET}")
         sys.exit(0)
 
+    # Workstation Telemetry & Stats
+    if parsed.command in ("stats", "top", "telemetry"):
+        builtin_stats(cfg, extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    # Action Finder / Fast Cheatsheet
+    if parsed.command in ("find", "search", "lookup"):
+        q = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        builtin_find(cfg, query=q, extra_args=(parsed.args[1:] if len(parsed.args) > 1 else []))
+        sys.exit(0)
+
+    # Profile Export & Import
+    if parsed.command == "export":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        builtin_export(cfg, target_path=target)
+        sys.exit(0)
+
+    if parsed.command == "import":
+        src = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        builtin_import(cfg, source_path=src)
+        sys.exit(0)
+
+    # Desktop Entry & Window Manager Integrations
+    if parsed.command in ("install-desktop", "desktop-install"):
+        builtin_install_desktop()
+        sys.exit(0)
+
+    if parsed.command in ("integrations", "wm", "hyprland", "sway", "i3"):
+        builtin_integrations()
+        sys.exit(0)
+
+    # Automated Repository Updater
+    if parsed.command in ("upgrade", "update-self", "self-update"):
+        builtin_upgrade(dry_run=parsed.dry_run)
+        sys.exit(0)
+
     # Internal helper: get raw command string for Ctrl+Y clipboard
     if parsed.command == "__get_cmd":
         target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
@@ -7692,16 +8292,24 @@ def main():
 USAGE:
   cx                              Launch interactive CoreX menu
   cx <command> [args...]          Execute command directly with zero latency
+  cx find <query>                 Fast CLI cheatsheet search across all actions
+  cx stats                        View execution telemetry & usage analytics dashboard
   cx theme [name]                 Switch color theme or open interactive Theme Studio
   cx pin <command>                Pin an action to favorites (starred at top of TUI)
   cx unpin <command>              Remove an action from favorites
   cx pinned                       List all currently pinned favorite actions
+  cx export [file.json]           Export configuration, pinned favorites & notes to JSON
+  cx import <file.json>           Import and restore configuration from profile JSON
+  cx install-desktop              Install XDG desktop entry for Rofi, Wofi, KDE, GNOME
+  cx integrations                 View Hyprland, Sway, and i3 floating window rules
+  cx upgrade                      Synchronize CoreX from git repository and verify doctor
   cx new [name]                   Launch In-App Command Builder wizard
   cx builder                      Open Command Builder & Action Studio menu
   cx edit <command>               Edit an existing action
   cx delete <command>             Delete an action from configuration
   cx --dry-run <command> [args]   Preview command safely
   cx --bg <command> [args...]     Detach command into background systemd user scope
+  cx --no-cache                   Bypass binary configuration cache and reload from disk
   cx --list                       Print all {len(cfg.commands)} registered commands and category tags
 
 TUI HOTKEYS:

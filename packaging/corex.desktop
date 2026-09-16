@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CoreX
+GenericName=Terminal Launcher & Workstation Engine
+Comment=Fast modular CLI multitool, terminal launcher and workstation engine
+Exec=cx
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;
+Keywords=launcher;terminal;system;gpu;ai;tools;orchestration;
+StartupNotify=false
