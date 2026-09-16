@@ -141,28 +141,7 @@ Add CoreX to your application launcher (Rofi, Wofi, Walker, Fuzzel, KDE, GNOME):
 cx install-desktop
 ```
 
-Display ready-to-paste floating window rules and keybindings:
-```bash
-cx integrations
-```
 
-#### Hyprland Setup (`~/.config/hypr/hyprland.conf`):
-```ini
-# Floating launcher window rules for CoreX
-windowrulev2 = float, class:^(corex-launcher)$
-windowrulev2 = size 1020 650, class:^(corex-launcher)$
-windowrulev2 = center, class:^(corex-launcher)$
-windowrulev2 = dimaround, class:^(corex-launcher)$
-
-# Global Hotkey (Mod + Space)
-bind = $mainMod, Space, exec, kitty --class corex-launcher -e cx
-```
-
-#### Sway / i3 Setup (`~/.config/sway/config`):
-```ini
-for_window [app_id="corex-launcher"] floating enable, resize set 1020 650, move position center
-bindsym $mod+space exec kitty --class corex-launcher -e cx
-```
 
 ### 7. Automated Self-Updater
 Keep your CoreX installation synchronized with the latest upstream features:
@@ -171,24 +150,6 @@ cx upgrade                # Pull from git, rebuild completions, refresh cache & 
 cx upgrade --dry-run      # Preview update steps without modifying local files
 ```
 
-### 8. Workstation Toys & Terminal Diversions
-CoreX includes interactive, zero-dependency terminal utilities:
-```bash
-cx bonsai                 # Interactive growing sakura/bonsai tree with duration selection
-cx type-test              # Terminal typing speed and accuracy benchmark (WPM / CPM)
-cx snake                  # Classic retro snake game in pure ANSI
-cx clock                  # Minimalist fullscreen terminal digital clock
-cx matrix                 # Cyberpunk digital rain matrix animation
-cx fetch                  # Clean system fetch with the CoreX ASCII logo
-cx disks                  # Visual disk usage overview with colored percentage meters
-cx sensors                # Real-time hardware thermal dashboard (CPU, GPU, NVMe)
-cx audio-test             # Spatial stereo channel balance and latency test
-cx share <file>           # Ephemeral file/paste upload with automatic clipboard link
-cx quote                  # UNIX philosophy and hacker zen quotes
-cx colors                 # Terminal color test card (ANSI 16, 256 cube, TrueColor)
-```
-
----
 
 ## Configuration & Command Builder
 
@@ -237,17 +198,6 @@ Supported package managers: `pacman` (Arch/CachyOS), `apt` (Debian/Ubuntu), `dnf
 
 ---
 
-## Terminal Demonstrations (VHS)
-
-Generate demonstration GIFs of CoreX using [Charm VHS](https://github.com/charmbracelet/vhs):
-```bash
-cd docs/vhs
-vhs launcher.tape         # Interactive menu walkthrough
-vhs bonsai.tape           # Live growing sakura bonsai simulation
-vhs theme.tape            # Theme studio color switcher
-```
-
----
 
 ## Uninstallation
 
