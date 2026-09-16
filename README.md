@@ -198,6 +198,26 @@ Supported package managers: `pacman` (Arch/CachyOS), `apt` (Debian/Ubuntu), `dnf
 
 ---
 
+## Terminal Demonstrations (VHS)
+
+Recorded with [Charm VHS](https://github.com/charmbracelet/vhs):
+
+<p align="center">
+  <img src="docs/vhs/launcher.gif" alt="CoreX Interactive Launcher Demo" width="800" />
+</p>
+
+| Sakura Zen Garden (`cx bonsai`) | Theme Studio (`cx theme`) |
+|:---:|:---:|
+| <img src="docs/vhs/bonsai.gif" width="420" /> | <img src="docs/vhs/theme.gif" width="420" /> |
+
+To re-record or customize the demo tapes:
+```bash
+vhs docs/vhs/launcher.tape
+vhs docs/vhs/bonsai.tape
+vhs docs/vhs/theme.tape
+```
+
+---
 
 ## Uninstallation
 
