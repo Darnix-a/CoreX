@@ -45,17 +45,22 @@ Type `cx` and instantly launch an interactive `fzf` menu featuring live preview 
 
 ## Installation
 
-### Method 1: Arch Linux / CachyOS (AUR)
+### Method 1: Arch Linux / CachyOS (PKGBUILD / Paru)
 
-CoreX is packaged for Arch-based distributions:
+CoreX includes native Arch packaging files in `packaging/`. You can build and install via `paru` or `makepkg`:
 
 ```bash
-# Using paru:
-paru -S corex-git
+git clone https://github.com/Darnix-a/CoreX.git
+cd CoreX/packaging
 
-# Using yay:
-yay -S corex-git
+# Build & install with paru:
+paru -Bi .
+
+# Or build & install with makepkg:
+makepkg -si
 ```
+
+*(Note: Direct `paru -S corex-git` will be enabled as soon as Arch Linux AUR re-opens new account registrations).*
 
 ### Method 2: One-Line Git Clone (Universal Linux)
 
