@@ -6165,7 +6165,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "url-short", "ask", "models", "now-playing", "song", "np", "speedtest", "speed-check",
         "sys-update", "update", "fetch", "type-test", "typing", "snake", "quote", "zen", "clock", "matrix", "cmatrix",
         "bonsai", "tree", "share", "upload", "paste", "disks", "disk", "df", "audio-test", "sound-test", "sensors", "thermals", "colors", "palette", "colortest",
-        "stats", "top", "telemetry", "find", "search", "lookup", "export", "import", "integrations", "wm", "install-desktop", "desktop", "upgrade", "update-self", "self-update"
+        "stats", "top", "telemetry", "find", "search", "lookup", "export", "import", "integrations", "wm", "install-desktop", "desktop", "upgrade", "update-self", "self-update",
+        "wifi", "wlan", "wifi-manager", "wifi-scan", "proc", "process", "procs", "ps-inspect", "media-info", "mediainfo", "media", "ffprobe-info"
     }
 
     for cid, spec in cfg.commands.items():
@@ -7335,6 +7336,871 @@ def builtin_upgrade(dry_run: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# WI-FI WORKSTATION NETWORK MANAGER & SCANNER
+# ---------------------------------------------------------------------------
+def _parse_wifi_scan() -> List[Dict[str, Any]]:
+    """Scan and parse nearby Wi-Fi access points using nmcli."""
+    res = subprocess.run(
+        ["nmcli", "-t", "-f", "IN-USE,SSID,BSSID,CHAN,FREQ,RATE,SIGNAL,BARS,SECURITY", "dev", "wifi", "list", "--rescan", "auto"],
+        capture_output=True, text=True
+    )
+    networks = []
+    seen = set()
+    for line in res.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = re.split(r'(?<!\\):', line)
+        parts = [p.replace('\\:', ':').strip() for p in parts]
+        if len(parts) >= 9:
+            in_use = (parts[0] == "*")
+            ssid = parts[1] or "<Hidden Network>"
+            bssid = parts[2]
+            chan = parts[3]
+            freq = parts[4]
+            rate = parts[5]
+            signal_pct = parts[6]
+            bars = parts[7]
+            sec = parts[8] if parts[8] else "Open (No Security)"
+            key = (ssid, bssid)
+            if key not in seen:
+                seen.add(key)
+                networks.append({
+                    "in_use": in_use,
+                    "ssid": ssid,
+                    "bssid": bssid,
+                    "chan": chan,
+                    "freq": freq,
+                    "rate": rate,
+                    "signal": signal_pct,
+                    "bars": bars,
+                    "security": sec,
+                })
+    return networks
+
+
+def render_wifi_preview(target_ssid: str, target_bssid: str):
+    """Render detailed Wi-Fi access point diagnostics in fzf preview window."""
+    networks = _parse_wifi_scan()
+    match = None
+    for n in networks:
+        if (target_bssid and n["bssid"].lower() == target_bssid.lower()) or (n["ssid"] == target_ssid):
+            match = n
+            break
+
+    if not match:
+        print(box_header("WI-FI ACCESS POINT DETAILS"))
+        print(f"  {Style.YELLOW}No live telemetry for SSID: {target_ssid}{Style.RESET}")
+        print(box_footer())
+        return
+
+    sig_int = int(match["signal"]) if str(match["signal"]).isdigit() else 0
+    bar_width = 15
+    filled = int(bar_width * (sig_int / 100.0))
+    bar_col = Style.GREEN if sig_int >= 70 else (Style.YELLOW if sig_int >= 40 else Style.RED)
+    bar_str = f"{bar_col}{'█' * filled}{Style.DARK_GRAY}{'░' * (bar_width - filled)}{Style.RESET}"
+
+    saved_cons = subprocess.run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], capture_output=True, text=True).stdout
+    is_saved = any(f"{match['ssid']}:802-11-wireless" in l for l in saved_cons.splitlines())
+
+    print(box_header("WI-FI ACCESS POINT DETAILS"))
+    status_tag = f"{Style.GREEN}{Style.BOLD}● CONNECTED (Active Gateway){Style.RESET}" if match["in_use"] else f"{Style.GRAY}Available for connection{Style.RESET}"
+    saved_tag = f"{Style.CYAN}Yes (Auto-reconnect profile configured){Style.RESET}" if is_saved else f"{Style.DARK_GRAY}No saved credentials{Style.RESET}"
+
+    freq_raw = str(match["freq"])
+    band = "2.4 GHz" if "24" in freq_raw else ("5 GHz" if "5" in freq_raw else ("6 GHz" if "6" in freq_raw else freq_raw))
+
+    print(f"  • {Style.BOLD}SSID Name:{Style.RESET}        {Style.WHITE}{Style.BOLD}{match['ssid']}{Style.RESET}")
+    print(f"  • {Style.BOLD}BSSID (MAC):{Style.RESET}      {Style.CYAN}{match['bssid']}{Style.RESET}")
+    print(f"  • {Style.BOLD}Network State:{Style.RESET}    {status_tag}")
+    print(f"  • {Style.BOLD}Signal Quality:{Style.RESET}   [{bar_str}] {bar_col}{sig_int}%{Style.RESET}  {Style.GRAY}({match['bars']}){Style.RESET}")
+    print(f"  • {Style.BOLD}Frequency Band:{Style.RESET}   {Style.YELLOW}{band}{Style.RESET} {Style.DARK_GRAY}(Channel {match['chan']}, {match['freq']}){Style.RESET}")
+    print(f"  • {Style.BOLD}Max Link Rate:{Style.RESET}    {match['rate']}")
+    print(f"  • {Style.BOLD}Security Type:{Style.RESET}    {Style.PURPLE}{match['security']}{Style.RESET}")
+    print(f"  • {Style.BOLD}Saved Profile:{Style.RESET}    {saved_tag}")
+
+    if match["in_use"]:
+        dev_res = subprocess.run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev"], capture_output=True, text=True).stdout
+        wifi_dev = "wlan0"
+        for l in dev_res.splitlines():
+            if ":wifi:connected" in l:
+                wifi_dev = l.split(":")[0]
+                break
+        ip_out = subprocess.run(["ip", "-4", "addr", "show", wifi_dev], capture_output=True, text=True).stdout
+        ip_addr = ""
+        for il in ip_out.splitlines():
+            if "inet " in il:
+                ip_addr = il.strip().split()[1]
+                break
+        rt_out = subprocess.run(["ip", "route", "show", "dev", wifi_dev], capture_output=True, text=True).stdout
+        gw = ""
+        for rl in rt_out.splitlines():
+            if "default via" in rl:
+                gw = rl.strip().split()[2]
+                break
+        print(f"\n  {Style.BOLD}ACTIVE INTERFACE TELEMETRY ({wifi_dev}):{Style.RESET}")
+        if ip_addr:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} IPv4 Address:   {Style.GREEN}{ip_addr}{Style.RESET}")
+        if gw:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} IPv4 Gateway:   {Style.CYAN}{gw}{Style.RESET}")
+
+    print(box_footer())
+
+
+def builtin_wifi(extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    if not shutil.which("nmcli"):
+        log_error("NetworkManager CLI (nmcli) is required for Wi-Fi management. Install: sudo pacman -S networkmanager")
+        return
+
+    if args and args[0] in ("-h", "--help", "help"):
+        print(box_header("COREX WI-FI WORKSTATION MANAGER"))
+        print(f"""
+ {Style.BOLD}USAGE:{Style.RESET}
+   cx wifi                         Launch interactive fzf Wi-Fi network selector
+   cx wifi -s, --scan              Scan and print clean table of nearby wireless networks
+   cx wifi -i, --status            Display active wireless connection & interface status
+   cx wifi on / off                Toggle wireless radio power
+   cx wifi connect <SSID> [pwd]    Directly connect to SSID (prompts if password missing)
+   cx wifi disconnect              Disconnect active wireless connection
+""")
+        print(box_footer())
+        return
+
+    if args and args[0] in ("on", "enable"):
+        subprocess.run(["nmcli", "radio", "wifi", "on"])
+        log_success("Wireless radio enabled.")
+        return
+
+    if args and args[0] in ("off", "disable"):
+        subprocess.run(["nmcli", "radio", "wifi", "off"])
+        log_warn("Wireless radio disabled.")
+        return
+
+    if args and args[0] in ("disconnect", "down"):
+        dev_res = subprocess.run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev"], capture_output=True, text=True).stdout
+        for l in dev_res.splitlines():
+            if ":wifi:connected" in l:
+                dev = l.split(":")[0]
+                subprocess.run(["nmcli", "dev", "disconnect", dev])
+                log_success(f"Disconnected Wi-Fi interface {dev}.")
+                return
+        log_warn("No active Wi-Fi connection found to disconnect.")
+        return
+
+    if args and args[0] in ("connect", "join"):
+        if len(args) < 2:
+            log_error("Usage: cx wifi connect <SSID> [password]")
+            return
+        target_ssid = args[1]
+        pwd = args[2] if len(args) > 2 else None
+        if not pwd:
+            saved_cons = subprocess.run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], capture_output=True, text=True).stdout
+            is_saved = any(f"{target_ssid}:802-11-wireless" in l for l in saved_cons.splitlines())
+            if not is_saved:
+                import getpass
+                try:
+                    pwd = getpass.getpass(f"Enter WPA/WPA2 password for '{target_ssid}' (leave blank if open): ")
+                except KeyboardInterrupt:
+                    print()
+                    return
+        cmd = ["nmcli", "dev", "wifi", "connect", target_ssid]
+        if pwd:
+            cmd.extend(["password", pwd])
+        print(f" Connecting to {Style.BOLD}{target_ssid}{Style.RESET}...")
+        res = subprocess.run(cmd)
+        if res.returncode == 0:
+            log_success(f"Successfully connected to '{target_ssid}'!")
+        else:
+            log_error(f"Failed to connect to '{target_ssid}'.")
+        return
+
+    if args and args[0] in ("-i", "--status", "status", "info"):
+        print(box_header("ACTIVE WI-FI INTERFACE STATUS"))
+        dev_res = subprocess.run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "dev"], capture_output=True, text=True).stdout
+        wifi_dev = None
+        active_con = None
+        for l in dev_res.splitlines():
+            parts = l.split(":")
+            if len(parts) >= 4 and parts[1] == "wifi":
+                wifi_dev = parts[0]
+                if parts[2] == "connected":
+                    active_con = parts[3]
+                break
+
+        radio_state = subprocess.run(["nmcli", "radio", "wifi"], capture_output=True, text=True).stdout.strip()
+        print(f"  • {Style.BOLD}Radio State:{Style.RESET}      {Style.GREEN if radio_state == 'enabled' else Style.RED}{radio_state.upper()}{Style.RESET}")
+        print(f"  • {Style.BOLD}Wi-Fi Device:{Style.RESET}     {Style.CYAN}{wifi_dev or 'None'}{Style.RESET}")
+
+        if active_con and wifi_dev:
+            print(f"  • {Style.BOLD}Connected SSID:{Style.RESET}   {Style.WHITE}{Style.BOLD}{active_con}{Style.RESET}")
+            active_ap = subprocess.run(["nmcli", "-t", "-f", "ACTIVE,SSID,BSSID,CHAN,FREQ,RATE,SIGNAL,BARS,SECURITY", "dev", "wifi"], capture_output=True, text=True).stdout
+            for al in active_ap.splitlines():
+                if al.startswith("yes:"):
+                    ap_parts = re.split(r'(?<!\\):', al)
+                    ap_parts = [p.replace('\\:', ':').strip() for p in ap_parts]
+                    if len(ap_parts) >= 9:
+                        sig = int(ap_parts[6]) if ap_parts[6].isdigit() else 0
+                        col = Style.GREEN if sig >= 70 else (Style.YELLOW if sig >= 40 else Style.RED)
+                        print(f"  • {Style.BOLD}BSSID (MAC):{Style.RESET}      {Style.CYAN}{ap_parts[2]}{Style.RESET}")
+                        print(f"  • {Style.BOLD}Signal Quality:{Style.RESET}   {col}{sig}%{Style.RESET}  {Style.GRAY}({ap_parts[7]}){Style.RESET}")
+                        print(f"  • {Style.BOLD}Frequency Band:{Style.RESET}   {Style.YELLOW}{ap_parts[4]}{Style.RESET} (Channel {ap_parts[3]})")
+                        print(f"  • {Style.BOLD}Link Bitrate:{Style.RESET}     {ap_parts[5]}")
+                        print(f"  • {Style.BOLD}Security Type:{Style.RESET}    {Style.PURPLE}{ap_parts[8]}{Style.RESET}")
+                    break
+
+            ip_out = subprocess.run(["ip", "-4", "addr", "show", wifi_dev], capture_output=True, text=True).stdout
+            for il in ip_out.splitlines():
+                if "inet " in il:
+                    print(f"  • {Style.BOLD}IPv4 Address:{Style.RESET}     {Style.GREEN}{il.strip().split()[1]}{Style.RESET}")
+                    break
+            rt_out = subprocess.run(["ip", "route", "show", "dev", wifi_dev], capture_output=True, text=True).stdout
+            for rl in rt_out.splitlines():
+                if "default via" in rl:
+                    print(f"  • {Style.BOLD}IPv4 Gateway:{Style.RESET}     {Style.CYAN}{rl.strip().split()[2]}{Style.RESET}")
+                    break
+        else:
+            print(f"  • {Style.BOLD}Connection State:{Style.RESET} {Style.YELLOW}Disconnected{Style.RESET}")
+        print(box_footer())
+        return
+
+    if args and args[0] in ("-s", "--scan", "scan", "list"):
+        print(box_header("NEARBY WI-FI ACCESS POINTS"))
+        print(f" Scanning surrounding wireless spectrum...\n")
+        networks = _parse_wifi_scan()
+        if not networks:
+            print(f"  {Style.YELLOW}No wireless networks detected.{Style.RESET}")
+            print(box_footer())
+            return
+        print(f" {'':<2} {'SSID':<24} {'SIGNAL':<8} {'BARS':<8} {'FREQ':<10} {'CHAN':<6} {'RATE':<12} {'SECURITY'}")
+        print(f" {Style.DARK_GRAY}{'─' * 88}{Style.RESET}")
+        for n in networks:
+            sig = int(n["signal"]) if str(n["signal"]).isdigit() else 0
+            sig_col = Style.GREEN if sig >= 70 else (Style.YELLOW if sig >= 40 else Style.RED)
+            in_use_mark = f"{Style.GREEN}★{Style.RESET}" if n["in_use"] else " "
+            ssid_disp = f"{Style.BOLD}{n['ssid'][:23]:<24}{Style.RESET}" if n["in_use"] else f"{n['ssid'][:23]:<24}"
+            freq_band = "2.4G" if "24" in str(n["freq"]) else ("5G" if "5" in str(n["freq"]) else "6G")
+            print(f" {in_use_mark} {ssid_disp} {sig_col}{sig:>3}%{Style.RESET}    {n['bars']:<8} {Style.YELLOW}{freq_band:<10}{Style.RESET} {n['chan']:<6} {n['rate']:<12} {Style.PURPLE}{n['security'][:20]}{Style.RESET}")
+        print(box_footer())
+        return
+
+    # Interactive fzf mode
+    if not shutil.which("fzf"):
+        builtin_wifi(["--scan"])
+        return
+
+    networks = _parse_wifi_scan()
+    if not networks:
+        log_warn("No wireless networks found nearby.")
+        return
+
+    self_exe = os.path.abspath(sys.argv[0])
+    fzf_lines = []
+    for n in networks:
+        in_use_sym = "★" if n["in_use"] else "•"
+        sig = int(n["signal"]) if str(n["signal"]).isdigit() else 0
+        freq_band = "2.4G" if "24" in str(n["freq"]) else ("5G" if "5" in str(n["freq"]) else "6G")
+        fzf_lines.append(f"{in_use_sym}\t{n['ssid']}\t{sig}%\t{n['bars']}\t{freq_band} Ch{n['chan']}\t{n['security']}\t{n['bssid']}")
+
+    fzf_input = "\n".join(fzf_lines)
+    preview_cmd = f"python3 '{self_exe}' __preview_wifi {{2}} {{7}}"
+    fzf_cmd = [
+        "fzf",
+        "--delimiter=\t",
+        "--with-nth=1,2,3,4,5,6",
+        "--prompt=  ◈ Select Wi-Fi Network ❯ ",
+        "--header= [Enter] Connect / Options  │  [ESC] Quit ",
+        "--header-label= WI-FI NETWORKS ",
+        "--header-label-pos=3",
+        "--border=rounded",
+        "--border-label= CoreX Wi-Fi Studio ",
+        "--border-label-pos=3",
+        "--preview", preview_cmd,
+        "--preview-window=right:45%:border-rounded:wrap",
+        "--height=85%",
+    ]
+    try:
+        proc = subprocess.Popen(fzf_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        out, _ = proc.communicate(input=fzf_input)
+        if proc.returncode != 0 or not out.strip():
+            return
+        selected_parts = out.strip().split("\t")
+        selected_ssid = selected_parts[1]
+        is_connected = (selected_parts[0] == "★")
+
+        if is_connected:
+            print(f"\n {Style.BOLD}Active Network:{Style.RESET} {Style.CYAN}{selected_ssid}{Style.RESET}")
+            print(f"  [1] Reconnect")
+            print(f"  [2] Disconnect")
+            print(f"  [3] Forget Saved Profile")
+            print(f"  [4] Show Diagnostics")
+            print(f"  [Q] Exit")
+            ans = input(f" Select action [1-4, Q]: ").strip().lower()
+            if ans == "1":
+                subprocess.run(["nmcli", "dev", "wifi", "connect", selected_ssid])
+            elif ans == "2":
+                builtin_wifi(["disconnect"])
+            elif ans == "3":
+                subprocess.run(["nmcli", "connection", "delete", selected_ssid])
+                log_success(f"Profile '{selected_ssid}' removed.")
+            elif ans == "4":
+                builtin_wifi(["--status"])
+        else:
+            builtin_wifi(["connect", selected_ssid])
+    except KeyboardInterrupt:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# DEEP PROCESS FORENSICS & RESOURCE INSPECTOR
+# ---------------------------------------------------------------------------
+def _format_kb(kb_val: int) -> str:
+    if kb_val < 1024:
+        return f"{kb_val} KB"
+    mb = kb_val / 1024.0
+    if mb < 1024:
+        return f"{mb:.1f} MB"
+    gb = mb / 1024.0
+    return f"{gb:.2f} GB"
+
+
+def render_proc_preview(pid_str: str):
+    """Render deep process forensics in fzf preview window."""
+    pid_str = pid_str.strip()
+    if not pid_str.isdigit():
+        return
+    pid = int(pid_str)
+    proc_dir = Path(f"/proc/{pid}")
+    if not proc_dir.exists():
+        print(box_header(f"PROCESS FORENSICS [PID: {pid}]"))
+        print(f"  {Style.RED}Process {pid} has terminated or is not accessible.{Style.RESET}")
+        print(box_footer())
+        return
+
+    status_info = {}
+    try:
+        for line in (proc_dir / "status").read_text().splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                status_info[k.strip()] = v.strip()
+    except Exception:
+        pass
+
+    try:
+        raw_cmd = (proc_dir / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf-8", errors="replace").strip()
+    except Exception:
+        raw_cmd = status_info.get("Name", "unknown")
+
+    try:
+        exe_path = os.readlink(proc_dir / "exe")
+    except Exception:
+        exe_path = status_info.get("Name", "unknown")
+
+    ppid = status_info.get("PPid", "0")
+    parent_name = "systemd"
+    try:
+        if ppid != "0":
+            parent_name = (Path(f"/proc/{ppid}/comm")).read_text().strip()
+    except Exception:
+        pass
+
+    open_fds = []
+    open_sockets = []
+    fd_dir = proc_dir / "fd"
+    fd_count = 0
+    if fd_dir.exists():
+        try:
+            for fd_entry in fd_dir.iterdir():
+                fd_count += 1
+                try:
+                    target = os.readlink(fd_entry)
+                    if target.startswith("socket:["):
+                        open_sockets.append(target)
+                    elif not target.startswith("/dev/null") and not target.startswith("pipe:["):
+                        open_fds.append(target)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    uid = status_info.get("Uid", "").split()[0] if status_info.get("Uid") else ""
+    user_name = "unknown"
+    if uid:
+        try:
+            import pwd
+            user_name = pwd.getpwuid(int(uid)).pw_name
+        except Exception:
+            user_name = uid
+
+    state_str = status_info.get("State", "Unknown")
+    threads_str = status_info.get("Threads", "1")
+
+    def _get_mem_kb(key):
+        val = status_info.get(key, "0 kB")
+        nums = [c for c in val if c.isdigit()]
+        return int("".join(nums)) if nums else 0
+
+    rss_kb = _get_mem_kb("VmRSS")
+    vsize_kb = _get_mem_kb("VmSize")
+    peak_kb = _get_mem_kb("VmPeak")
+    swap_kb = _get_mem_kb("VmSwap")
+    shared_kb = _get_mem_kb("RssFile")
+
+    cgroup_unit = ""
+    try:
+        cg_text = (proc_dir / "cgroup").read_text()
+        for cgl in cg_text.splitlines():
+            if "0::" in cgl:
+                cgroup_unit = cgl.split("0::", 1)[1]
+    except Exception:
+        pass
+
+    print(box_header(f"PROCESS FORENSICS [PID: {pid}]"))
+    print(f"  • {Style.BOLD}Process Name:{Style.RESET}    {Style.WHITE}{Style.BOLD}{status_info.get('Name', 'unknown')}{Style.RESET}")
+    print(f"  • {Style.BOLD}Executable:{Style.RESET}      {Style.CYAN}{exe_path}{Style.RESET}")
+    print(f"  • {Style.BOLD}User / Owner:{Style.RESET}    {Style.YELLOW}{user_name}{Style.RESET} (UID {uid})")
+    print(f"  • {Style.BOLD}Execution State:{Style.RESET} {state_str}")
+    print(f"  • {Style.BOLD}Thread Count:{Style.RESET}    {Style.GREEN}{threads_str} active threads{Style.RESET}")
+    print(f"  • {Style.BOLD}Parent Process:{Style.RESET}  {Style.PURPLE}{parent_name}{Style.RESET} (PPID {ppid})")
+
+    print(f"\n  {Style.BOLD}MEMORY FOOTPRINT:{Style.RESET}")
+    print(f"   {Style.DARK_GRAY}•{Style.RESET} Physical RAM (RSS):   {Style.GREEN}{Style.BOLD}{_format_kb(rss_kb)}{Style.RESET}")
+    print(f"   {Style.DARK_GRAY}•{Style.RESET} Virtual Memory (Size): {_format_kb(vsize_kb)}")
+    print(f"   {Style.DARK_GRAY}•{Style.RESET} Peak Virtual Memory:   {_format_kb(peak_kb)}")
+    print(f"   {Style.DARK_GRAY}•{Style.RESET} Shared / Code Pages:   {_format_kb(shared_kb)}")
+    print(f"   {Style.DARK_GRAY}•{Style.RESET} Swap Allocation:       {_format_kb(swap_kb)}")
+
+    print(f"\n  {Style.BOLD}FULL COMMAND LINE ARGUMENTS:{Style.RESET}")
+    cmd_disp = raw_cmd if len(raw_cmd) < 180 else raw_cmd[:180] + "..."
+    print(f"   {Style.DARK_GRAY}❯{Style.RESET} {Style.WHITE}{cmd_disp}{Style.RESET}")
+
+    if open_fds:
+        print(f"\n  {Style.BOLD}OPEN FILE DESCRIPTORS ({fd_count} open):{Style.RESET}")
+        for f in list(dict.fromkeys(open_fds))[:5]:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} {f}")
+
+    if open_sockets:
+        print(f"\n  {Style.BOLD}ACTIVE SOCKETS / PORTS ({len(open_sockets)} sockets):{Style.RESET}")
+        try:
+            ss_out = subprocess.run(["ss", "-tulpn", "-H"], capture_output=True, text=True).stdout
+            proc_ports = []
+            for sl in ss_out.splitlines():
+                if f"pid={pid}," in sl:
+                    parts = sl.split()
+                    if len(parts) >= 5:
+                        proc_ports.append(f"{parts[0].upper()} {parts[4]} ({parts[1]})")
+            if proc_ports:
+                for pp in proc_ports[:4]:
+                    print(f"   {Style.CYAN}•{Style.RESET} {pp}")
+            else:
+                for s in open_sockets[:3]:
+                    print(f"   {Style.DARK_GRAY}•{Style.RESET} {s}")
+        except Exception:
+            for s in open_sockets[:3]:
+                print(f"   {Style.DARK_GRAY}•{Style.RESET} {s}")
+
+    if cgroup_unit:
+        print(f"\n  {Style.BOLD}SYSTEMD SCOPE / CGROUP:{Style.RESET}")
+        print(f"   {Style.DARK_GRAY}•{Style.RESET} {cgroup_unit}")
+
+    print(box_footer())
+
+
+def handle_proc_signal(pid_str: str, sig_name: str):
+    """Internal helper to dispatch signal to PID from fzf keybindings."""
+    if not pid_str.isdigit():
+        return
+    pid = int(pid_str)
+    sig_map = {
+        "kill": signal.SIGKILL,
+        "term": signal.SIGTERM,
+        "freeze": signal.SIGSTOP,
+        "resume": signal.SIGCONT,
+    }
+    sig = sig_map.get(sig_name.lower())
+    if not sig:
+        return
+    try:
+        os.kill(pid, sig)
+    except Exception:
+        pass
+
+
+def builtin_proc(extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+
+    if len(args) >= 2 and args[0] in ("kill", "term", "freeze", "resume") and args[1].isdigit():
+        handle_proc_signal(args[1], args[0])
+        return
+
+    if args and args[0] in ("-h", "--help", "help"):
+        print(box_header("COREX DEEP PROCESS FORENSICS & MANAGER"))
+        print(f"""
+ {Style.BOLD}USAGE:{Style.RESET}
+   cx proc                         Launch interactive fzf process explorer
+   cx proc <PID|name>              Show detailed deep forensic card for process
+   cx proc <PID> --kill            Send SIGKILL (9) to target process
+   cx proc <PID> --term            Send SIGTERM (15) graceful termination
+   cx proc <PID> --freeze          Send SIGSTOP (19) to pause/freeze process
+   cx proc <PID> --resume          Send SIGCONT (18) to unfreeze process
+   cx proc <PID> --nice <value>    Set process niceness priority (-20 to 19)
+
+ {Style.BOLD}FZF INTERACTIVE HOTKEYS:{Style.RESET}
+   • Enter:    Open Process Actions Menu (Forensics, Kill, Freeze, Renice)
+   • Ctrl+K:   Instantly send SIGKILL
+   • Ctrl+T:   Instantly send SIGTERM
+   • Ctrl+P:   Pause / Freeze process (SIGSTOP)
+   • Ctrl+R:   Resume frozen process (SIGCONT)
+""")
+        print(box_footer())
+        return
+
+    if args and not args[0].startswith("-"):
+        target = args[0]
+        sub_flags = args[1:]
+
+        target_pid = None
+        if target.isdigit():
+            target_pid = int(target)
+        else:
+            matches = []
+            for p in Path("/proc").glob("[0-9]*"):
+                try:
+                    p_name = (p / "comm").read_text().strip()
+                    if target.lower() in p_name.lower():
+                        matches.append((int(p.name), p_name))
+                except Exception:
+                    continue
+            if not matches:
+                log_error(f"No active process found matching '{target}'.")
+                return
+            if len(matches) == 1:
+                target_pid = matches[0][0]
+            else:
+                print(f"\n {Style.BOLD}Multiple processes match '{target}':{Style.RESET}")
+                for m_pid, m_name in matches[:10]:
+                    print(f"  • PID {Style.CYAN}{m_pid:<7}{Style.RESET} -> {m_name}")
+                print(f" Specify the exact PID: cx proc <PID>\n")
+                return
+
+        if "--kill" in sub_flags:
+            os.kill(target_pid, signal.SIGKILL)
+            log_success(f"Sent SIGKILL (9) to PID {target_pid}.")
+            return
+        if "--term" in sub_flags:
+            os.kill(target_pid, signal.SIGTERM)
+            log_success(f"Sent SIGTERM (15) to PID {target_pid}.")
+            return
+        if "--freeze" in sub_flags or "--pause" in sub_flags:
+            os.kill(target_pid, signal.SIGSTOP)
+            log_success(f"Process {target_pid} paused/frozen (SIGSTOP).")
+            return
+        if "--resume" in sub_flags or "--unfreeze" in sub_flags:
+            os.kill(target_pid, signal.SIGCONT)
+            log_success(f"Process {target_pid} resumed (SIGCONT).")
+            return
+        if "--nice" in sub_flags:
+            idx = sub_flags.index("--nice")
+            if len(sub_flags) > idx + 1 and sub_flags[idx + 1].lstrip("-").isdigit():
+                val = int(sub_flags[idx + 1])
+                os.setpriority(os.PRIO_PROCESS, target_pid, val)
+                log_success(f"Set PID {target_pid} priority to nice {val}.")
+            return
+
+        render_proc_preview(str(target_pid))
+        return
+
+    if not shutil.which("fzf"):
+        log_error("fzf is required for interactive process explorer. Install: sudo pacman -S fzf")
+        return
+
+    self_exe = os.path.abspath(sys.argv[0])
+    ps_cmd = "ps -eo pid:7,user:10,%cpu:6,%mem:6,nlwp:5,stat:5,comm --sort=-%cpu"
+    preview_cmd = f"python3 '{self_exe}' __preview_proc {{1}}"
+    fzf_cmd = [
+        "fzf",
+        "--header-lines=1",
+        "--prompt=  ◈ Process Forensics ❯ ",
+        "--header= [Enter] Actions Menu  │  [^K] Kill  │  [^T] Term  │  [^P] Freeze  │  [^R] Resume ",
+        "--header-label= PROCESS INSPECTOR ",
+        "--header-label-pos=3",
+        "--border=rounded",
+        "--border-label= CoreX Process Cockpit ",
+        "--border-label-pos=3",
+        "--preview", preview_cmd,
+        "--preview-window=right:48%:border-rounded:wrap",
+        f"--bind=ctrl-k:execute-silent(python3 '{self_exe}' __proc_signal kill {{1}})+reload({ps_cmd})",
+        f"--bind=ctrl-t:execute-silent(python3 '{self_exe}' __proc_signal term {{1}})+reload({ps_cmd})",
+        f"--bind=ctrl-p:execute-silent(python3 '{self_exe}' __proc_signal freeze {{1}})+reload({ps_cmd})",
+        f"--bind=ctrl-r:execute-silent(python3 '{self_exe}' __proc_signal resume {{1}})+reload({ps_cmd})",
+        "--height=90%",
+    ]
+    try:
+        ps_proc = subprocess.Popen(ps_cmd.split(), stdout=subprocess.PIPE, text=True)
+        fzf_proc = subprocess.Popen(fzf_cmd, stdin=ps_proc.stdout, stdout=subprocess.PIPE, text=True)
+        out, _ = fzf_proc.communicate()
+        if fzf_proc.returncode != 0 or not out.strip():
+            return
+        selected_pid = out.strip().split()[0]
+        if not selected_pid.isdigit():
+            return
+
+        print(f"\n {Style.BOLD}Process Selected: PID {Style.CYAN}{selected_pid}{Style.RESET}")
+        print(f"  [1] View Full Deep Forensic Card")
+        print(f"  [2] Terminate Gracefully (SIGTERM - 15)")
+        print(f"  [3] Force Kill (SIGKILL - 9)")
+        print(f"  [4] Pause / Freeze Execution (SIGSTOP - 19)")
+        print(f"  [5] Resume Frozen Execution (SIGCONT - 18)")
+        print(f"  [6] Change Priority (Renice)")
+        print(f"  [Q] Exit")
+        ans = input(" Select action [1-6, Q]: ").strip().lower()
+        if ans == "1":
+            render_proc_preview(selected_pid)
+        elif ans == "2":
+            os.kill(int(selected_pid), signal.SIGTERM)
+            log_success(f"Sent SIGTERM to PID {selected_pid}.")
+        elif ans == "3":
+            os.kill(int(selected_pid), signal.SIGKILL)
+            log_success(f"Sent SIGKILL to PID {selected_pid}.")
+        elif ans == "4":
+            os.kill(int(selected_pid), signal.SIGSTOP)
+            log_success(f"Paused PID {selected_pid} (SIGSTOP).")
+        elif ans == "5":
+            os.kill(int(selected_pid), signal.SIGCONT)
+            log_success(f"Resumed PID {selected_pid} (SIGCONT).")
+        elif ans == "6":
+            n_val = input(" Enter new nice value (-20 highest to 19 lowest): ").strip()
+            if n_val.lstrip("-").isdigit():
+                os.setpriority(os.PRIO_PROCESS, int(selected_pid), int(n_val))
+                log_success(f"Set PID {selected_pid} to nice {n_val}.")
+    except KeyboardInterrupt:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# MEDIA FORENSICS & METADATA INSPECTOR
+# ---------------------------------------------------------------------------
+def _format_media_size(bytes_val) -> str:
+    try:
+        b = float(bytes_val)
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if b < 1024:
+                return f"{b:.2f} {unit}"
+            b /= 1024
+        return f"{b:.2f} PB"
+    except Exception:
+        return str(bytes_val)
+
+
+def _format_media_duration(sec_val) -> str:
+    try:
+        s = float(sec_val)
+        m, sec = divmod(s, 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{int(h):02d}:{int(m):02d}:{sec:05.2f} ({s:.1f}s)"
+        return f"{int(m):02d}:{sec:05.2f} ({s:.1f}s)"
+    except Exception:
+        return str(sec_val)
+
+
+def builtin_media_info(target_file: Optional[str] = None, extra_args: Optional[List[str]] = None):
+    args = extra_args or []
+    if not shutil.which("ffprobe"):
+        log_error("ffprobe is required for media forensics. Install: sudo pacman -S ffmpeg")
+        return
+
+    path_str = target_file
+    if not path_str and args and not args[0].startswith("-"):
+        path_str = args[0]
+
+    if not path_str:
+        if not shutil.which("fzf"):
+            log_error("Usage: cx media-info <file>")
+            return
+
+        media_exts = ("*.mp4", "*.mkv", "*.mov", "*.avi", "*.webm", "*.flv", "*.wmv",
+                      "*.mp3", "*.flac", "*.wav", "*.m4a", "*.opus", "*.ogg", "*.aac",
+                      "*.png", "*.jpg", "*.jpeg", "*.webp", "*.gif", "*.bmp", "*.avif")
+        find_cmd = ["find", "-L", ".", "-maxdepth", "3", "-type", "f", "("]
+        for i, ext in enumerate(media_exts):
+            if i > 0:
+                find_cmd.append("-o")
+            find_cmd.extend(["-iname", ext])
+        find_cmd.append(")")
+
+        files_res = subprocess.run(find_cmd, capture_output=True, text=True).stdout.splitlines()
+        if not files_res:
+            for udir in ["~/Videos", "~/Music", "~/Pictures", "~/Downloads"]:
+                epath = os.path.expanduser(udir)
+                if os.path.isdir(epath):
+                    u_cmd = ["find", "-L", epath, "-maxdepth", "2", "-type", "f", "("]
+                    for i, ext in enumerate(media_exts):
+                        if i > 0:
+                            u_cmd.append("-o")
+                        u_cmd.extend(["-iname", ext])
+                    u_cmd.append(")")
+                    u_res = subprocess.run(u_cmd, capture_output=True, text=True).stdout.splitlines()
+                    files_res.extend(u_res)
+                    if len(files_res) > 50:
+                        break
+
+        if not files_res:
+            log_warn("No video, audio, or image files found in current directory or user media folders.")
+            return
+
+        fzf_cmd = [
+            "fzf",
+            "--prompt=  ◈ Select Media File ❯ ",
+            "--border=rounded",
+            "--border-label= CoreX Media Forensics ",
+            "--border-label-pos=3",
+            "--height=70%",
+        ]
+        try:
+            fproc = subprocess.Popen(fzf_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            f_out, _ = fproc.communicate(input="\n".join(files_res))
+            if fproc.returncode != 0 or not f_out.strip():
+                return
+            path_str = f_out.strip()
+        except KeyboardInterrupt:
+            return
+
+    target_path = Path(path_str).resolve()
+    if not target_path.exists():
+        log_error(f"File not found: '{target_path}'")
+        return
+
+    probe_cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        "-show_streams",
+        "-show_chapters",
+        str(target_path)
+    ]
+    try:
+        res = subprocess.run(probe_cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            log_error(f"ffprobe failed to inspect '{target_path.name}': {res.stderr}")
+            return
+        probe = json.loads(res.stdout)
+    except Exception as e:
+        log_error(f"Failed to parse media metadata: {e}")
+        return
+
+    if "--json" in args:
+        print(json.dumps(probe, indent=2))
+        return
+
+    fmt = probe.get("format", {})
+    streams = probe.get("streams", [])
+    chapters = probe.get("chapters", [])
+
+    print(box_header(f"MEDIA FORENSICS: {target_path.name}"))
+    fmt_name = fmt.get("format_long_name", fmt.get("format_name", "Unknown Format"))
+    file_size = _format_media_size(fmt.get("size", target_path.stat().st_size))
+    total_dur = _format_media_duration(fmt.get("duration", 0)) if fmt.get("duration") else "N/A (Image / Stream)"
+    bitrate_raw = fmt.get("bit_rate")
+    bitrate_str = f"{float(bitrate_raw) / 1000000.0:.2f} Mbps" if bitrate_raw and float(bitrate_raw) >= 1000000 else (f"{float(bitrate_raw) / 1000.0:.0f} kbps" if bitrate_raw else "Variable / Unspecified")
+
+    print(f"  • {Style.BOLD}File Path:{Style.RESET}         {Style.CYAN}{target_path}{Style.RESET}")
+    print(f"  • {Style.BOLD}Container Format:{Style.RESET}  {Style.WHITE}{Style.BOLD}{fmt_name}{Style.RESET}")
+    print(f"  • {Style.BOLD}Total File Size:{Style.RESET}   {Style.YELLOW}{file_size}{Style.RESET}")
+    if fmt.get("duration"):
+        print(f"  • {Style.BOLD}Play Duration:{Style.RESET}     {Style.GREEN}{total_dur}{Style.RESET}")
+        print(f"  • {Style.BOLD}Overall Bitrate:{Style.RESET}   {bitrate_str}")
+
+    video_streams = [s for s in streams if s.get("codec_type") == "video"]
+    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    subtitle_streams = [s for s in streams if s.get("codec_type") == "subtitle"]
+
+    for idx, vs in enumerate(video_streams):
+        c_long = vs.get("codec_long_name", vs.get("codec_name", "Unknown Video"))
+        width = vs.get("width", 0)
+        height = vs.get("height", 0)
+        aspect = vs.get("display_aspect_ratio", "")
+        if not aspect and width and height:
+            aspect = f"{width}:{height}"
+
+        fps = vs.get("r_frame_rate", "")
+        fps_disp = ""
+        if fps and "/" in fps:
+            num, den = fps.split("/")
+            if float(den) > 0:
+                fps_disp = f"{float(num) / float(den):.2f} fps"
+
+        pix_fmt = vs.get("pix_fmt", "")
+        color_space = vs.get("color_space") or vs.get("color_primaries") or ""
+        profile = vs.get("profile", "")
+        v_bitrate = vs.get("bit_rate")
+        v_bitrate_str = f"{float(v_bitrate) / 1000000.0:.2f} Mbps" if v_bitrate else ""
+
+        stream_lbl = f"VIDEO STREAM #{vs.get('index', idx)}" if len(video_streams) > 1 else "VIDEO STREAM"
+        print(f"\n  {Style.BOLD}{Style.PURPLE}{stream_lbl}:{Style.RESET}")
+        print(f"   {Style.DARK_GRAY}•{Style.RESET} Codec:           {Style.WHITE}{c_long}{Style.RESET}" + (f" ({profile})" if profile and profile != "unknown" else ""))
+        print(f"   {Style.DARK_GRAY}•{Style.RESET} Dimensions:      {Style.CYAN}{width}x{height}{Style.RESET} " + (f"({aspect})" if aspect else ""))
+        if fps_disp:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} Frame Rate:      {Style.GREEN}{fps_disp}{Style.RESET}")
+        if pix_fmt:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} Pixel Format:    {pix_fmt}")
+        if color_space:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} Color Space:     {Style.YELLOW}{color_space.upper()}{Style.RESET}")
+        if v_bitrate_str:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} Video Bitrate:   {v_bitrate_str}")
+
+    for idx, as_ in enumerate(audio_streams):
+        a_long = as_.get("codec_long_name", as_.get("codec_name", "Unknown Audio"))
+        channels = as_.get("channels", 0)
+        ch_layout = as_.get("channel_layout", "")
+        ch_disp = "Stereo (2.0)" if channels == 2 else ("Mono (1.0)" if channels == 1 else (f"{channels} Channels" + (f" ({ch_layout})" if ch_layout else "")))
+        sample_rate = as_.get("sample_rate", "")
+        sr_disp = f"{int(sample_rate):,} Hz" if str(sample_rate).isdigit() else str(sample_rate)
+        if str(sample_rate).isdigit() and int(sample_rate) >= 88200:
+            sr_disp += f" {Style.GREEN}(Hi-Res Audio){Style.RESET}"
+        bit_depth = as_.get("bits_per_raw_sample") or as_.get("bits_per_sample")
+        depth_disp = f"{bit_depth}-bit" if bit_depth else ""
+        a_bitrate = as_.get("bit_rate")
+        a_bitrate_str = f"{float(a_bitrate) / 1000.0:.0f} kbps" if a_bitrate else ""
+        a_lang = as_.get("tags", {}).get("language", "")
+
+        stream_lbl = f"AUDIO STREAM #{as_.get('index', idx)}" if len(audio_streams) > 1 else "AUDIO STREAM"
+        print(f"\n  {Style.BOLD}{Style.CYAN}{stream_lbl}:{Style.RESET}")
+        print(f"   {Style.DARK_GRAY}•{Style.RESET} Codec:           {Style.WHITE}{a_long}{Style.RESET}")
+        print(f"   {Style.DARK_GRAY}•{Style.RESET} Channel Layout:  {ch_disp}")
+        print(f"   {Style.DARK_GRAY}•{Style.RESET} Sampling Rate:   {sr_disp}" + (f" ({depth_disp})" if depth_disp else ""))
+        if a_bitrate_str:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} Audio Bitrate:   {a_bitrate_str}")
+        if a_lang:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} Audio Language:  {a_lang.upper()}")
+
+    if subtitle_streams:
+        print(f"\n  {Style.BOLD}SUBTITLE STREAMS ({len(subtitle_streams)} found):{Style.RESET}")
+        for ss in subtitle_streams:
+            s_name = ss.get("codec_name", "subtitle")
+            s_lang = ss.get("tags", {}).get("language", "und")
+            s_title = ss.get("tags", {}).get("title", "")
+            title_str = f" - '{s_title}'" if s_title else ""
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} #{ss.get('index')}: [{s_lang.upper()}] {s_name}{title_str}")
+
+    tags = fmt.get("tags", {})
+    notable_tags = []
+    for k, v in tags.items():
+        if k.lower() in ("title", "artist", "album", "date", "year", "genre", "encoder", "comment", "track"):
+            notable_tags.append((k.capitalize(), v))
+
+    if notable_tags:
+        print(f"\n  {Style.BOLD}METADATA & TAGS:{Style.RESET}")
+        for k, v in notable_tags[:6]:
+            print(f"   {Style.DARK_GRAY}•{Style.RESET} {k:<16} {Style.WHITE}{v}{Style.RESET}")
+
+    if chapters:
+        print(f"\n  {Style.BOLD}CHAPTERS:{Style.RESET} {len(chapters)} chapter markers embedded")
+
+    print(box_footer())
+
+
+# ---------------------------------------------------------------------------
 # DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
 def render_preview(cmd_id: str, cfg: CoreXConfig):
@@ -7838,6 +8704,14 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
     elif name == "game-mode":
         subprocess.run("echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor", shell=True)
         log_success("Game Mode Activated: CPU governor set to performance.")
+    elif name in ("wifi", "wlan", "wifi-manager", "wifi-scan"):
+        builtin_wifi(extra_args=args)
+    elif name in ("proc", "process", "procs", "ps-inspect"):
+        builtin_proc(extra_args=args)
+    elif name in ("media-info", "mediainfo", "media", "ffprobe-info"):
+        tgt = args[0] if args and not args[0].startswith("-") else None
+        ext = args[1:] if tgt and len(args) > 1 else args
+        builtin_media_info(target_file=tgt, extra_args=ext)
     else:
         log_warn(f"Built-in {name} not implemented.")
 
@@ -7948,7 +8822,10 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
     while i < len(argv):
         arg = argv[i]
         if arg in ("-h", "--help"):
-            parsed.help = True
+            if parsed.command is not None:
+                parsed.args.append(arg)
+            else:
+                parsed.help = True
         elif arg in ("-v", "--version"):
             parsed.version = True
         elif arg == "--dry-run":
@@ -7992,6 +8869,10 @@ def main():
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
     parsed, unknown = parse_cli_args(sys.argv[1:])
+
+    if parsed.help and parsed.command:
+        parsed.args.append("--help")
+        parsed.help = False
 
     if parsed.version:
         print(f"CoreX (cx) v{VERSION} - 150+ Action Workstation Engine")
@@ -8135,6 +9016,50 @@ def main():
             print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx colors")
         else:
             builtin_colors(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("wifi", "wlan", "wifi-manager", "wifi-scan"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx wifi")
+        else:
+            builtin_wifi(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("proc", "process", "procs", "ps-inspect"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx proc")
+        else:
+            builtin_proc(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    if parsed.command in ("media-info", "mediainfo", "media", "ffprobe-info"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx media-info")
+        else:
+            combined = (parsed.args or []) + unknown
+            tgt = combined[0] if combined and not combined[0].startswith("-") else None
+            ext = combined[1:] if tgt and len(combined) > 1 else combined
+            builtin_media_info(target_file=tgt, extra_args=ext)
+        sys.exit(0)
+
+    # Internal preview callback for Wi-Fi manager
+    if parsed.command == "__preview_wifi":
+        ssid = (parsed.args[0] if len(parsed.args) > 0 else "")
+        bssid = (parsed.args[1] if len(parsed.args) > 1 else "")
+        render_wifi_preview(ssid, bssid)
+        sys.exit(0)
+
+    # Internal preview callback for Process inspector
+    if parsed.command == "__preview_proc":
+        pid_target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        render_proc_preview(pid_target)
+        sys.exit(0)
+
+    # Internal helper for Process signal handling
+    if parsed.command == "__proc_signal":
+        sig = parsed.args[0] if len(parsed.args) > 0 else ""
+        p = parsed.args[1] if len(parsed.args) > 1 else ""
+        handle_proc_signal(p, sig)
         sys.exit(0)
 
     # Internal preview callback for fzf

@@ -291,6 +291,15 @@ requires_sudo = false
 confirm = false
 deps = ["ffmpeg", "fzf"]
 
+[commands.media-info]
+category = "Media, Audio & PipeWire Power-Tools"
+description = "Deep media file forensics & codec analyzer via ffprobe"
+command = "cx __builtin media-info"
+preview_cmd = "echo 'Inspects video/audio streams, bitrates, sample rates and codecs via ffprobe'"
+requires_sudo = false
+confirm = false
+deps = ["ffprobe", "fzf"]
+
 # ==============================================================================
 # 3. GAMING, HARDWARE & DISPLAY ORCHESTRATION (@gaming, @gpu, @hw)
 # ==============================================================================
@@ -452,6 +461,15 @@ requires_sudo = false
 confirm = false
 deps = ["systemd-analyze"]
 
+[commands.proc]
+category = "System Architecture & BTRFS Snapshotting"
+description = "Deep process forensics inspector, memory breakdown & signal manager"
+command = "cx __builtin proc"
+preview_cmd = "echo 'Interactive process inspector with RSS/Swap breakdown and signal controls'"
+requires_sudo = false
+confirm = false
+deps = ["ps", "fzf"]
+
 # ==============================================================================
 # 5. NETWORK, VPN & REMOTE INFRASTRUCTURE (@net, @vpn)
 # ==============================================================================
@@ -545,6 +563,15 @@ preview_cmd = "resolvectl dns 2>/dev/null || cat /etc/resolv.conf 2>/dev/null ||
 requires_sudo = true
 confirm = false
 deps = ["resolvectl"]
+
+[commands.wifi]
+category = "Network, VPN & Remote Infrastructure"
+description = "Interactive Wi-Fi manager, scanner, signal meter & connection tool"
+command = "cx __builtin wifi"
+preview_cmd = "echo 'Interactive Wi-Fi access point manager and scanner via nmcli'"
+requires_sudo = false
+confirm = false
+deps = ["nmcli", "fzf"]
 
 # ==============================================================================
 # 6. GIT, DEV & CODE UTILITIES (@git, @dev)

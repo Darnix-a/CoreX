@@ -24,7 +24,7 @@ sha256sums=('SKIP')
 
 pkgver() {
     cd "${srcdir}/CoreX"
-    printf "3.1.0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+    printf "3.2.0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
 }
 
 package() {

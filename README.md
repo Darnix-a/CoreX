@@ -30,7 +30,10 @@ Type `cx` and instantly launch an interactive `fzf` menu featuring live preview 
 ## Key Features
 
 -  **Sub-30ms Startup**: Pure Python standard library with binary configuration caching (`~/.cache/corex/config_cache.pickle`) and lazy runtime imports.
--  **175+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
+-  **180+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
+-  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via `nmcli` and `fzf`.
+-  **Deep Process Forensics (`cx proc`)**: Process inspector with physical RSS/Virtual/Swap breakdown, active sockets/ports, open file descriptors, and interactive signal manager (`SIGKILL`, `SIGTERM`, `SIGSTOP`, `SIGCONT`, renice).
+-  **Media & Codec Forensics (`cx media-info`)**: Deep video, audio, and image codec inspection, frame rates, color spaces, and tag extraction via `ffprobe`.
 -  **Theme Studio**: 6 built-in color palettes (`catppuccin-mocha`, `tokyonight`, `nord`, `gruvbox`, `dracula`, `rose-pine`) with live ANSI swatches.
 -  **Telemetry & Analytics (`cx stats`)**: Track execution frequency, catalog coverage, category distribution, and recent command history.
 -  **Instant Cheatsheet Mode (`cx find <query>`)**: Search across all actions, descriptions, categories, and shell commands instantly.
@@ -87,12 +90,12 @@ Simply run:
 ```bash
 cx
 ```
-- Type to fuzzy-search across all 175+ workstation actions.
+- Type to fuzzy-search across all 180+ workstation actions.
 - Filter directly by category tag:
   - `@pinned` — Pinned favorite actions (hit `Tab` to toggle favorites)
   - `@daily` — Daily driver tools, clipboard, notes, todo, stats, disk visualizer
   - `@ai` — ComfyUI boot/sync, Ollama VRAM drop/models, AI Copilot (`ask`)
-  - `@audio` — PipeWire patching, streaming YouTube audio to mpv, FLAC rippers
+  - `@audio` — Media forensics (`media-info`), PipeWire patching, streaming YouTube audio to mpv, FLAC rippers
   - `@gpu` — GPU clocks, power limits, displays, GameMode, thermals
   - `@kernel` — Hardware interrupts (`irq-top`), dmesg, kmods, sysctl, cgroups
   - `@mem` — RAM forensic breakdown, hugepages, zRAM, BTRFS scrub, TRIM
@@ -100,8 +103,8 @@ cx
   - `@dsp` — Audio tone generators, PipeWire link picker, latency test
   - `@docker` — Containers, compose up/down, logs, podman, k8s
   - `@code` — Regex tester, JSON formatter, git diff patches, sqlite browser
-  - `@sys` — BTRFS snapper snapshots, fkill, orphaned packages, journal vacuum
-  - `@net` — Public IP card, VPN toggle, SSH picker, local HTTP server
+  - `@sys` — Process forensics (`proc`), BTRFS snapper snapshots, fkill, orphaned packages, journal vacuum
+  - `@net` — Interactive Wi-Fi manager (`wifi`), public IP card, VPN toggle, SSH picker, local HTTP server
   - `@dev` — Git branch switcher, stash pop, squasher, cheat sheets
 
 ### 2. TUI Hotkeys
