@@ -2,14 +2,14 @@
 """
 CoreX (cx) - 150+ Operational Action Workstation Engine & Terminal Launcher
 Phase 3 Enterprise Edition with @category fuzzy filtering, hotkeys, and --bg daemon runner.
-Engineered for modern Linux power users (CachyOS/Arch, Hyprland, Fish/Bash/Zsh,
-Nvidia GPU, BTRFS/Snapper, Dev & AI workflows).
+For Linux and macOS workstations.
 """
 
 import json
 import os
 import random
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -19,9 +19,21 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+IS_MACOS = sys.platform == "darwin"
+COREX_EXECUTABLE = Path(__file__).resolve()
+SOURCE_DIR = COREX_EXECUTABLE.parent
+ACTION_SHELL = "/bin/bash"
+if IS_MACOS:
+    import corex_macos
+
 VERSION = "3.2.0"
+CACHE_SCHEMA = 3
 CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
-DEFAULT_CONFIG_TEMPLATE = Path(__file__).resolve().parent / "config.default.toml"
+DEFAULT_CONFIG_TEMPLATE = SOURCE_DIR / "config.default.toml"
+if not DEFAULT_CONFIG_TEMPLATE.is_file():
+    DEFAULT_CONFIG_TEMPLATE = SOURCE_DIR.parent / "share" / "corex" / "config.default.toml"
+MACOS_CONFIG_TEMPLATE = SOURCE_DIR / "config.macos.toml"
+MAC_CLIPBOARD_FILE = Path.home() / ".local" / "share" / "corex" / "clipboard.json"
 CONFIG_CACHE_FILE = Path.home() / ".cache" / "corex" / "config_cache.pickle"
 NOTES_DIR = Path.home() / ".local" / "share" / "corex" / "notes"
 TODO_FILE = Path.home() / ".local" / "share" / "corex" / "todo.json"
@@ -542,6 +554,7 @@ class CommandSpec:
         "requires_sudo",
         "confirm",
         "deps",
+        "unavailable",
     )
 
     def __init__(
@@ -554,6 +567,7 @@ class CommandSpec:
         requires_sudo: bool = False,
         confirm: bool = False,
         deps: Optional[List[str]] = None,
+        unavailable: str = "",
     ):
         self.id = id
         self.category = category
@@ -563,6 +577,7 @@ class CommandSpec:
         self.requires_sudo = requires_sudo
         self.confirm = confirm
         self.deps = deps if deps is not None else []
+        self.unavailable = unavailable
 
 
 class CoreXConfig:
@@ -585,10 +600,12 @@ class CoreXConfig:
         self.ollama_model: str = "qwen2.5-coder:1.5b"
         self.ollama_auto_boot: bool = True
         self.commands: Dict[str, CommandSpec] = {}
+        self.source_path: Optional[Path] = None
 
 
 def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) -> CoreXConfig:
     path = custom_path or CONFIG_FILE
+    macos_mtime = MACOS_CONFIG_TEMPLATE.stat().st_mtime_ns if IS_MACOS and MACOS_CONFIG_TEMPLATE.exists() else None
     if not path.exists():
         if DEFAULT_CONFIG_TEMPLATE.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -606,6 +623,9 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
                 cache_meta = pickle.load(cf)
             if (
                 cache_meta.get("version") == VERSION
+                and cache_meta.get("schema") == CACHE_SCHEMA
+                and cache_meta.get("platform") == sys.platform
+                and cache_meta.get("macos_mtime") == macos_mtime
                 and cache_meta.get("user_mtime") == path_stat.st_mtime
                 and cache_meta.get("user_size") == path_stat.st_size
                 and (tmpl_stat is None or (
@@ -621,6 +641,7 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
             pass
 
     cfg = CoreXConfig()
+    cfg.source_path = custom_path.resolve() if custom_path else None
     try:
         import tomllib
         with open(path, "rb") as f:
@@ -650,18 +671,31 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
         cfg.ollama_auto_boot = bool(ai.get("auto_boot", True))
 
         raw_cmds = data.get("commands", {})
-        if DEFAULT_CONFIG_TEMPLATE.exists() and path != DEFAULT_CONFIG_TEMPLATE:
-            try:
-                with open(DEFAULT_CONFIG_TEMPLATE, "rb") as df:
-                    default_data = tomllib.load(df)
-                    default_cmds = default_data.get("commands", {})
-                    for dcid, dcdef in default_cmds.items():
-                        if dcid not in raw_cmds:
-                            raw_cmds[dcid] = dcdef
-            except Exception:
-                pass
+        defaults = {}
+        if DEFAULT_CONFIG_TEMPLATE.exists():
+            if path == DEFAULT_CONFIG_TEMPLATE:
+                defaults = raw_cmds
+            else:
+                with DEFAULT_CONFIG_TEMPLATE.open("rb") as df:
+                    defaults = tomllib.load(df).get("commands", {})
 
-        for cid, cdef in raw_cmds.items():
+        macos_commands = {}
+        if macos_mtime is not None:
+            with MACOS_CONFIG_TEMPLATE.open("rb") as mf:
+                macos_commands = tomllib.load(mf).get("commands", {})
+
+        for cid, definition in {**defaults, **raw_cmds}.items():
+            stock = defaults.get(cid, {})
+            overrides = {key: value for key, value in definition.items() if value != stock.get(key)}
+            platform = {}
+            if IS_MACOS and "command" not in overrides:
+                platform = macos_commands.get(cid, {})
+            cdef = {**stock, **platform, **overrides}
+            if IS_MACOS:
+                local_platform = definition.get("macos", {})
+                if "command" in local_platform:
+                    cdef.pop("unavailable", None)
+                cdef.update(local_platform)
             cfg.commands[cid] = CommandSpec(
                 id=cid,
                 category=cdef.get("category", "General"),
@@ -671,6 +705,7 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
                 requires_sudo=bool(cdef.get("requires_sudo", False)),
                 confirm=bool(cdef.get("confirm", False)),
                 deps=list(cdef.get("deps", [])),
+                unavailable=cdef.get("unavailable", ""),
             )
 
         # Save to fast cache
@@ -682,6 +717,9 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
                 tmpl_stat = DEFAULT_CONFIG_TEMPLATE.stat() if DEFAULT_CONFIG_TEMPLATE.exists() else None
                 cache_meta = {
                     "version": VERSION,
+                    "schema": CACHE_SCHEMA,
+                    "platform": sys.platform,
+                    "macos_mtime": macos_mtime,
                     "user_mtime": path_stat.st_mtime,
                     "user_size": path_stat.st_size,
                     "tmpl_mtime": tmpl_stat.st_mtime if tmpl_stat else None,
@@ -720,6 +758,12 @@ def detect_package_manager() -> Tuple[Optional[str], Optional[str], Optional[str
     (pm_name, install_cmd_prefix, update_cmd, distro_family)
     Supports Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE, Alpine, Void.
     """
+    if IS_MACOS:
+        brew = shutil.which("brew")
+        if brew:
+            brew = shlex.quote(brew)
+            return "brew", f"{brew} install", f"{brew} update && {brew} upgrade", "macos"
+        return None, None, None, "macos"
     if shutil.which("paru"):
         return "paru", "paru -Sy --needed", "paru -Syu", "arch"
     if shutil.which("yay"):
@@ -743,10 +787,26 @@ def detect_package_manager() -> Tuple[Optional[str], Optional[str], Optional[str
     return None, None, None, "unknown"
 
 
-def get_package_map(distro: str = "") -> Dict[str, str]:
+def get_package_map(distro: str = "") -> Dict[str, Optional[str]]:
     """Returns mapping from binary name to package name tailored to the target distribution."""
     if not distro:
         _, _, _, distro = detect_package_manager()
+
+    if distro == "macos":
+        return {
+            "aria2c": "aria2", "brew": None, "docker": "docker", "ffprobe": "ffmpeg",
+            "python3": "python", "qrencode": "qrencode", "smartctl": "smartmontools",
+            "sqlite3": "sqlite", "vulkaninfo": "vulkan-tools", "wg": "wireguard-tools",
+            "wg-quick": "wireguard-tools", "zbarimg": "zbar",
+            "afconvert": None, "afplay": None, "arp": None, "crontab": None, "diskutil": None,
+            "dscacheutil": None, "ifconfig": None, "ioreg": None, "launchctl": None,
+            "log": None, "lsof": None, "md5": None, "memory_pressure": None,
+            "ndp": None, "netstat": None, "nettop": None, "networksetup": None,
+            "open": None, "osascript": None, "pbcopy": None, "pbpaste": None,
+            "pfctl": None, "pmset": None, "powermetrics": None, "route": None,
+            "screencapture": None, "sysctl": None, "system_profiler": None, "tmutil": None,
+            "vm_stat": None, "xcrun": None, "zprint": None,
+        }
 
     return {
         "aria2c": "aria2",
@@ -813,6 +873,11 @@ def get_install_hint(pkg: str) -> str:
     _, inst, _, distro = detect_package_manager()
     pkg_map = get_package_map(distro)
     actual_pkg = pkg_map.get(pkg, pkg)
+    if actual_pkg is None:
+        return {
+            "brew": "Install Homebrew from https://brew.sh",
+            "xcrun": "Install the Xcode Command Line Tools with xcode-select --install",
+        }.get(pkg, f"{pkg} ships with macOS")
     if inst:
         return f"{inst} {actual_pkg}"
     return f"Install {actual_pkg} via your package manager"
@@ -834,12 +899,15 @@ def run_fzf(
         log_error(f"'fzf' is required for interactive navigation. Run: {get_install_hint('fzf')}")
         return []
 
-    if not sys.stdin.isatty() and not os.isatty(0):
+    if not sys.stdin.isatty():
+        if extra_args and any(arg.startswith("--expect") for arg in extra_args):
+            return ["", items[0]] if items else []
         return [items[0]] if items else []
 
     fzf_args = [
         "fzf",
         "--ansi",
+        f"--with-shell={ACTION_SHELL} -c",
         f"--prompt={prompt}",
         "--height=85%",
         "--layout=reverse",
@@ -889,21 +957,91 @@ def run_fzf(
         return []
 
 
+def clipboard_commands():
+    if IS_MACOS:
+        return [["pbcopy"]]
+    return [["wl-copy"], ["xclip", "-selection", "clipboard"], ["xsel", "-b"]]
+
+
+def save_mac_clipboard(text: str):
+    import tempfile
+
+    if not text or len(text) > 65536:
+        return
+    try:
+        entries = json.loads(MAC_CLIPBOARD_FILE.read_text())
+    except (OSError, ValueError):
+        entries = []
+    try:
+        MAC_CLIPBOARD_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=MAC_CLIPBOARD_FILE.parent, delete=False) as handle:
+            pending = Path(handle.name)
+            try:
+                json.dump([text] + [entry for entry in entries[:50] if entry != text][:49], handle)
+                handle.flush()
+                pending.replace(MAC_CLIPBOARD_FILE)
+            finally:
+                pending.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def copy_to_clipboard(text: str) -> bool:
-    """Copies text to system clipboard using wl-copy (Wayland) or xclip (X11)."""
-    if shutil.which("wl-copy"):
-        try:
-            subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=True, timeout=2.0)
+    for cmd in clipboard_commands():
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.run(cmd, input=text.encode("utf-8"), check=True, timeout=2.0)
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if IS_MACOS:
+                save_mac_clipboard(text)
             return True
-        except Exception:
-            pass
-    if shutil.which("xclip"):
-        try:
-            subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=True, timeout=2.0)
-            return True
-        except Exception:
-            pass
     return False
+
+
+def send_notification(title: str, message: str):
+    if IS_MACOS:
+        subprocess.run(
+            ["osascript", "-e", "on run argv", "-e",
+             "display notification (item 2 of argv) with title (item 1 of argv)",
+             "-e", "end run", title, message], check=False,
+        )
+    elif shutil.which("notify-send"):
+        subprocess.run(["notify-send", "-a", "CoreX", title, message], check=False)
+
+
+def uptime_seconds() -> Optional[float]:
+    if IS_MACOS:
+        return corex_macos.uptime_seconds()
+    try:
+        return float(Path("/proc/uptime").read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def os_name() -> str:
+    if IS_MACOS:
+        return f"macOS {corex_macos.output('sw_vers', '-productVersion')}".strip()
+    try:
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if line.startswith("PRETTY_NAME="):
+                return line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return "Linux"
+
+
+def self_command(config_path: Optional[Path] = None) -> str:
+    args = [sys.executable, str(COREX_EXECUTABLE)]
+    if config_path:
+        args += ["--config", str(config_path)]
+    return shlex.join(args)
+
+
+def open_url(url: str):
+    opener = shutil.which("open" if IS_MACOS else "xdg-open")
+    if opener:
+        subprocess.Popen([opener, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # ---------------------------------------------------------------------------
@@ -936,7 +1074,7 @@ def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Opti
             url = f"http://{cfg.comfyui_host}:{cfg.comfyui_port}"
             log_success(f"ComfyUI is ALREADY ACTIVE on {url}!")
             if not dry_run and cfg.comfyui_auto_browser:
-                subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                open_url(url)
             return
         except (ConnectionRefusedError, TimeoutError, OSError):
             pass
@@ -953,7 +1091,7 @@ def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Opti
         return
 
     python_bin = sys.executable
-    for v in ["venv", ".venv", "env"]:
+    for v in [cfg.comfyui_venv, "venv", ".venv", "env"]:
         p = comfy_dir / v / "bin" / "python"
         if p.exists() and os.access(p, os.X_OK):
             python_bin = str(p)
@@ -970,9 +1108,12 @@ def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Opti
         log_step("Memory Profile", f"{Style.GREEN}{vram_flag}{Style.RESET}")
 
     env = os.environ.copy()
-    env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-
-    cmd = [python_bin, "main.py", "--listen", cfg.comfyui_host, "--port", str(cfg.comfyui_port), vram_flag]
+    cmd = [python_bin, "main.py", "--listen", cfg.comfyui_host, "--port", str(cfg.comfyui_port)]
+    if IS_MACOS:
+        env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+    else:
+        env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+        cmd.append(vram_flag)
     cmd.extend(cfg.comfyui_extra_flags)
     if extra_args:
         cmd.extend(extra_args)
@@ -983,11 +1124,11 @@ def builtin_comfy_boot(cfg: CoreXConfig, dry_run: bool = False, extra_args: Opti
         return
 
     url = f"http://{cfg.comfyui_host}:{cfg.comfyui_port}"
-    if cfg.comfyui_notify and shutil.which("notify-send"):
-        subprocess.run(["notify-send", "CoreX AI Launcher", f"Booting ComfyUI on {url}"], check=False)
+    if cfg.comfyui_notify:
+        send_notification("CoreX AI Launcher", f"Booting ComfyUI on {url}")
 
     if cfg.comfyui_auto_browser:
-        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        open_url(url)
 
     log_success(f"Launching ComfyUI server at {url} (Ctrl+C to stop)...")
     subprocess.run(cmd, cwd=comfy_dir, env=env)
@@ -1057,13 +1198,13 @@ def ensure_ollama_ready(cfg: CoreXConfig) -> Tuple[bool, str]:
         print(f" {Style.BOLD}Ollama was not found in your system PATH.{Style.RESET}")
         print(f" CoreX requires Ollama to run offline AI models locally.")
 
-        pm = "paru" if shutil.which("paru") else ("yay" if shutil.which("yay") else ("sudo pacman" if shutil.which("pacman") else None))
-        if not pm:
-            print(f" {Style.RED}No supported Arch package manager found. Install 'ollama' manually.{Style.RESET}")
+        pm, install_prefix, _, _ = detect_package_manager()
+        if not pm or not install_prefix:
+            print(f" {Style.RED}{get_install_hint('ollama')}.{Style.RESET}")
             print(box_footer(color=Style.YELLOW))
             return False, ""
 
-        install_cmd = f"{pm} -Sy --needed ollama"
+        install_cmd = f"{install_prefix} ollama"
         print(f" Automated install command: {Style.CYAN}{install_cmd}{Style.RESET}")
         print(box_footer(color=Style.YELLOW))
 
@@ -1226,22 +1367,10 @@ def builtin_ai_ask(query: Optional[str], cfg: CoreXConfig):
         return
 
     # Detect local system context
-    distro = "Linux"
-    try:
-        if Path("/etc/os-release").exists():
-            for line in Path("/etc/os-release").read_text().splitlines():
-                if line.startswith("PRETTY_NAME="):
-                    distro = line.split("=", 1)[1].strip().strip('"')
-                    break
-    except Exception:
-        pass
-
-    shell_name = os.environ.get("SHELL", "bash").split("/")[-1]
-    cwd = os.getcwd()
-    user = os.environ.get("USER", "user")
+    distro = os_name()
 
     system_prompt = (
-        f"You are CoreX AI, an elite, minimalist Linux terminal copilot and systems hacker. "
+        f"You are CoreX AI, a terminal copilot for the user’s operating system. "
         f"The user is running {distro}, shell: {shell_name}, user: {user}, cwd: {cwd}. "
         "Your task is to provide the exact, optimal terminal command to solve their request.\n"
         "Rules:\n"
@@ -1356,23 +1485,11 @@ def builtin_ai_ask(query: Optional[str], cfg: CoreXConfig):
         print(f"\n{Style.BOLD}Executing:{Style.RESET} {detected_cmd}\n")
         subprocess.run(detected_cmd, shell=True)
     elif action == "copy":
-        copied = False
-        if shutil.which("wl-copy"):
-            try:
-                subprocess.run(["wl-copy"], input=detected_cmd.encode("utf-8"), check=True, timeout=2.0)
-                copied = True
-            except Exception:
-                pass
-        if not copied and shutil.which("xclip"):
-            try:
-                subprocess.run(["xclip", "-selection", "clipboard"], input=detected_cmd.encode("utf-8"), check=True, timeout=2.0)
-                copied = True
-            except Exception:
-                pass
+        copied = copy_to_clipboard(detected_cmd)
         if copied:
             log_success("Command copied to system clipboard!")
         else:
-            log_warn("Clipboard utility (wl-copy or xclip) not found.")
+            log_warn("Could not copy to the system clipboard.")
     elif action == "edit":
         import tempfile
         ed = get_default_editor(cfg)
@@ -1402,6 +1519,16 @@ def get_hardware_profile() -> Dict[str, Any]:
         "ram_avail_mb": 0,
         "has_gpu": False,
     }
+
+    if IS_MACOS:
+        total, available = corex_macos.memory_mib()
+        apple_silicon = corex_macos.output("sysctl", "-n", "hw.optional.arm64") == "1"
+        profile.update(
+            gpu_name="Apple Silicon (Metal)" if apple_silicon else "Mac (CPU compatibility estimate)",
+            ram_total_mb=total, ram_avail_mb=available or 0,
+            has_gpu=apple_silicon, unified_memory=apple_silicon,
+        )
+        return profile
 
     # 1. Probe Nvidia GPU
     if shutil.which("nvidia-smi"):
@@ -1573,6 +1700,18 @@ def rate_model_compatibility(vram_req_mb: int, hw: Dict[str, Any]) -> Dict[str, 
     vram = hw.get("vram_total_mb", 0)
     ram = hw.get("ram_total_mb", 0)
 
+    if hw.get("unified_memory") and ram:
+        ratio = vram_req_mb / ram
+        fits = ratio <= 0.70
+        return {
+            "tier": "UNIFIED MEMORY" if fits else "MEMORY LIMITED",
+            "badge": "🟢 METAL" if fits else "🟠 TIGHT",
+            "color": Style.GREEN if fits else Style.YELLOW,
+            "fit": f"{ratio:.0%} of unified memory (estimate)",
+            "est_speed": "Varies by chip and model",
+            "note": "CPU and GPU share physical memory. Leave room for macOS, other apps and model context.",
+            "playable": fits,
+        }
     if vram > 0:
         ratio = vram_req_mb / vram
         if ratio <= 0.35:
@@ -1778,7 +1917,8 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
 
     args = extra_args or []
 
-    ensure_ollama_ready(cfg)
+    if "--summary" not in args and "--list" not in args:
+        ensure_ollama_ready(cfg)
 
     hw = get_hardware_profile()
     api_url = cfg.ollama_url.rstrip("/")
@@ -1797,7 +1937,12 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
 
     if "--summary" in args or "--list" in args:
         print(f"\n{box_header('AI HARDWARE TELEMETRY & MODEL COMPATIBILITY', color=Style.CYAN)}")
-        print(f" {Style.BOLD}GPU Hardware:{Style.RESET}     {hw['gpu_name']} ({hw['vram_total_mb']/1024:.1f} GB VRAM, {hw['vram_free_mb']/1024:.1f} GB Free)")
+        gpu_details = hw["gpu_name"]
+        if hw.get("unified_memory"):
+            gpu_details += " (unified memory)"
+        elif hw["vram_total_mb"]:
+            gpu_details += f" ({hw['vram_total_mb']/1024:.1f} GB VRAM, {hw['vram_free_mb']/1024:.1f} GB free)"
+        print(f" {Style.BOLD}GPU Hardware:{Style.RESET}     {gpu_details}")
         print(f" {Style.BOLD}System Memory:{Style.RESET}    {hw['ram_total_mb']/1024:.1f} GB Total ({hw['ram_avail_mb']/1024:.1f} GB Available)")
         print(f" {Style.BOLD}Active Copilot:{Style.RESET}   {Style.GREEN}{cfg.ollama_model}{Style.RESET}")
         print(f"{Style.DARK_GRAY}{'─' * 70}{Style.RESET}")
@@ -1852,8 +1997,8 @@ def builtin_model_chooser(cfg: CoreXConfig, extra_args: Optional[List[str]] = No
         line = f"{name:<24} {rating['badge']:<15} {tag:<12} {act_star} {m['disk_gb']:>4.1f} GB  {m['category']:<16} {m['desc']}"
         items.append(line)
 
-    self_exe = os.path.abspath(sys.argv[0])
-    preview_cmd = f"python3 '{self_exe}' __preview_model {{1}}"
+    self_exe = self_command()
+    preview_cmd = f"{self_exe} __preview_model {{1}}"
 
     header = (
         f"GPU: {hw['gpu_name']} ({hw['vram_total_mb']/1024:.1f} GB VRAM) | RAM: {hw['ram_total_mb']/1024:.1f} GB | Active: {cfg.ollama_model}\n"
@@ -2030,7 +2175,7 @@ def builtin_stream_yt(video: bool = False, query: Optional[str] = None, dry_run:
         "--delimiter=\t",
         "--with-nth=2,3,4",
         "--header=ENTER: Play Stream | CTRL-Y: Copy URL",
-        "--bind=ctrl-y:execute-silent(echo -n {1} | wl-copy || echo -n {1} | xclip -selection clipboard)",
+        f"--bind=ctrl-y:execute-silent({self_command()} __copy {{1}})",
     ]
 
     selected = run_fzf(fzf_items, prompt="stream > ", extra_args=extra)
@@ -2544,7 +2689,7 @@ def render_radio_preview(target: str, cfg: CoreXConfig):
     print(f"\n{div}")
     print(f"  {Style.BOLD}STREAM TELEMETRY & AUDIO ENGINE{Style.RESET}")
     print(f"  • Protocol:     Direct HTTPS/HTTP Icecast/Shoutcast Stream")
-    print(f"  • Playback:     mpv --no-video (PipeWire Low-Latency Audio)")
+    print(f"  • Playback:     mpv --no-video ({'Core Audio' if IS_MACOS else 'PipeWire'})")
     print(f"  • Metadata:     Real-Time ICY Demuxing & Track OSD")
 
     print(f"\n{div}")
@@ -2593,7 +2738,7 @@ def _play_radio_stream(st: Dict[str, Any]):
     print(f" Station:  {Style.BOLD}{st['name']}{Style.RESET}")
     print(f" Genre:    {st.get('genre', 'Music')}")
     print(f" URL:      {st['url']}")
-    print(f" Audio:    mpv --no-video (PipeWire Low-Latency)")
+    print(f" Audio:    mpv --no-video ({'Core Audio' if IS_MACOS else 'PipeWire'})")
     print(box_footer(color=Style.CYAN))
     log_step("Tuning in", f"Connecting to {st['name']}...")
 
@@ -2829,8 +2974,8 @@ def builtin_stream_radio(extra_args: Optional[List[str]] = None):
         line = f"{tag:<20} {s['name']:<30} {s['genre']:<24} {s['desc']}\t{s['url']}\t{s['name']}"
         items.append(line)
 
-    self_exe = os.path.abspath(sys.argv[0])
-    preview_cmd = f"python3 '{self_exe}' __preview_radio {{3}}"
+    self_exe = self_command()
+    preview_cmd = f"{self_exe} __preview_radio {{3}}"
 
     fzf_extra = ["--delimiter=\t", "--with-nth=1", "--expect=ctrl-y"]
     if query:
@@ -2954,8 +3099,30 @@ def get_now_playing() -> Optional[Dict[str, Any]]:
         except Exception:
             pass
 
-    # 2. Check playerctl (MPRIS: Spotify, Firefox, VLC, Amberol, etc.)
-    if shutil.which("playerctl"):
+    if IS_MACOS:
+        for app in ("Music", "Spotify"):
+            if not corex_macos.output("pgrep", "-x", app):
+                continue
+            script = f"""
+tell application "{app}"
+    if player state is stopped then return ""
+    set trackName to name of current track
+    set trackArtist to artist of current track
+    set trackAlbum to album of current track
+    return (player state as text) & linefeed & trackName & linefeed & trackArtist & linefeed & trackAlbum
+end tell
+"""
+            lines = corex_macos.output("osascript", "-e", script, timeout=4).split("\n", 3)
+            if len(lines) >= 3:
+                status, title, artist = lines[:3]
+                return {
+                    "source": f"macOS ({app})", "player": app, "artist": artist, "title": title,
+                    "album": lines[3] if len(lines) == 4 else "", "genre": "", "bitrate": "",
+                    "status": status.title(), "raw": f"{artist} - {title}" if artist else title,
+                }
+
+    # Check Linux MPRIS players via playerctl.
+    if not IS_MACOS and shutil.which("playerctl"):
         try:
             res = subprocess.run(
                 ["playerctl", "-a", "metadata", "--format", "{{status}}|{{playerName}}|{{artist}}|{{title}}|{{album}}"],
@@ -3012,8 +3179,8 @@ def builtin_now_playing(extra_args: Optional[List[str]] = None):
                         last_track = cur
                         status_sym = f"{Style.GREEN}▶{Style.RESET}" if info["status"] == "Playing" else f"{Style.YELLOW}⏸{Style.RESET}"
                         print(f" {status_sym} {Style.BOLD}{cur}{Style.RESET} {Style.DARK_GRAY}[{info['source']}]{Style.RESET}")
-                        if notify_mode and shutil.which("notify-send"):
-                            subprocess.run(["notify-send", "-a", "CoreX", "-i", "audio-headphones", "Now Playing", cur])
+                        if notify_mode:
+                            send_notification("Now Playing", cur)
                 time.sleep(2.0)
         except KeyboardInterrupt:
             print("\nExited track monitor.")
@@ -3024,7 +3191,7 @@ def builtin_now_playing(extra_args: Optional[List[str]] = None):
         if short_mode:
             print("No media playing")
         else:
-            log_warn("No active media streams detected (checked CoreX Radio, Spotify, Firefox, MPV, playerctl).")
+            log_warn("No supported active media streams detected.")
             print(f"  {Style.GRAY}Tip: Run {Style.BOLD}cx stream-radio{Style.RESET}{Style.GRAY} to tune into 48+ commercial-free streams!{Style.RESET}\n")
         return
 
@@ -3057,8 +3224,8 @@ def builtin_now_playing(extra_args: Optional[List[str]] = None):
         if copied:
             log_success(f"Track copied to clipboard: '{track_str}'")
 
-    if notify_mode and shutil.which("notify-send"):
-        subprocess.run(["notify-send", "-a", "CoreX", "-i", "audio-headphones", "Now Playing", track_str])
+    if notify_mode:
+        send_notification("Now Playing", track_str)
 
 
 def builtin_rip_audio(fmt: str = "flac", dry_run: bool = False):
@@ -3182,7 +3349,12 @@ def builtin_pw_volume():
 
 
 def builtin_fkill(filter_term: Optional[str] = None):
-    res = subprocess.run(["ps", "-eo", "pid,user,%cpu,%mem,stat,comm", "--sort=-%cpu"], capture_output=True, text=True)
+    if not sys.stdin.isatty():
+        log_error("Interactive process selection requires a terminal.")
+        return
+    ps_args = (["ps", "-Arc", "-o", "pid,user,%cpu,%mem,stat,comm"] if IS_MACOS else
+               ["ps", "-eo", "pid,user,%cpu,%mem,stat,comm", "--sort=-%cpu"])
+    res = subprocess.run(ps_args, capture_output=True, text=True)
     if res.returncode != 0:
         return
     lines = res.stdout.strip().splitlines()[1:]
@@ -3196,10 +3368,12 @@ def builtin_fkill(filter_term: Optional[str] = None):
             items.append(f"{pid:<8}\t{user:<10}\t{cpu:<6}%\t{mem:<6}%\t{stat:<5}\t{comm}")
 
     preview = "cat /proc/{1}/status 2>/dev/null | grep -E 'Name|State|VmSize|VmRSS|Threads' || echo 'Process terminated'"
+    if IS_MACOS:
+        preview = f"{self_command()} __preview_proc {{1}}"
     extra = [
         "--delimiter=\t",
         "--header=ENTER: SIGTERM (-15) | CTRL-X: SIGKILL (-9) | TAB: Multi-select",
-        "--bind=ctrl-x:execute(kill -9 {+1} 2>/dev/null)+reload(ps -eo pid,user,%cpu,%mem,stat,comm --sort=-%cpu | tail -n +2 | awk '{printf \"%-8s\\t%-10s\\t%-6s%%\\t%-6s%%\\t%-5s\\t%s\\n\", $1,$2,$3,$4,$5,$6}')",
+        "--bind=ctrl-x:execute(kill -9 {+1} 2>/dev/null)+reload(" + shlex.join(ps_args) + " | tail -n +2 | awk '{printf \"%-8s\\t%-10s\\t%-6s%%\\t%-6s%%\\t%-5s\\t%s\\n\", $1,$2,$3,$4,$5,$6}')",
     ]
     selected = run_fzf(items, prompt="fkill > ", preview_cmd=preview, multi=True, extra_args=extra)
     if not selected:
@@ -3583,20 +3757,7 @@ def builtin_url_short(target_url: Optional[str] = None):
         log_error("Failed to shorten URL. All shortening endpoints (TinyURL, Clck.ru, is.gd) were unreachable.")
         return
 
-    # Auto-copy to system clipboard
-    copied = False
-    if shutil.which("wl-copy"):
-        try:
-            subprocess.run(["wl-copy"], input=short_url.encode("utf-8"), check=True)
-            copied = True
-        except Exception:
-            pass
-    if not copied and shutil.which("xclip"):
-        try:
-            subprocess.run(["xclip", "-selection", "clipboard"], input=short_url.encode("utf-8"), check=True)
-            copied = True
-        except Exception:
-            pass
+    copied = copy_to_clipboard(short_url)
 
     print(f"\n{box_header('URL SHORTENER RESULT', color=Style.GREEN)}")
     print(f" {Style.BOLD}Original:{Style.RESET}   {Style.GRAY}{url}{Style.RESET}")
@@ -3607,6 +3768,9 @@ def builtin_url_short(target_url: Optional[str] = None):
 
 
 def builtin_port_audit():
+    if IS_MACOS:
+        builtin_mac_port_audit()
+        return
     res = subprocess.run(["ss", "-tulpn"], capture_output=True, text=True)
     if res.returncode != 0:
         log_error("ss command failed.")
@@ -3839,33 +4003,29 @@ def builtin_todo(cfg: CoreXConfig):
 
 def builtin_sys_info():
     uname = os.uname()
-    uptime_sec = 0
-    try:
-        with open("/proc/uptime") as f:
-            uptime_sec = float(f.readline().split()[0])
-    except Exception:
-        pass
-
-    hrs, rem = divmod(int(uptime_sec), 3600)
-    mins, _ = divmod(rem, 60)
-    days, hrs = divmod(hrs, 24)
-    up_str = f"{days}d {hrs}h {mins}m" if days > 0 else f"{hrs}h {mins}m"
-
-    distro_name = "Linux"
-    try:
-        if Path("/etc/os-release").exists():
-            for line in Path("/etc/os-release").read_text().splitlines():
-                if line.startswith("PRETTY_NAME="):
-                    distro_name = line.split("=", 1)[1].strip().strip('"')
-                    break
-    except Exception:
-        pass
+    uptime = uptime_seconds()
+    days, remainder = divmod(int(uptime or 0), 86400)
+    hours, remainder = divmod(remainder, 3600)
+    up_str = f"{days}d {hours}h {remainder // 60}m" if uptime is not None else "Unavailable"
+    distro_name = os_name()
 
     print(box_header("SYSTEM HARDWARE & KERNEL"))
     print(f" {Style.BOLD}OS / Distro:{Style.RESET}    {distro_name}")
     print(f" {Style.BOLD}Kernel:{Style.RESET}         {uname.release} ({uname.machine})")
     print(f" {Style.BOLD}Hostname:{Style.RESET}       {uname.nodename}")
     print(f" {Style.BOLD}Uptime:{Style.RESET}         {up_str}")
+
+    if IS_MACOS:
+        chip = corex_macos.output("sysctl", "-n", "machdep.cpu.brand_string")
+        total, available = corex_macos.memory_mib()
+        if chip:
+            print(f" {Style.BOLD}Processor:{Style.RESET}      {chip}")
+        if total:
+            print(f" {Style.BOLD}Physical RAM:{Style.RESET}   {total} MiB")
+        if available is not None:
+            print(f" {Style.BOLD}RAM available:{Style.RESET}  ~{available} MiB")
+        print(box_footer())
+        return
 
     tot_v, free_v = get_nvidia_vram()
     if tot_v:
@@ -3883,7 +4043,11 @@ def builtin_sys_info():
 
 
 def builtin_sys_update(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
+    from concurrent.futures import ThreadPoolExecutor
+
     args = extra_args or []
+    if IS_MACOS:
+        return builtin_mac_update(args)
     is_preview = "--preview" in args
 
     pm, inst_prefix, update_cmd, distro = detect_package_manager()
@@ -3906,25 +4070,25 @@ def builtin_sys_update(cfg: CoreXConfig, extra_args: Optional[List[str]] = None)
                     official_updates = [l for l in res.stdout.splitlines() if l.strip()]
                 except Exception:
                     pass
-            elif pm == "pacman":
+            elif distro == "arch":
                 try:
                     res = subprocess.run(["pacman", "-Qu"], capture_output=True, text=True, timeout=2)
                     official_updates = [l for l in res.stdout.splitlines() if l.strip()]
                 except Exception:
                     pass
-            elif pm == "apt":
+            elif distro == "debian":
                 try:
                     res = subprocess.run("apt list --upgradable 2>/dev/null | grep -v 'Listing...'", shell=True, capture_output=True, text=True, timeout=3)
                     official_updates = [l for l in res.stdout.splitlines() if l.strip()]
                 except Exception:
                     pass
-            elif pm == "dnf":
+            elif distro == "fedora":
                 try:
                     res = subprocess.run(["dnf", "check-update", "-q"], capture_output=True, text=True, timeout=3)
                     official_updates = [l for l in res.stdout.splitlines() if l.strip() and not l.startswith("Last metadata")]
                 except Exception:
                     pass
-            elif pm == "zypper":
+            elif distro == "suse":
                 try:
                     res = subprocess.run(["zypper", "list-updates"], capture_output=True, text=True, timeout=3)
                     official_updates = [l for l in res.stdout.splitlines() if l.strip() and not l.startswith("Loading")]
@@ -4043,26 +4207,26 @@ def builtin_sys_update(cfg: CoreXConfig, extra_args: Optional[List[str]] = None)
         return
 
     aur_bin = shutil.which("paru") or shutil.which("yay")
-    if pm == "pacman":
+    if distro == "arch":
         if aur_bin:
             log_info(f"Running full system & AUR update via {os.path.basename(aur_bin)}...")
             cmd = [aur_bin, "-Syu"]
         else:
             log_info("Running pacman system update...")
-            cmd = ["sudo", "pacman", "-Syu"]
-    elif pm == "apt":
+            cmd = [*shlex.split(pm), "-Syu"]
+    elif distro == "debian":
         log_info("Running apt update & upgrade...")
         cmd = ["sudo", "apt", "update", "&&", "sudo", "apt", "upgrade"]
-    elif pm == "dnf":
+    elif distro == "fedora":
         log_info("Running dnf upgrade...")
-        cmd = ["sudo", "dnf", "upgrade"]
-    elif pm == "zypper":
+        cmd = [*shlex.split(pm), "upgrade"]
+    elif distro == "suse":
         log_info("Running zypper update...")
         cmd = ["sudo", "zypper", "update"]
-    elif pm == "apk":
+    elif distro == "alpine":
         log_info("Running apk update & upgrade...")
         cmd = ["sudo", "apk", "update", "&&", "sudo", "apk", "upgrade"]
-    elif pm == "xbps":
+    elif distro == "void":
         log_info("Running xbps-install -Su...")
         cmd = ["sudo", "xbps-install", "-Su"]
     else:
@@ -4137,30 +4301,20 @@ def builtin_fetch(extra_args: Optional[List[str]] = None):
         subprocess.run(["fastfetch"])
         return
 
-    distro_name = "Linux"
-    try:
-        if Path("/etc/os-release").exists():
-            for line in Path("/etc/os-release").read_text().splitlines():
-                if line.startswith("PRETTY_NAME="):
-                    distro_name = line.split("=", 1)[1].strip().strip('"')
-                    break
-    except Exception:
-        pass
+    distro_name = os_name()
 
     uname = os.uname()
     u = os.environ.get("USER", "user")
     host_str = f"{u}@{uname.nodename}"
 
-    uptime_sec = 0
-    try:
-        with open("/proc/uptime") as f:
-            uptime_sec = float(f.readline().split()[0])
-    except Exception:
-        pass
-    hrs, rem = divmod(int(uptime_sec), 3600)
+    uptime_sec = uptime_seconds()
+    hrs, rem = divmod(int(uptime_sec or 0), 3600)
     mins, _ = divmod(rem, 60)
     days, hrs = divmod(hrs, 24)
     up_str = f"{days}d {hrs}h {mins}m" if days > 0 else f"{hrs}h {mins}m"
+
+    if uptime_sec is None:
+        up_str = "Unavailable"
 
     cpu_name = "Unknown CPU"
     try:
@@ -4203,7 +4357,11 @@ def builtin_fetch(extra_args: Optional[List[str]] = None):
 
     pm_count = 0
     pm_name = "pacman"
-    if shutil.which("pacman"):
+    if IS_MACOS and shutil.which("brew"):
+        pm_name = "homebrew"
+        installed = corex_macos.output("brew", "list")
+        pm_count = len(installed.splitlines())
+    elif shutil.which("pacman"):
         res = subprocess.run("pacman -Qq 2>/dev/null | wc -l", shell=True, capture_output=True, text=True, timeout=1.5)
         if res.stdout.strip().isdigit():
             pm_count = int(res.stdout.strip())
@@ -4241,6 +4399,15 @@ def builtin_fetch(extra_args: Optional[List[str]] = None):
             pw_status = "PipeWire (Active)"
     except Exception:
         pass
+
+    if IS_MACOS:
+        cpu_name = corex_macos.output("sysctl", "-n", "machdep.cpu.brand_string") or uname.machine
+        gpu_name = "Apple Silicon (Metal)" if corex_macos.output("sysctl", "-n", "hw.optional.arm64") == "1" else "See cx dri-info"
+        total, available = corex_macos.memory_mib()
+        if total:
+            ram_str = f"{total} MiB" if available is None else f"~{total - available} / {total} MiB used"
+        desktop_str = "Aqua"
+        pw_status = "Core Audio"
 
     c1 = "\033[38;2;137;180;250m"
     c2 = "\033[38;2;180;190;254m"
@@ -4382,8 +4549,9 @@ def builtin_clock():
 
         uptime_str = ""
         try:
-            with open("/proc/uptime") as f:
-                up_sec = float(f.readline().split()[0])
+            up_sec = uptime_seconds()
+            if up_sec is None:
+                raise ValueError("Uptime unavailable")
             hrs, rem = divmod(int(up_sec), 3600)
             mins, _ = divmod(rem, 60)
             days, hrs = divmod(hrs, 24)
@@ -5536,21 +5704,11 @@ def builtin_share(target: Optional[str] = None, extra_args: Optional[List[str]] 
         print(f"\r {Style.BOLD}Status:{Style.RESET}   {Style.GREEN}✔ Upload Successful!{Style.RESET}  (Host: {service_name})")
         print(f" {Style.BOLD}Link:{Style.RESET}     {Style.CYAN}{Style.BOLD}{url}{Style.RESET}")
 
-        copied = False
-        if shutil.which("wl-copy"):
-            subprocess.run(["wl-copy"], input=url.encode(), check=False)
-            copied = True
-        elif shutil.which("xclip"):
-            subprocess.run(["xclip", "-selection", "clipboard"], input=url.encode(), check=False)
-            copied = True
-        elif shutil.which("xsel"):
-            subprocess.run(["xsel", "-b"], input=url.encode(), check=False)
-            copied = True
-
+        copied = copy_to_clipboard(url)
         if copied:
             print(f" {Style.BOLD}Buffer:{Style.RESET}   {Style.GREEN}✔ Copied link to system clipboard!{Style.RESET}")
         else:
-            print(f" {Style.BOLD}Buffer:{Style.RESET}   {Style.DIM}(Clipboard tool not found: install wl-copy or xclip){Style.RESET}")
+            print(f" {Style.BOLD}Buffer:{Style.RESET}   {Style.DIM}(Could not copy to clipboard){Style.RESET}")
 
     finally:
         if tmp_file and tmp_file.exists():
@@ -5569,16 +5727,26 @@ def builtin_disks(extra_args: Optional[List[str]] = None):
     seen_dev_mnts = set()
 
     try:
-        res = subprocess.run(["df", "-h", "-T", "-P"], capture_output=True, text=True, timeout=3)
+        args = ["df", "-h"] if IS_MACOS else ["df", "-h", "-T", "-P"]
+        res = subprocess.run(args, capture_output=True, text=True, timeout=3, check=True)
         lines = res.stdout.strip().splitlines()
         if len(lines) > 1:
             for line in lines[1:]:
-                parts = line.split()
-                if len(parts) >= 7:
-                    dev, fstype, size, used, avail, use_pct, mnt = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6]
+                if IS_MACOS:
+                    parts = line.split(None, 8)
+                    if len(parts) < 9:
+                        continue
+                    dev, size, used, avail, use_pct, _, _, _, mnt = parts
+                    fstype = "—"
+                else:
+                    parts = line.split(None, 6)
+                    if len(parts) < 7:
+                        continue
+                    dev, fstype, size, used, avail, use_pct, mnt = parts
+                if use_pct.rstrip("%").isdigit():
                     if fstype in ("tmpfs", "devtmpfs", "squashfs", "overlay", "efivarfs", "cgroup"):
                         continue
-                    if not dev.startswith("/dev/"):
+                    if not IS_MACOS and not dev.startswith("/dev/"):
                         continue
                     # Keep /, /home, /boot, and avoid duplicate subvolumes like /srv, /var/log for the same dev
                     if dev in seen_dev_mnts and mnt not in ("/", "/home", "/boot") and not mnt.startswith(("/mnt", "/media", "/run/media")):
@@ -5610,7 +5778,7 @@ def builtin_disks(extra_args: Optional[List[str]] = None):
 
     for m in mounts:
         pct = m["pct"]
-        filled = int((pct / 100.0) * bar_len)
+        filled = min(bar_len, int((pct / 100.0) * bar_len))
         empty = bar_len - filled
 
         if pct >= 85:
@@ -5656,17 +5824,18 @@ def builtin_audio_test(extra_args: Optional[List[str]] = None):
     print(box_header("COREX SPATIAL STEREO AUDIO VERIFICATION"))
 
     player = None
-    for p in ("pw-play", "paplay", "aplay"):
+    players = ("afplay",) if IS_MACOS else ("pw-play", "paplay", "aplay")
+    for p in players:
         if shutil.which(p):
             player = p
             break
 
     if not player:
-        print(f" {Style.RED}✖ Error: No audio player found (pw-play, paplay, or aplay required).{Style.RESET}")
+        print(f" {Style.RED}✖ Error: No audio player found ({' / '.join(players)}).{Style.RESET}")
         print(box_footer())
         return
 
-    server = "PipeWire" if shutil.which("pw-cli") else ("PulseAudio" if shutil.which("pactl") else "ALSA")
+    server = "Core Audio" if IS_MACOS else "PipeWire" if shutil.which("pw-cli") else ("PulseAudio" if shutil.which("pactl") else "ALSA")
     print(f" {Style.BOLD}Audio Subsystem:{Style.RESET} {Style.GREEN}{server}{Style.RESET}  (Engine: {player})")
 
     sink_info = "Default Stereo Sink"
@@ -5708,17 +5877,17 @@ def builtin_audio_test(extra_args: Optional[List[str]] = None):
 
     try:
         print(f"  {Style.CYAN}{Style.BOLD}◄◄ [ LEFT CHANNEL: 440 Hz (A4) ]{Style.RESET}                  ", end="", flush=True)
-        subprocess.run([player, str(f_left)], capture_output=True)
+        subprocess.run([player, str(f_left)], capture_output=True, check=True)
         print(f"{Style.GREEN}✔ OK{Style.RESET}")
         time.sleep(0.3)
 
         print(f"                     {Style.MAGENTA}{Style.BOLD}[ RIGHT CHANNEL: 880 Hz (A5) ] ►►{Style.RESET}  ", end="", flush=True)
-        subprocess.run([player, str(f_right)], capture_output=True)
+        subprocess.run([player, str(f_right)], capture_output=True, check=True)
         print(f"{Style.GREEN}✔ OK{Style.RESET}")
         time.sleep(0.3)
 
         print(f"        {Style.YELLOW}{Style.BOLD}◄◄◄ [ STEREO CENTER HARMONIC ] ►►►{Style.RESET}        ", end="", flush=True)
-        subprocess.run([player, str(f_center)], capture_output=True)
+        subprocess.run([player, str(f_center)], capture_output=True, check=True)
         print(f"{Style.GREEN}✔ OK{Style.RESET}")
 
         print(f"\n {Style.GREEN}✔ Spatial stereo channel test completed successfully.{Style.RESET}")
@@ -5736,6 +5905,14 @@ def builtin_audio_test(extra_args: Optional[List[str]] = None):
 def builtin_sensors(extra_args: Optional[List[str]] = None):
     args = extra_args or []
     watch = any(a in args for a in ("-w", "--watch", "watch"))
+    if IS_MACOS:
+        print(box_header("POWER & THERMAL TELEMETRY"), flush=True)
+        if watch:
+            subprocess.run(["sudo", "powermetrics", "--samplers", "thermal,cpu_power,gpu_power", "-i", "1000"])
+        else:
+            subprocess.run(["pmset", "-g", "batt"])
+            subprocess.run(["pmset", "-g", "therm"])
+        return
 
     def _render_frame():
         lines = []
@@ -5921,7 +6098,16 @@ def builtin_oom_score():
 
 
 def builtin_ram_breakdown():
-    print(box_header("PHYSICAL RAM FORENSIC BREAKDOWN"))
+    print(box_header("PHYSICAL RAM FORENSIC BREAKDOWN"), flush=True)
+    if IS_MACOS:
+        total, available = corex_macos.memory_mib()
+        if available is not None:
+            print(f"Estimated available: {available} MiB / {total} MiB", flush=True)
+        subprocess.run(["vm_stat"])
+        subprocess.run(["sysctl", "vm.swapusage"])
+        subprocess.run(["memory_pressure"])
+        print(box_footer())
+        return
     try:
         mem = Path("/proc/meminfo").read_text()
         def get_kb(key: str) -> int:
@@ -6083,24 +6269,34 @@ def builtin_mtu_bench():
     print(box_header("MTU / MSS PACKET SWEEP TEST"))
     # Find default gateway
     gw = "1.1.1.1"
-    try:
-        res = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True)
-        gw = res.stdout.split()[2]
-    except Exception:
-        pass
+    if IS_MACOS:
+        route = corex_macos.output("route", "-n", "get", "default")
+        gateway = re.search(r"gateway:\s+(\S+)", route)
+        if gateway:
+            gw = gateway[1]
+    else:
+        try:
+            res = subprocess.run(["ip", "route", "show", "default"], capture_output=True, text=True)
+            gw = res.stdout.split()[2]
+        except (OSError, IndexError):
+            pass
     log_info(f"Probing target {gw} for maximum non-fragmented packet size...")
-    optimal = 1500
+    optimal = None
     for size in [1500, 1492, 1472, 1464, 1448, 1400, 1360]:
         # -M do means don't fragment
-        cmd = ["ping", "-c", "1", "-M", "do", "-s", str(size), "-W", "1", gw]
+        no_fragment = ["-D", "-W", "1000"] if IS_MACOS else ["-M", "do", "-W", "1"]
+        cmd = ["ping", "-c", "1", *no_fragment, "-s", str(size), gw]
         ret = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if ret.returncode == 0:
             optimal = size + 28 # Add IP+ICMP header
             print(f" {Style.GREEN}✔ Packet size {size} bytes passed (MTU = {optimal}){Style.RESET}")
             break
         else:
-            print(f" {Style.RED}✖ Packet size {size} bytes fragmented{Style.RESET}")
-    print(f"\n Recommended MTU for this interface: {Style.BOLD}{optimal}{Style.RESET}")
+            print(f" {Style.RED}✖ Packet size {size} bytes received no reply{Style.RESET}")
+    if optimal is None:
+        log_warn("The target did not answer the probe.")
+    else:
+        print(f"\n Largest responding MTU: {Style.BOLD}{optimal}{Style.RESET}")
     print(box_footer())
 
 
@@ -6143,7 +6339,7 @@ def builtin_port_forward():
 
 def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool = False):
     print(box_header("COREX SYSTEM DOCTOR & DEPENDENCY AUDITOR"))
-    log_info("Auditing command matrix, testing syntax and scanning dependencies...")
+    log_info("Auditing command syntax and checking declared dependencies...")
 
     total_commands = len(cfg.commands)
     ready_count = 0
@@ -6169,7 +6365,14 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "wifi", "wlan", "wifi-manager", "wifi-scan", "proc", "process", "procs", "ps-inspect", "media-info", "mediainfo", "media", "ffprobe-info"
     }
 
+    if IS_MACOS:
+        known_builtins.update(mac_platform_builtins())
+    unavailable = []
+    checked_deps = {}
     for cid, spec in cfg.commands.items():
+        if spec.unavailable:
+            unavailable.append(cid)
+            continue
         if cid == "doctor":
             ready_count += 1
             continue
@@ -6179,7 +6382,12 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
 
         # 1. Check declared dependencies
         for dep in spec.deps:
-            if not shutil.which(dep):
+            if dep not in checked_deps:
+                checked_deps[dep] = bool(
+                    corex_macos.output("xcrun", "--find", "swiftc") if IS_MACOS and dep == "xcrun"
+                    else shutil.which(dep)
+                )
+            if not checked_deps[dep]:
                 cmd_missing_deps.append(dep)
                 missing_deps_map.setdefault(dep, []).append(cid)
 
@@ -6193,12 +6401,15 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
             if b_name not in known_builtins:
                 syntax_errs.append((cid, f"Built-in '{b_name}' not implemented in dispatcher"))
 
-        if not cmd_missing_deps:
+        if not cmd_missing_deps and not any(error[0] == cid for error in syntax_errs):
             ready_count += 1
 
-    pct = (ready_count / total_commands * 100) if total_commands else 0
+    supported_count = total_commands - len(unavailable)
+    pct = (ready_count / supported_count * 100) if supported_count else 0
     print(f" {Style.BOLD}Total Actions In Matrix:{Style.RESET}   {total_commands}")
-    print(f" {Style.BOLD}Actions 100% Operational:{Style.RESET} {Style.GREEN}{Style.BOLD}{ready_count}{Style.RESET} / {total_commands} ({pct:.1f}%)")
+    print(f" {Style.BOLD}Pass syntax and dependency checks:{Style.RESET} {Style.GREEN}{ready_count}{Style.RESET} / {supported_count} ({pct:.1f}%)")
+    if unavailable:
+        print(f" {Style.BOLD}Unavailable on macOS ({len(unavailable)}):{Style.RESET} {', '.join(sorted(unavailable))}")
 
     if syntax_errs:
         print(f" {Style.BOLD}Shell Syntax Errors:{Style.RESET}      {Style.RED}{len(syntax_errs)} detected{Style.RESET}")
@@ -6210,8 +6421,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
     print(box_footer())
 
     if not missing_deps_map:
-        log_success("All registered workstation actions have 100% of their dependencies satisfied!")
-        return
+        log_success("All supported actions have their declared dependencies.")
+        return int(bool(syntax_errs))
 
     SPECIAL_INSTALL = {
         "demucs": "pipx install demucs (or uv tool install demucs)",
@@ -6220,9 +6431,11 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
     missing_system_pkgs = set()
     standalone_tools = []
 
+    if IS_MACOS:
+        SPECIAL_INSTALL["docker"] = "Install Docker Desktop, or install the Docker CLI and configure a container engine"
     for dep, affected_cmds in sorted(missing_deps_map.items()):
-        if dep in SPECIAL_INSTALL:
-            standalone_tools.append((dep, SPECIAL_INSTALL[dep], affected_cmds))
+        if dep in SPECIAL_INSTALL or PKG_MAP.get(dep, dep) is None:
+            standalone_tools.append((dep, SPECIAL_INSTALL.get(dep) or get_install_hint(dep), affected_cmds))
         else:
             pkg = PKG_MAP.get(dep, dep)
             missing_system_pkgs.add(pkg)
@@ -6232,7 +6445,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
             print(f"  • {Style.RED}{dep:<14}{Style.RESET} -> package: {Style.CYAN}{pkg:<16}{Style.RESET} (needed by: {Style.GRAY}{sample_cmds}{Style.RESET})")
 
     if standalone_tools:
-        print(f"\n{Style.YELLOW}{Style.BOLD}Python / Standalone Tools (Install via pipx or uv):{Style.RESET}")
+        print(f"\n{Style.YELLOW}{Style.BOLD}Dependencies with separate setup:{Style.RESET}")
         for dep, hint, affected_cmds in standalone_tools:
             sample_cmds = ", ".join(affected_cmds[:3])
             if len(affected_cmds) > 3:
@@ -6243,22 +6456,22 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
 
     if not sorted_pkgs:
         if standalone_tools:
-            log_info("All missing dependencies are standalone / pipx tools. Install them using the commands above.")
+            log_info("All missing dependencies are standalone / pipx tools. See the setup instructions above.")
         return
 
     if not pm or not inst_prefix:
-        log_warn("No supported package manager (apt, dnf, zypper, pacman, paru, yay, apk, xbps) found. Please install packages manually:")
+        log_warn("No supported package manager (brew, apt, dnf, zypper, pacman, paru, yay, apk, xbps) found. Please install packages manually:")
         print(f"  Packages: {' '.join(sorted_pkgs)}")
         return
 
-    install_cmd = f"{inst_prefix} {' '.join(sorted_pkgs)}"
+    install_cmd = f"{inst_prefix} {shlex.join(sorted_pkgs)}"
     distro_title = distro.title() if distro != "unknown" else "System"
     print(f"\n{Style.BOLD}Proposed Install Command ({distro_title} / {pm}):{Style.RESET}")
     print(f"  {Style.CYAN}{install_cmd}{Style.RESET}")
 
     if dry_run:
         print(f"\n{Style.YELLOW}[DRY-RUN]{Style.RESET} Skipped package installation.")
-        return
+        return int(bool(syntax_errs))
 
     do_install = auto_install
     if not do_install:
@@ -6533,7 +6746,7 @@ def wizard_create_action(cfg: CoreXConfig, initial_id: Optional[str] = None):
     if test_ans in ("y", "yes"):
         print(f"\n{Style.CYAN}--- Executing Test Run ---{Style.RESET}")
         test_cmd = f"sudo {cmd_str}" if req_sudo and not cmd_str.strip().startswith("sudo") else cmd_str
-        ret = subprocess.run(test_cmd, shell=True)
+        ret = subprocess.run(test_cmd, shell=True, executable=ACTION_SHELL)
         print(f"{Style.CYAN}--- Test Exited with Code {ret.returncode} ---{Style.RESET}\n")
 
     save_ans = prompt_user(f"Save and register action '{cid}' to ~/.config/corex/config.toml? [Y/n]: ", default="y").lower()
@@ -6829,13 +7042,13 @@ def builtin_theme(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
         return
 
     # Interactive FZF chooser
-    self_exe = os.path.abspath(sys.argv[0])
+    self_exe = self_command()
     items = []
     for tid, tinfo in THEMES.items():
         is_cur = " ★ (active)" if tid == CURRENT_THEME else ""
         items.append(f"{tid}\t{tinfo['name']}{is_cur}\t{tinfo['desc']}")
 
-    preview_call = f"python3 '{self_exe}' __preview_theme {{1}}"
+    preview_call = f"{self_exe} __preview_theme {{1}}"
     extra = [
         "--delimiter=\t",
         "--with-nth=1,2,3",
@@ -7059,6 +7272,9 @@ def builtin_find(cfg: CoreXConfig, query: str = "", extra_args: Optional[List[st
         is_alias = cid in COMMAND_ALIASES
         target_info = f" {dim}(alias for {COMMAND_ALIASES[cid]}){rst}" if is_alias else ""
         print(f"   • {bld}{cid:<18}{rst}{target_info} {t_col}{tag:<8}{rst} {dim}{spec.description}{rst}")
+        if spec.unavailable:
+            print(f"     {Style.YELLOW}Unavailable on macOS.{rst} {spec.unavailable}")
+            continue
         cmd_snippet = spec.command.strip().replace("\n", " ")
         if len(cmd_snippet) > 70:
             cmd_snippet = cmd_snippet[:67] + "..."
@@ -7192,6 +7408,10 @@ def builtin_import(cfg: CoreXConfig, source_path: Optional[str] = None):
 # DESKTOP & WINDOW MANAGER INTEGRATION
 # ---------------------------------------------------------------------------
 def builtin_install_desktop():
+    if IS_MACOS:
+        launcher = corex_macos.install_launcher(COREX_EXECUTABLE, sys.executable, os.environ["PATH"])
+        log_success(f"Installed {launcher}. Open it in Finder or Spotlight to launch CoreX in Terminal.")
+        return
     desktop_dir = Path.home() / ".local" / "share" / "applications"
     desktop_dir.mkdir(parents=True, exist_ok=True)
     target = desktop_dir / "corex.desktop"
@@ -7225,6 +7445,11 @@ StartupNotify=false
 
 
 def builtin_integrations():
+    if IS_MACOS:
+        print("Run cx install-desktop to install CoreX.app in ~/Applications.")
+        print("Open the app in Finder, Spotlight, or the Dock. It opens CoreX in Terminal.")
+        print("For a keyboard shortcut, create a Shortcuts action that opens CoreX.app.")
+        return
     c_blue = "\033[38;2;137;180;250m"
     rst = Style.RESET
     bld = Style.BOLD
@@ -7275,8 +7500,11 @@ def builtin_upgrade(dry_run: bool = False):
     print(f" {c_blue}╰─────────────────────────────────────────────────────────────────────╯{rst}\n")
 
     repo_dir = Path(__file__).resolve().parent
-    is_git = (repo_dir / ".git").is_dir()
+    is_git = (repo_dir / ".git").exists()
 
+    if not is_git and IS_MACOS:
+        log_info("Run ./install.sh from a CoreX Git checkout to enable the repository updater.")
+        return
     if not is_git:
         print(f"  {c_yellow}{bld}▲ Notice:{rst} CoreX is installed from package distribution.")
         print(f"  To update, run your package manager:")
@@ -7317,14 +7545,14 @@ def builtin_upgrade(dry_run: bool = False):
         if (repo_dir / "install.sh").exists():
             print(f"  • Re-indexing:      {dim}Refreshing shell completions & symlinks...{rst}")
             try:
-                subprocess.run([str(repo_dir / "install.sh")], capture_output=True, timeout=10)
-            except Exception:
-                pass
+                subprocess.run([str(repo_dir / "install.sh")], capture_output=True, timeout=30, check=True)
+            except (OSError, subprocess.SubprocessError):
+                log_warn("Installation refresh failed. Run ./install.sh from the CoreX checkout.")
 
         print(f"\n  {c_green}{bld}✔ CoreX successfully updated to commit {new_commit}!{rst}")
         print(f"  • Doctor check:     {dim}Running verification...{rst}")
         doc_res = subprocess.run([str(repo_dir / "corex"), "doctor", "--dry-run"], capture_output=True, text=True)
-        if "173 / 173" in doc_res.stdout or "100.0%" in doc_res.stdout:
+        if doc_res.returncode == 0 and "100.0%" in doc_res.stdout:
             print(f"  • Catalog Status:   {c_green}✔ 100% Operational{rst}\n")
         else:
             print(f"  • Catalog Status:   {c_yellow}Review 'cx doctor' for details{rst}\n")
@@ -7333,6 +7561,342 @@ def builtin_upgrade(dry_run: bool = False):
         log_error(f"Update failed during git command: {e.stderr or e}")
     except Exception as e:
         log_error(f"Unexpected error during upgrade: {e}")
+
+
+# ---------------------------------------------------------------------------
+# macOS Workstation Actions
+# ---------------------------------------------------------------------------
+def run_mac_native(args, **kwargs):
+    try:
+        binary = corex_macos.native_helper(CONFIG_CACHE_FILE.parent, SOURCE_DIR)
+        return subprocess.run([str(binary), *args], **kwargs)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        log_error(f"CoreX native helper failed: {exc}")
+        return None
+
+
+def mac_wifi_networks():
+    result = run_mac_native(["wifi-scan"], stdout=subprocess.PIPE, text=True, timeout=45)
+    if result is None or result.returncode:
+        return None
+    return json.loads(result.stdout)
+
+
+def mac_wifi_label(point):
+    ssid = re.sub(r"[\x00-\x1f\x7f-\x9f]", "�", point["ssid"])
+    channel = point.get("channel") or "?"
+    security = "secured" if point["secure"] else "open"
+    bssid = point.get("bssid") or "hidden"
+    return f"{ssid}  |  {point['signal']} dBm  |  ch {channel}  |  {security}  |  {bssid}"
+
+
+def builtin_mac_wifi(args):
+    aliases = {
+        "-s": "list", "--scan": "list", "--list": "list", "scan": "list",
+        "-i": "status", "--status": "status", "info": "status",
+        "enable": "on", "disable": "off", "down": "disconnect", "join": "connect",
+    }
+    mode = aliases.get(args[0], args[0]) if args else ""
+    if mode in ("-h", "--help", "help"):
+        print("Usage: cx wifi [list|status|on|off|disconnect|connect SSID|forget SSID|settings]")
+        return 0
+    if mode == "settings":
+        return subprocess.call(["open", "x-apple.systempreferences:com.apple.wifi-settings-extension"])
+    if not mode and not sys.stdin.isatty():
+        mode = "list"
+    if mode == "list":
+        points = mac_wifi_networks()
+        if points is None:
+            return 1
+        for point in points:
+            print(mac_wifi_label(point))
+        return 0
+    if mode == "disconnect":
+        result = run_mac_native(["wifi-disconnect"])
+        return result.returncode if result else 1
+
+    device = corex_macos.wifi_device()
+    if not device:
+        log_error("No macOS Wi-Fi hardware port was detected.")
+        return 1
+    if mode in ("on", "off"):
+        return subprocess.call(["networksetup", "-setairportpower", device, mode])
+    if mode == "status":
+        subprocess.run(["networksetup", "-getairportpower", device])
+        if corex_macos.output("xcrun", "--find", "swiftc"):
+            run_mac_native(["wifi-status"], timeout=20)
+        else:
+            subprocess.run(["networksetup", "-getairportnetwork", device])
+        return subprocess.call(["ifconfig", device])
+    if mode in ("connect", "forget") and len(args) != 2:
+        log_error(f"Usage: cx wifi {mode} SSID")
+        return 2
+    if mode == "forget":
+        return subprocess.call(["networksetup", "-removepreferredwirelessnetwork", device, args[1]])
+    if mode in ("", "connect"):
+        points = mac_wifi_networks()
+        if points is None:
+            return 1
+        if mode == "connect":
+            point = next((point for point in points if point["ssid"] == args[1]), None)
+            if point is None:
+                log_error("SSID is unavailable. Use cx wifi settings for hidden or enterprise networks.")
+                return 1
+        else:
+            items = [f"{idx}\t{mac_wifi_label(point)}" for idx, point in enumerate(points)]
+            if not items:
+                log_warn("No visible networks. Check Wi-Fi power and Location Services.")
+                return 1
+            chosen = run_fzf(
+                items, prompt="Wi-Fi networks > ",
+                extra_args=["--delimiter=\t", "--with-nth=2.."], header="Enter: join network",
+            )
+            if not chosen:
+                return 0
+            point = points[int(chosen[0].split("\t", 1)[0])]
+        if point["secure"] and not sys.stdin.isatty():
+            log_error("A terminal is required to enter the Wi-Fi passphrase.")
+            return 1
+        from getpass import getpass
+        password = getpass("Wi-Fi passphrase: ") if point["secure"] else ""
+        result = run_mac_native(
+            ["wifi-join", point["ssid"], point.get("bssid") or ""],
+            input=password + "\n", text=True, timeout=60,
+        )
+        if result and result.returncode == 0:
+            log_success(f"Joined {point['ssid']!r}.")
+            return 0
+        log_warn("Use cx wifi settings for enterprise, hidden, or managed networks.")
+        return 1
+
+    log_error("Unknown Wi-Fi action. See cx wifi --help.")
+    return 2
+
+
+def builtin_mac_port_audit():
+    lines = []
+    for args in (["-iTCP", "-sTCP:LISTEN"], ["-iUDP"]):
+        result = corex_macos.output("lsof", "-nP", *args)
+        lines.extend(result.splitlines()[1:])
+    if not lines:
+        log_info("No listening TCP or bound UDP sockets visible to this user.")
+        return
+    if not sys.stdin.isatty():
+        print("\n".join(lines))
+        return
+    selection = run_fzf(lines, prompt="Listening sockets > ", header="Enter: select process to stop")
+    if selection:
+        pid = selection[0].split()[1]
+        if pid.isdecimal() and int(pid) > 1 and prompt_user(f"Send SIGTERM to PID {pid}? [y/N] ", "n").lower() in ("y", "yes"):
+            handle_proc_signal(pid, "term")
+
+
+def builtin_mac_update(args):
+    brew = shutil.which("brew")
+    if "--preview" in args:
+        if brew:
+            print("Homebrew updates", flush=True)
+            subprocess.run([brew, "outdated"], timeout=10)
+        print("Run cx sys-update --os --preview to check Apple Software Update.")
+        if "--os" in args:
+            subprocess.run(["softwareupdate", "--list"])
+        return
+    if brew and "--os" not in args:
+        options = ["--no-ask"] if "-y" in args or "--yes" in args else []
+        if subprocess.run([brew, "update"]).returncode == 0:
+            return subprocess.call([brew, "upgrade", *options])
+        return 1
+    elif "--os" not in args:
+        log_info("Homebrew is unavailable. Opening Apple Software Update.")
+    if "--os" in args or not brew:
+        open_url("x-apple.systempreferences:com.apple.Software-Update-Settings.extension")
+
+
+def builtin_mac_power(args):
+    if not args:
+        subprocess.run(["pmset", "-g", "custom"])
+        if not sys.stdin.isatty():
+            return 0
+        args = run_fzf(["automatic", "low"], prompt="Power mode > ")
+    if not args:
+        return 0
+    levels = {"automatic": "0", "low": "1"}
+    if args[0] not in levels:
+        log_error("Usage: cx cpu-gov [automatic|low]")
+        return 2
+    return subprocess.call(["sudo", "pmset", "-a", "lowpowermode", levels[args[0]]])
+
+
+def builtin_mac_clipboard(args):
+    if "--capture" in args:
+        text = corex_macos.output("pbpaste")
+        if text:
+            save_mac_clipboard(text)
+        return
+    if "--clear" in args:
+        MAC_CLIPBOARD_FILE.unlink(missing_ok=True)
+        return
+    try:
+        entries = json.loads(MAC_CLIPBOARD_FILE.read_text())
+    except (OSError, ValueError):
+        entries = []
+    if not entries:
+        log_info("No CoreX clipboard history. Run cx clip-hist --capture to save the current pasteboard.")
+        return
+    if not sys.stdin.isatty():
+        log_error("Clipboard history selection requires a terminal.")
+        return
+    rows = [f"{i}\t{entry.encode('unicode_escape').decode()[:120]}" for i, entry in enumerate(entries)]
+    selected = run_fzf(rows, prompt="Clipboard history > ", extra_args=["--delimiter=\t", "--with-nth=2.."])
+    if selected:
+        copy_to_clipboard(entries[int(selected[0].split("\t", 1)[0])])
+
+
+def builtin_mac_snapshots():
+    snapshots = [
+        snapshot for snapshot in corex_macos.output("tmutil", "listlocalsnapshots", "/").splitlines()
+        if snapshot.startswith("com.apple.")
+    ]
+    if not snapshots:
+        log_info("No local Time Machine or macOS update snapshots were found.")
+        return
+    if not sys.stdin.isatty():
+        print("\n".join(snapshots))
+        return
+    selected = run_fzf(snapshots, prompt="APFS snapshot > ")
+    if selected:
+        print(selected[0])
+        print("To restore files from Time Machine snapshots, use the Time Machine browser.")
+
+
+def builtin_mac_vulkan():
+    homes = (
+        Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")),
+        Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")),
+        Path("/etc"), Path("/usr/local/etc"), Path("/usr/local/share"),
+        Path("/opt/homebrew/etc"), Path("/opt/homebrew/share"), Path("/usr/share"),
+    )
+    manifests = sorted({p for home in homes for p in (home / "vulkan").glob("*/*.json")})
+    for manifest in manifests:
+        print(manifest)
+    if not manifests:
+        log_info("No Vulkan layer or driver manifests found in the standard macOS loader paths.")
+    if shutil.which("vulkaninfo"):
+        subprocess.run(["vulkaninfo", "--summary"])
+
+
+def mac_platform_builtins():
+    return {
+        "mac-volume", "mac-native", "mac-snapshots", "mac-power", "mac-wifi-scan",
+        "mac-clipboard", "mac-trash", "mac-vulkan", "mac-edid", "mac-metal-hud",
+        "mac-resample", "mac-perf", "ollama-start", "comfy-stop", "mac-display", "mac-noise-gate",
+    }
+
+
+def dispatch_mac_builtin(name, args, cfg):
+    if name == "mac-native":
+        if not args or args[0] not in ("extend", "mirror", "audio-latency", "metal-benchmark"):
+            return 2
+        result = run_mac_native(args)
+        return result.returncode if result else 1
+    if name == "mac-display":
+        if not args:
+            return subprocess.call(["system_profiler", "SPDisplaysDataType"])
+        result = run_mac_native(["refresh-rate", *args])
+        return result.returncode if result else 1
+    if name == "mac-noise-gate":
+        if len(args) != 2:
+            print("Usage: cx noise-gate input.wav output.wav")
+            return 0 if not args else 2
+        source, target = (str(Path(arg).resolve()) for arg in args)
+        return subprocess.call(["ffmpeg", "-n", "-i", source, "-af", "agate=threshold=0.025:ratio=4", target])
+    if name == "mac-wifi-scan":
+        return builtin_mac_wifi(["list"])
+    if name == "mac-volume":
+        if not args:
+            return subprocess.call(["osascript", "-e", "get volume settings"])
+        if len(args) != 1 or not re.fullmatch(r"[0-9]{1,3}", args[0]) or int(args[0]) > 100:
+            log_error("Usage: cx pw-volume [0–100]")
+            return 2
+        return subprocess.call(["osascript", "-e", f"set volume output volume {int(args[0])}"])
+    if name == "mac-power":
+        return builtin_mac_power(args)
+    if name == "mac-snapshots":
+        builtin_mac_snapshots()
+    elif name == "mac-clipboard":
+        builtin_mac_clipboard(args)
+    elif name == "mac-trash":
+        trash = Path.home() / ".Trash"
+        if not trash.exists():
+            log_info("No startup disk Trash folder found.")
+            return 0
+        for item in trash.iterdir():
+            if item.is_dir() and not item.is_symlink():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        log_success("Startup disk Trash emptied.")
+    elif name == "mac-vulkan":
+        builtin_mac_vulkan()
+    elif name == "mac-edid":
+        registry = corex_macos.output("ioreg", "-l", "-w", "0")
+        edids = sorted(set(re.findall(r'"IODisplayEDID"\s*=\s*<([0-9a-fA-F]+)>', registry)))
+        if not edids:
+            log_info("The display driver did not publish raw EDID. Showing system display information.")
+            return subprocess.call(["system_profiler", "SPDisplaysDataType"])
+        for edid in edids:
+            print(edid)
+    elif name == "mac-metal-hud":
+        if not args:
+            print("Usage: cx mangohud-config /path/to/metal-executable [args...]")
+            return 0
+        return subprocess.call(args, env={**os.environ, "MTL_HUD_ENABLED": "1"})
+    elif name == "mac-resample":
+        if not args:
+            print("Usage: cx audio-resample-bench input.wav [output-sample-rate]")
+            return 0
+        rate = args[1] if len(args) > 1 else "48000"
+        if not re.fullmatch(r"[1-9][0-9]{0,5}", rate):
+            log_error("Expected a positive sample rate in Hz.")
+            return 2
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            start = time.monotonic()
+            code = subprocess.call(["afconvert", "-f", "WAVE", "-d", f"LEI16@{rate}",
+                                    str(Path(args[0]).resolve()), f"{directory}/output.wav"])
+            if code == 0:
+                print(f"Converted to {rate} Hz in {time.monotonic() - start:.3f} seconds.")
+            return code
+    elif name == "mac-perf":
+        if not args:
+            print("Usage: cx perf-stat command [args...]")
+            return 0
+        return subprocess.call(["/usr/bin/time", "-l", "--", *args])
+    elif name == "ollama-start":
+        if corex_macos.output("ollama", "list"):
+            log_info("Ollama is already running.")
+        else:
+            log_path = STATE_FILE.with_name("ollama.log")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a") as handle:
+                subprocess.Popen(["ollama", "serve"], stdin=subprocess.DEVNULL, stdout=handle,
+                                 stderr=subprocess.STDOUT, start_new_session=True)
+            log_info(f"Started Ollama in the background. Log: {log_path}")
+    elif name == "comfy-stop":
+        listeners = corex_macos.output("lsof", "-t", f"-iTCP:{cfg.comfyui_port}", "-sTCP:LISTEN")
+        stopped = False
+        for pid in listeners.splitlines():
+            if not pid.isdecimal() or int(pid) < 2:
+                continue
+            command = corex_macos.output("ps", "-ww", "-p", pid, "-o", "command=")
+            cwd = corex_macos.output("lsof", "-a", "-p", pid, "-d", "cwd", "-Fn")
+            if "main.py" in command and f"n{cfg.comfyui_path.resolve()}" in cwd.splitlines():
+                os.kill(int(pid), signal.SIGTERM)
+                stopped = True
+        if not stopped:
+            log_error("No ComfyUI listener matched the configured directory and port.")
+            return 1
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -7448,6 +8012,8 @@ def render_wifi_preview(target_ssid: str, target_bssid: str):
 
 def builtin_wifi(extra_args: Optional[List[str]] = None):
     args = extra_args or []
+    if IS_MACOS:
+        return builtin_mac_wifi(extra_args or [])
     if not shutil.which("nmcli"):
         log_error("NetworkManager CLI (nmcli) is required for Wi-Fi management. Install: sudo pacman -S networkmanager")
         return
@@ -7593,7 +8159,7 @@ def builtin_wifi(extra_args: Optional[List[str]] = None):
         log_warn("No wireless networks found nearby.")
         return
 
-    self_exe = os.path.abspath(sys.argv[0])
+    self_exe = self_command()
     fzf_lines = []
     for n in networks:
         in_use_sym = "★" if n["in_use"] else "•"
@@ -7602,7 +8168,7 @@ def builtin_wifi(extra_args: Optional[List[str]] = None):
         fzf_lines.append(f"{in_use_sym}\t{n['ssid']}\t{sig}%\t{n['bars']}\t{freq_band} Ch{n['chan']}\t{n['security']}\t{n['bssid']}")
 
     fzf_input = "\n".join(fzf_lines)
-    preview_cmd = f"python3 '{self_exe}' __preview_wifi {{2}} {{7}}"
+    preview_cmd = f"{self_exe} __preview_wifi {{2}} {{7}}"
     fzf_cmd = [
         "fzf",
         "--delimiter=\t",
@@ -7669,6 +8235,26 @@ def render_proc_preview(pid_str: str):
     if not pid_str.isdigit():
         return
     pid = int(pid_str)
+    if IS_MACOS:
+        details = corex_macos.output("ps", "-ww", "-p", str(pid), "-o",
+                                     "pid,ppid,user,stat,nice,%cpu,%mem,rss,vsz,etime,command")
+        if not details:
+            log_warn(f"Process {pid} is no longer available.")
+            return
+        print(box_header(f"PROCESS FORENSICS [PID: {pid}]"))
+        print(details)
+        print("\nRSS and VSZ are in KiB.")
+        files = corex_macos.output("lsof", "-a", "-nP", "-p", str(pid), timeout=2)
+        sockets = corex_macos.output("lsof", "-a", "-nP", "-p", str(pid), "-i", timeout=2)
+        if files:
+            print("\nOPEN FILES")
+            print("\n".join(files.splitlines()[:12]))
+        if sockets:
+            print("\nACTIVE SOCKETS")
+            print("\n".join(sockets.splitlines()[:10]))
+        print(box_footer())
+        return
+
     proc_dir = Path(f"/proc/{pid}")
     if not proc_dir.exists():
         print(box_header(f"PROCESS FORENSICS [PID: {pid}]"))
@@ -7810,6 +8396,8 @@ def handle_proc_signal(pid_str: str, sig_name: str):
     if not pid_str.isdigit():
         return
     pid = int(pid_str)
+    if pid < 2:
+        return
     sig_map = {
         "kill": signal.SIGKILL,
         "term": signal.SIGTERM,
@@ -7858,18 +8446,24 @@ def builtin_proc(extra_args: Optional[List[str]] = None):
         target = args[0]
         sub_flags = args[1:]
 
-        target_pid = None
         if target.isdigit():
             target_pid = int(target)
         else:
             matches = []
-            for p in Path("/proc").glob("[0-9]*"):
-                try:
-                    p_name = (p / "comm").read_text().strip()
-                    if target.lower() in p_name.lower():
-                        matches.append((int(p.name), p_name))
-                except Exception:
-                    continue
+            if IS_MACOS:
+                rows = corex_macos.output("ps", "-Ac", "-o", "pid=,comm=").splitlines()
+                for row in rows:
+                    fields = row.strip().split(None, 1)
+                    if len(fields) == 2 and fields[0].isdigit() and target.lower() in fields[1].lower():
+                        matches.append((int(fields[0]), fields[1]))
+            else:
+                for proc_dir in Path("/proc").glob("[0-9]*"):
+                    try:
+                        name = (proc_dir / "comm").read_text().strip()
+                    except OSError:
+                        continue
+                    if target.lower() in name.lower():
+                        matches.append((int(proc_dir.name), name))
             if not matches:
                 log_error(f"No active process found matching '{target}'.")
                 return
@@ -7882,6 +8476,9 @@ def builtin_proc(extra_args: Optional[List[str]] = None):
                 print(f" Specify the exact PID: cx proc <PID>\n")
                 return
 
+        if target_pid < 2:
+            log_error("Select a process ID greater than 1.")
+            return
         if "--kill" in sub_flags:
             os.kill(target_pid, signal.SIGKILL)
             log_success(f"Sent SIGKILL (9) to PID {target_pid}.")
@@ -7910,15 +8507,22 @@ def builtin_proc(extra_args: Optional[List[str]] = None):
         return
 
     if not shutil.which("fzf"):
-        log_error("fzf is required for interactive process explorer. Install: sudo pacman -S fzf")
+        log_error("fzf is required for interactive process explorer. Install: " + get_install_hint("fzf"))
         return
 
-    self_exe = os.path.abspath(sys.argv[0])
-    ps_cmd = "ps -eo pid:7,user:10,%cpu:6,%mem:6,nlwp:5,stat:5,comm --sort=-%cpu"
-    preview_cmd = f"python3 '{self_exe}' __preview_proc {{1}}"
+    self_exe = self_command()
+    ps_cmd = (
+        "ps -Arc -o pid,user,%cpu,%mem,stat,comm" if IS_MACOS
+        else "ps -eo pid:7,user:10,%cpu:6,%mem:6,nlwp:5,stat:5,comm --sort=-%cpu"
+    )
+    if not sys.stdin.isatty():
+        subprocess.run(ps_cmd.split())
+        return
+    preview_cmd = f"{self_exe} __preview_proc {{1}}"
     fzf_cmd = [
         "fzf",
         "--header-lines=1",
+        f"--with-shell={ACTION_SHELL} -c",
         "--prompt=  ◈ Process Forensics ❯ ",
         "--header= [Enter] Actions Menu  │  [^K] Kill  │  [^T] Term  │  [^P] Freeze  │  [^R] Resume ",
         "--header-label= PROCESS INSPECTOR ",
@@ -7928,10 +8532,10 @@ def builtin_proc(extra_args: Optional[List[str]] = None):
         "--border-label-pos=3",
         "--preview", preview_cmd,
         "--preview-window=right:48%:border-rounded:wrap",
-        f"--bind=ctrl-k:execute-silent(python3 '{self_exe}' __proc_signal kill {{1}})+reload({ps_cmd})",
-        f"--bind=ctrl-t:execute-silent(python3 '{self_exe}' __proc_signal term {{1}})+reload({ps_cmd})",
-        f"--bind=ctrl-p:execute-silent(python3 '{self_exe}' __proc_signal freeze {{1}})+reload({ps_cmd})",
-        f"--bind=ctrl-r:execute-silent(python3 '{self_exe}' __proc_signal resume {{1}})+reload({ps_cmd})",
+        f"--bind=ctrl-k:execute-silent({self_exe} __proc_signal kill {{1}})+reload({ps_cmd})",
+        f"--bind=ctrl-t:execute-silent({self_exe} __proc_signal term {{1}})+reload({ps_cmd})",
+        f"--bind=ctrl-p:execute-silent({self_exe} __proc_signal freeze {{1}})+reload({ps_cmd})",
+        f"--bind=ctrl-r:execute-silent({self_exe} __proc_signal resume {{1}})+reload({ps_cmd})",
         "--height=90%",
     ]
     try:
@@ -7941,15 +8545,15 @@ def builtin_proc(extra_args: Optional[List[str]] = None):
         if fzf_proc.returncode != 0 or not out.strip():
             return
         selected_pid = out.strip().split()[0]
-        if not selected_pid.isdigit():
+        if not selected_pid.isdigit() or int(selected_pid) < 2:
             return
 
         print(f"\n {Style.BOLD}Process Selected: PID {Style.CYAN}{selected_pid}{Style.RESET}")
         print(f"  [1] View Full Deep Forensic Card")
         print(f"  [2] Terminate Gracefully (SIGTERM - 15)")
         print(f"  [3] Force Kill (SIGKILL - 9)")
-        print(f"  [4] Pause / Freeze Execution (SIGSTOP - 19)")
-        print(f"  [5] Resume Frozen Execution (SIGCONT - 18)")
+        print(f"  [4] Pause / Freeze Execution (SIGSTOP)")
+        print(f"  [5] Resume Frozen Execution (SIGCONT)")
         print(f"  [6] Change Priority (Renice)")
         print(f"  [Q] Exit")
         ans = input(" Select action [1-6, Q]: ").strip().lower()
@@ -8006,7 +8610,7 @@ def _format_media_duration(sec_val) -> str:
 def builtin_media_info(target_file: Optional[str] = None, extra_args: Optional[List[str]] = None):
     args = extra_args or []
     if not shutil.which("ffprobe"):
-        log_error("ffprobe is required for media forensics. Install: sudo pacman -S ffmpeg")
+        log_error("ffprobe is required for media forensics. Install: " + get_install_hint("ffmpeg"))
         return
 
     path_str = target_file
@@ -8228,6 +8832,11 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
     print(f"  {Style.BOLD}Status:{Style.RESET}       {pin_badge}  {Style.DARK_GRAY}•{Style.RESET}  {freq_str}")
     print(f"  {Style.BOLD}Category:{Style.RESET}     {t_color}{tag}{Style.RESET} {Style.DARK_GRAY}•{Style.RESET} {Style.GRAY}{spec.category}{Style.RESET}")
 
+    if spec.unavailable:
+        print(f"  {Style.YELLOW}Unavailable on macOS{Style.RESET}")
+        print(f"  {spec.unavailable}")
+        return
+
     if spec.requires_sudo:
         priv_badge = f"{Style.YELLOW}⚡ ROOT (Sudo Required){Style.RESET}"
     else:
@@ -8280,7 +8889,10 @@ def render_preview(cmd_id: str, cfg: CoreXConfig):
             print(f"\n{div}")
             print(f"  {Style.BOLD}{Style.PURPLE}LIVE SYSTEM TELEMETRY{Style.RESET}")
             try:
-                res = subprocess.run(pcmd, shell=True, timeout=2.5, capture_output=True, text=True)
+                res = subprocess.run(
+                    pcmd, shell=True, executable=ACTION_SHELL, timeout=2.5,
+                    capture_output=True, text=True,
+                )
                 out_lines = [l for l in res.stdout.splitlines() if l.strip()]
                 if out_lines:
                     for l in out_lines[:10]:
@@ -8312,12 +8924,15 @@ def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
     sorted_cmds = sorted(cfg.commands.values(), key=sort_key)
     items = []
     for c in sorted_cmds:
+        description = f"{c.description} [unavailable on macOS]" if c.unavailable else c.description
         tag = CATEGORY_TAGS.get(c.category, "@misc")
         t_color = get_tag_color(tag)
         has_missing = any(not shutil.which(d) for d in c.deps)
         is_pinned = c.id in pinned_set
 
-        if has_missing:
+        if c.unavailable:
+            badge = f"{Style.GRAY}—{Style.RESET} "
+        elif has_missing:
             badge = f"{Style.RED}▲{Style.RESET} "
         elif is_pinned:
             badge = f"{Style.YELLOW}★{Style.RESET} "
@@ -8344,7 +8959,7 @@ def format_cockpit_items(cfg: CoreXConfig) -> List[str]:
         # 5: subtle vertical separator
         # 6: description (+ @pinned @favorites virtual tag if pinned)
         items.append(
-            f"{c.id}\t{badge}\t{cmd_col}\t{t_color}{tag:<8}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{c.description}{Style.RESET}{pin_tag}"
+            f"{c.id}\t{badge}\t{cmd_col}\t{t_color}{tag:<8}{Style.RESET}\t{Style.DARK_GRAY}│{Style.RESET}\t{Style.GRAY}{description}{Style.RESET}{pin_tag}"
         )
     return items
 
@@ -8354,10 +8969,13 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
     Unified, lightning-fast cockpit with @category fuzzy filtering,
     in-app command builder (Ctrl+N), and favorites/pinning (Tab).
     """
-    self_exe = os.path.abspath(sys.argv[0])
+    if not sys.stdin.isatty():
+        log_error("A terminal is required for the interactive launcher. Use cx --list to browse actions.")
+        sys.exit(1)
+    self_exe = self_command(cfg.source_path)
     items = format_cockpit_items(cfg)
 
-    preview_call = f"python3 '{self_exe}' __preview {{1}}"
+    preview_call = f"{self_exe} __preview {{1}}"
 
     extra = [
         "--delimiter=\t",
@@ -8383,12 +9001,12 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
         "--marker=◈ ",
         "--scrollbar=│",
         "--info=inline-right",
-        f"--bind=tab:execute(python3 '{self_exe}' __toggle_pin {{1}})+reload(python3 '{self_exe}' __fzf_items)",
-        f"--bind=ctrl-n:execute(python3 '{self_exe}' builder)+reload(python3 '{self_exe}' __fzf_items)",
-        f"--bind=ctrl-r:reload(python3 '{self_exe}' __fzf_items)",
-        f"--bind=ctrl-y:execute-silent(python3 '{self_exe}' __get_cmd {{1}} | wl-copy 2>/dev/null || python3 '{self_exe}' __get_cmd {{1}} | xclip -selection clipboard 2>/dev/null)",
-        f"--bind=ctrl-d:execute(python3 '{self_exe}' --dry-run {{1}}; echo; read -n 1 -s -r -p 'Press any key to return...'; echo)",
-        f"--bind=ctrl-e:execute(python3 '{self_exe}' __edit_run {{1}})",
+        f"--bind=tab:execute({self_exe} __toggle_pin {{1}})+reload({self_exe} __fzf_items)",
+        f"--bind=ctrl-n:execute({self_exe} builder)+reload({self_exe} __fzf_items)",
+        f"--bind=ctrl-r:reload({self_exe} __fzf_items)",
+        f"--bind=ctrl-y:execute-silent({self_exe} __copy_cmd {{1}})",
+        f"--bind=ctrl-d:execute({self_exe} --dry-run {{1}}; echo; read -n 1 -s -r -p 'Press any key to return...'; echo)",
+        f"--bind=ctrl-e:execute({self_exe} __edit_run {{1}})",
         "--bind=?:toggle-preview",
     ]
 
@@ -8436,13 +9054,21 @@ def execute_command(
             print(f"   {Style.DIM}Run 'cx --list' or 'cx find <query>' to browse available actions.{Style.RESET}\n")
         sys.exit(1)
 
+    if spec.unavailable:
+        log_warn(f"Action '{actual_id}' is unavailable on macOS. {spec.unavailable}")
+        if not dry_run:
+            sys.exit(1)
+        return
+
     if not dry_run:
         record_action_usage(actual_id)
 
     # Dependency check
-    for d in spec.deps:
-        if not shutil.which(d):
-            log_warn(f"Required binary '{d}' is missing! Command may fail. ({get_install_hint(d)})")
+    missing_deps = [dep for dep in spec.deps if not shutil.which(dep)]
+    for dep in missing_deps:
+        log_warn(f"Required binary '{dep}' is missing. ({get_install_hint(dep)})")
+    if IS_MACOS and missing_deps and not dry_run:
+        sys.exit(1)
 
     # Confirmation check
     if spec.confirm and not dry_run:
@@ -8458,25 +9084,24 @@ def execute_command(
 
     # Check built-in dispatch
     if spec.command.startswith("cx __builtin "):
-        builtin_name = spec.command.replace("cx __builtin ", "").strip()
-        args = extra_args or []
+        builtin_name, *default_args = shlex.split(spec.command.removeprefix("cx __builtin "))
+        args = default_args + (extra_args or [])
         if actual_id == "builder" and cmd_id in ("new", "add", "create", "edit", "modify", "delete", "remove", "rm", "test", "validate", "check"):
             args = [cmd_id] + args
         if bg_run:
             # Wrap built-in in detached subshell
-            self_exe = os.path.abspath(sys.argv[0])
-            quoted_args = " ".join([f"'{a}'" if " " in a else a for a in args])
-            bg_cmd = f"python3 '{self_exe}' {actual_id} {quoted_args}"
-            detach_background(actual_id, bg_cmd, dry_run=dry_run)
+            forwarding = shlex.join(["__builtin", builtin_name, *args])
+            detach_background(actual_id, f"{self_command(cfg.source_path)} {forwarding}", dry_run=dry_run)
             return
-        dispatch_builtin(builtin_name, cfg, dry_run=dry_run, extra_args=args)
+        result = dispatch_builtin(builtin_name, cfg, dry_run=dry_run, extra_args=args)
+        if result:
+            sys.exit(result)
         return
 
     # Shell execution
     final_cmd = spec.command
     if extra_args:
-        quoted_args = " ".join([f"'{a}'" if " " in a else a for a in extra_args])
-        final_cmd = f"{final_cmd} {quoted_args}"
+        final_cmd = f"{final_cmd} {shlex.join(extra_args)}"
 
     if spec.requires_sudo and os.geteuid() != 0 and not final_cmd.strip().startswith("sudo"):
         final_cmd = f"sudo {final_cmd}"
@@ -8491,7 +9116,7 @@ def execute_command(
         return
 
     try:
-        ret = subprocess.run(final_cmd, shell=True)
+        ret = subprocess.run(final_cmd, shell=True, executable=ACTION_SHELL)
         sys.exit(ret.returncode)
     except KeyboardInterrupt:
         sys.exit(130)
@@ -8501,12 +9126,26 @@ def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
     """Detaches command into a systemd-run user service or background nohup subshell."""
     ts = int(time.time())
     unit_name = f"corex-{cmd_id}-{ts}"
+    if IS_MACOS:
+        log_path = STATE_FILE.parent / "logs" / f"{unit_name}.log"
+        if dry_run:
+            print(f"[DRY-RUN BG] {ACTION_SHELL} -c {shlex.quote(shell_cmd)} (log: {log_path})")
+            return
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a") as handle:
+            child = subprocess.Popen(
+                [ACTION_SHELL, "-c", shell_cmd], stdin=subprocess.DEVNULL,
+                stdout=handle, stderr=subprocess.STDOUT, start_new_session=True,
+            )
+        log_success(f"Detached '{cmd_id}' as PID {child.pid}. Log: {log_path}")
+        return
+
     has_systemd_run = shutil.which("systemd-run") is not None
 
     if has_systemd_run:
-        full_cmd = ["systemd-run", "--user", f"--unit={unit_name}", "sh", "-c", shell_cmd]
+        full_cmd = ["systemd-run", "--user", f"--unit={unit_name}", ACTION_SHELL, "-c", shell_cmd]
     else:
-        full_cmd = ["nohup", "sh", "-c", shell_cmd]
+        full_cmd = ["nohup", ACTION_SHELL, "-c", shell_cmd]
 
     if dry_run:
         print(f"{Style.YELLOW}[DRY-RUN BG]{Style.RESET} {' '.join(full_cmd)}")
@@ -8518,7 +9157,7 @@ def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
         if res.returncode == 0:
             log_success(f"Command '{cmd_id}' running as systemd user unit: {unit_name}.service")
         else:
-            subprocess.Popen(["nohup", "sh", "-c", shell_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
+            subprocess.Popen(["nohup", ACTION_SHELL, "-c", shell_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
             log_success(f"Command '{cmd_id}' detached via background subshell.")
     else:
         subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
@@ -8530,18 +9169,22 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
 
     if name in ("doctor", "test-all", "health-check"):
         auto_install = ("-y" in args or "--yes" in args)
-        builtin_doctor(cfg, dry_run=dry_run, auto_install=auto_install)
-        return
-
-    if name == "builder":
-        builtin_builder(cfg, extra_args=args)
-        return
+        return builtin_doctor(cfg, dry_run=dry_run, auto_install=auto_install)
 
     if dry_run:
         print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx __builtin {name} {' '.join(args)}".strip())
         return
 
-    if name in ("ask", "ai", "ai-copilot", "copilot"):
+    if IS_MACOS and name in mac_platform_builtins():
+        try:
+            return dispatch_mac_builtin(name, args, cfg)
+        except (OSError, subprocess.SubprocessError) as exc:
+            log_error(str(exc))
+            return 1
+
+    if name == "builder":
+        builtin_builder(cfg, extra_args=args)
+    elif name in ("ask", "ai", "ai-copilot", "copilot"):
         q = " ".join(args) if args else None
         builtin_ai_ask(q, cfg)
     elif name in ("models", "model", "ai-models"):
@@ -8705,7 +9348,7 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         subprocess.run("echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor", shell=True)
         log_success("Game Mode Activated: CPU governor set to performance.")
     elif name in ("wifi", "wlan", "wifi-manager", "wifi-scan"):
-        builtin_wifi(extra_args=args)
+        return builtin_wifi(extra_args=args)
     elif name in ("proc", "process", "procs", "ps-inspect"):
         builtin_proc(extra_args=args)
     elif name in ("media-info", "mediainfo", "media", "ffprobe-info"):
@@ -8742,6 +9385,7 @@ def generate_fish_completions(cfg: CoreXConfig) -> str:
     for cid, spec in cfg.commands.items():
         desc_escaped = spec.description.replace("'", "\\'")
         lines.append(f"complete -c cx -n '__fish_use_subcommand' -a '{cid}' -d '{desc_escaped}'")
+    lines.append("complete -c cx -n '__fish_use_subcommand' -a install-desktop -d 'Install desktop launcher'")
     lines.append("complete -c corex -w cx")
     return "\n".join(lines)
 
@@ -8750,12 +9394,12 @@ def generate_bash_completions(cfg: CoreXConfig) -> str:
     cmds = " ".join(cfg.commands.keys())
     return f"""# Bash completions for CoreX (cx)
 _cx_completions() {{
-    local cur prev words cword
-    _init_completion || return
+    local cur
+    cur=${{COMP_WORDS[COMP_CWORD]}}
 
-    local commands="{cmds} theme pin unpin pinned --pinned --dry-run --bg --help --version --list --yes"
+    local commands="{cmds} theme pin unpin pinned install-desktop --pinned --dry-run --bg --help --version --list --yes"
 
-    if [[ $cword -eq 1 ]]; then
+    if [[ $COMP_CWORD -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
     fi
 }}
@@ -8778,6 +9422,7 @@ def generate_zsh_completions(cfg: CoreXConfig) -> str:
     lines.append("        'pin:Pin an action to favorites'")
     lines.append("        'unpin:Unpin an action from favorites'")
     lines.append("        'pinned:List pinned favorites'")
+    lines.append("        'install-desktop:Install desktop launcher'")
     lines.extend([
         "    )",
         "    _arguments -C \\",
@@ -8821,6 +9466,9 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
     i = 0
     while i < len(argv):
         arg = argv[i]
+        if arg == "--" and parsed.command:
+            parsed.args.extend(argv[i + 1:])
+            break
         if arg in ("-h", "--help"):
             if parsed.command is not None:
                 parsed.args.append(arg)
@@ -8854,6 +9502,8 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
                 parsed.command = arg
             else:
                 parsed.args.append(arg)
+        elif parsed.command:
+            parsed.args.append(arg)
         else:
             unknown.append(arg)
         i += 1
@@ -8878,12 +9528,15 @@ def main():
         print(f"CoreX (cx) v{VERSION} - 150+ Action Workstation Engine")
         sys.exit(0)
 
+    if os.access(SOURCE_DIR / "cx", os.X_OK):
+        os.environ["PATH"] = f"{SOURCE_DIR}{os.pathsep}{os.environ.get('PATH', '')}"
     cfg = load_config(parsed.config, ignore_cache=parsed.no_cache)
 
     if parsed.list:
         for cid, spec in sorted(cfg.commands.items()):
             tag = CATEGORY_TAGS.get(spec.category, "@misc")
-            print(f"{cid}\t{tag}\t{spec.category}\t{spec.description}")
+            note = f" [unavailable on macOS: {spec.unavailable}]" if spec.unavailable else ""
+            print(f"{cid}\t{tag}\t{spec.category}\t{spec.description}{note}")
         sys.exit(0)
 
     # Internal helper: return formatted lines for FZF reload
@@ -8902,8 +9555,7 @@ def main():
         else:
             b_name = ""
             b_args = []
-        dispatch_builtin(b_name, cfg, dry_run=parsed.dry_run, extra_args=b_args)
-        sys.exit(0)
+        sys.exit(dispatch_builtin(b_name, cfg, dry_run=parsed.dry_run, extra_args=b_args) or 0)
 
     # Direct built-in shortcuts for now-playing / song / np
     if parsed.command in ("now-playing", "song", "np"):
@@ -8927,7 +9579,9 @@ def main():
         if parsed.dry_run:
             print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx sys-update {' '.join(b_args)}".strip())
         else:
-            builtin_sys_update(cfg, extra_args=b_args)
+            if parsed.yes:
+                b_args.append("-y")
+            sys.exit(builtin_sys_update(cfg, extra_args=b_args) or 0)
         sys.exit(0)
 
     # Direct built-in shortcuts for fun workstation utilities
@@ -8935,7 +9589,7 @@ def main():
         if parsed.dry_run:
             print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx fetch")
         else:
-            builtin_fetch()
+            builtin_fetch(extra_args=parsed.args + unknown)
         sys.exit(0)
 
     if parsed.command in ("type-test", "typing", "type"):
@@ -9022,7 +9676,7 @@ def main():
         if parsed.dry_run:
             print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx wifi")
         else:
-            builtin_wifi(extra_args=(parsed.args or []) + unknown)
+            sys.exit(builtin_wifi(extra_args=(parsed.args or []) + unknown) or 0)
         sys.exit(0)
 
     if parsed.command in ("proc", "process", "procs", "ps-inspect"):
@@ -9171,12 +9825,18 @@ def main():
         builtin_upgrade(dry_run=parsed.dry_run)
         sys.exit(0)
 
-    # Internal helper: get raw command string for Ctrl+Y clipboard
-    if parsed.command == "__get_cmd":
+    if parsed.command == "__copy":
+        sys.exit(0 if parsed.args and copy_to_clipboard(parsed.args[0]) else 1)
+
+    # Internal helper: get or copy the command selected in the launcher
+    if parsed.command in ("__get_cmd", "__copy_cmd"):
         target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
         spec = cfg.commands.get(target)
-        if spec:
-            print(spec.command, end="")
+        if not spec or spec.unavailable:
+            sys.exit(1)
+        if parsed.command == "__copy_cmd":
+            sys.exit(0 if copy_to_clipboard(spec.command) else 1)
+        print(spec.command, end="")
         sys.exit(0)
 
     # Internal helper: edit and run for Ctrl+E hotkey
@@ -9184,7 +9844,7 @@ def main():
         import tempfile
         target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
         spec = cfg.commands.get(target)
-        if spec:
+        if spec and not spec.unavailable:
             ed = get_default_editor(cfg)
             with tempfile.NamedTemporaryFile("w+", suffix=".sh", delete=False) as tf:
                 tf.write(f"#!/usr/bin/env bash\n# Editing action: {spec.id}\n{spec.command}\n")
@@ -9195,7 +9855,7 @@ def main():
                 exec_lines = [l for l in mod_cmd if l.strip() and not l.startswith("#")]
                 if exec_lines:
                     log_info(f"Executing edited script for {spec.id}...")
-                    subprocess.run("\n".join(exec_lines), shell=True)
+                    subprocess.run("\n".join(exec_lines), shell=True, executable=ACTION_SHELL)
             finally:
                 Path(tmp_path).unlink(missing_ok=True)
         sys.exit(0)
@@ -9225,15 +9885,15 @@ USAGE:
   cx pinned                       List all currently pinned favorite actions
   cx export [file.json]           Export configuration, pinned favorites & notes to JSON
   cx import <file.json>           Import and restore configuration from profile JSON
-  cx install-desktop              Install XDG desktop entry for Rofi, Wofi, KDE, GNOME
-  cx integrations                 View Hyprland, Sway, and i3 floating window rules
+  cx install-desktop              Install a desktop launcher for the current system
+  cx integrations                 Show desktop and window manager integration
   cx upgrade                      Synchronize CoreX from git repository and verify doctor
   cx new [name]                   Launch In-App Command Builder wizard
   cx builder                      Open Command Builder & Action Studio menu
   cx edit <command>               Edit an existing action
   cx delete <command>             Delete an action from configuration
   cx --dry-run <command> [args]   Preview command safely
-  cx --bg <command> [args...]     Detach command into background systemd user scope
+  cx --bg <command> [args...]     Run a command in the background
   cx --no-cache                   Bypass binary configuration cache and reload from disk
   cx --list                       Print all {len(cfg.commands)} registered commands and category tags
 
@@ -9270,7 +9930,7 @@ CATEGORIES & FILTER TAGS:
 FLAGS:
   --pinned                        List all pinned favorite actions
   --dry-run                       Preview command execution without running
-  --bg                            Detach command in background (systemd-run / nohup)
+  --bg                            Detach command in background
   -y, --yes                       Bypass confirmation prompts
   --list                          List all commands for scripting / completion
   --config <path>                 Custom TOML config file
@@ -9292,4 +9952,8 @@ FLAGS:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except (OSError, subprocess.SubprocessError) as exc:
+        log_error(str(exc))
+        sys.exit(1)

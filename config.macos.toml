@@ -1,0 +1,584 @@
+# macOS variants of the stock action IDs in config.default.toml.
+# An unavailable action retains its ID for search, profiles and completion.
+
+[commands.comfy-boot]
+preview_cmd = "lsof -nP -iTCP:8188 -sTCP:LISTEN"
+
+[commands.comfy-nuke]
+description = "Stop the ComfyUI process listening on the configured local port"
+command = "cx __builtin comfy-stop"
+preview_cmd = "lsof -nP -iTCP:8188 -sTCP:LISTEN"
+deps = ["lsof"]
+confirm = true
+
+[commands.ollama-up]
+description = "Start the local Ollama daemon in the background"
+command = "cx __builtin ollama-start"
+preview_cmd = "ollama ps"
+deps = ["ollama"]
+
+[commands.ollama-fzf]
+command = '''
+model=$(ollama list | tail -n +2 | fzf --prompt='Select model > ' | awk '{print $1}')
+[ -n "$model" ] && ollama run "$model"
+'''
+
+[commands.vram-watch]
+description = "Monitor Apple Silicon GPU activity, frequency and unified memory"
+command = "sudo powermetrics --samplers gpu_power -i 1000"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["powermetrics"]
+requires_sudo = true
+
+[commands.cuda-purge]
+unavailable = "CUDA and NVIDIA device handles are unavailable on Apple Silicon. Use cx ollama-drop to unload Ollama models."
+
+[commands.pw-restart]
+description = "Restart the macOS Core Audio daemon"
+command = "sudo launchctl kickstart -k system/com.apple.audio.coreaudiod"
+preview_cmd = "system_profiler SPAudioDataType"
+deps = ["launchctl"]
+requires_sudo = true
+confirm = true
+
+[commands.pw-devices]
+description = "Inspect Core Audio input and output devices and open Sound settings"
+command = "system_profiler SPAudioDataType && open 'x-apple.systempreferences:com.apple.Sound-Settings.extension'"
+preview_cmd = "system_profiler SPAudioDataType"
+deps = ["system_profiler", "open"]
+
+[commands.pw-volume]
+description = "Show or set Core Audio output volume (0–100)"
+command = "cx __builtin mac-volume"
+preview_cmd = '''osascript -e 'get volume settings' '''
+deps = ["osascript"]
+
+[commands.gpu-clock]
+unavailable = "Apple Silicon manages GPU clocks automatically. Use cx vram-watch to inspect GPU frequency and utilization."
+
+[commands.cpu-gov]
+description = "Inspect and select macOS Automatic or Low Power mode"
+command = "cx __builtin mac-power"
+preview_cmd = "pmset -g custom"
+deps = ["pmset", "fzf"]
+
+[commands.cpu-turboboost]
+unavailable = "Apple Silicon has no Intel Turbo Boost or AMD Core Performance Boost. Use cx cpu-gov for macOS power modes."
+
+[commands.mon-res]
+description = "Inspect displays or set the main display refresh rate (cx mon-res <Hz>)"
+command = "cx __builtin mac-display"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["system_profiler"]
+
+[commands.mon-dual]
+description = "Extend the desktop across connected displays"
+command = "cx __builtin mac-native extend"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["xcrun"]
+
+[commands.mon-single]
+description = "Mirror connected displays onto a single desktop"
+command = "cx __builtin mac-native mirror"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["xcrun"]
+
+[commands.sens-watch]
+description = "Stream macOS thermal pressure and Apple Silicon power telemetry"
+command = "cx __builtin sensors --watch"
+preview_cmd = "pmset -g therm"
+deps = ["powermetrics"]
+requires_sudo = true
+
+[commands.game-mode]
+description = "Show how to enable Apple Game Mode for a supported full-screen game"
+command = '''
+printf '%s\n' 'Open a supported game in macOS full-screen mode. Game Mode activates automatically; use the Game Mode menu to toggle it.'
+'''
+preview_cmd = "pmset -g custom"
+requires_sudo = false
+
+[commands.snap-now]
+description = "Create a Time Machine local snapshot on APFS"
+command = "tmutil localsnapshot"
+preview_cmd = "tmutil listlocalsnapshots /"
+deps = ["tmutil"]
+
+[commands.snap-fzf]
+description = "Browse local Time Machine snapshots interactively"
+command = "cx __builtin mac-snapshots"
+preview_cmd = "tmutil listlocalsnapshots /"
+deps = ["tmutil", "fzf"]
+
+[commands.snap-clean]
+description = "Ask Time Machine to reclaim up to 1 GiB from local snapshots"
+command = "sudo tmutil thinlocalsnapshots / 1073741824 1"
+preview_cmd = "tmutil listlocalsnapshots /"
+deps = ["tmutil"]
+requires_sudo = true
+confirm = true
+
+[commands.fkill]
+preview_cmd = "ps -Arc -o pid,user,%cpu,%mem,comm | head -n 10"
+
+[commands.disk-space]
+preview_cmd = "df -h"
+
+[commands.pkg-orphans]
+description = "Remove unused Homebrew formula dependencies"
+command = "brew autoremove"
+preview_cmd = "brew autoremove --dry-run"
+deps = ["brew"]
+confirm = true
+
+[commands.service-fail]
+description = "List launchd jobs with a nonzero last exit status"
+command = '''
+printf 'PID\tStatus\tLabel\n'
+launchctl list | awk 'NR > 1 && $2 != 0'
+'''
+preview_cmd = "launchctl list | awk 'NR == 1 || $2 != 0' | head -n 15"
+deps = ["launchctl"]
+
+[commands.journal-vacuum]
+unavailable = "macOS manages Unified Log retention automatically and has no per-size journal vacuum. Use cx klog-err to inspect kernel errors."
+
+[commands.boot-analyze]
+description = "Show macOS boot time, uptime and recent launchd boot events"
+command = '''
+sysctl kern.boottime
+uptime
+boot=$(sysctl -n kern.boottime | awk -F'[=,]' '{gsub(/ /, "", $2); print $2}')
+[ -n "$boot" ] && log show --start "$(date -r "$boot" '+%Y-%m-%d %H:%M:%S')" --style compact --predicate 'process == "launchd"' | head -n 30
+'''
+preview_cmd = "sysctl kern.boottime; uptime"
+deps = ["sysctl", "log"]
+
+[commands.proc]
+description = "Inspect processes, RSS, virtual memory, files and sockets, and manage signals"
+deps = ["ps", "fzf", "lsof"]
+preview_cmd = "ps -Arc -o pid,user,%cpu,%mem,comm | head -n 12"
+
+[commands.my-ip]
+preview_cmd = "ifconfig -a | grep -E '^[^[:space:]]|inet ' | head -n 16"
+
+[commands.vpn-up]
+description = "Bring up a WireGuard profile from ~/.config/wireguard or /etc/wireguard"
+command = '''
+prefix=$(brew --prefix 2>/dev/null || true)
+dirs=(/etc/wireguard "$HOME/.config/wireguard")
+[ -z "$prefix" ] || dirs+=("$prefix/etc/wireguard")
+conf=$(find "${dirs[@]}" -maxdepth 1 \( -type f -o -type l \) -name '*.conf' 2>/dev/null | fzf --prompt='WireGuard profile > ')
+[ -n "$conf" ] && sudo "$(command -v wg-quick)" up "$conf"
+'''
+preview_cmd = "scutil --nc list"
+deps = ["fzf", "wg", "wg-quick", "wireguard-go"]
+
+[commands.vpn-down]
+description = "Select and disconnect a WireGuard tunnel started with wg-quick"
+command = '''
+prefix=$(brew --prefix 2>/dev/null || true)
+dirs=(/etc/wireguard "$HOME/.config/wireguard")
+[ -z "$prefix" ] || dirs+=("$prefix/etc/wireguard")
+conf=$(find "${dirs[@]}" -maxdepth 1 \( -type f -o -type l \) -name '*.conf' 2>/dev/null | fzf --prompt='WireGuard profile to disconnect > ')
+[ -n "$conf" ] && sudo "$(command -v wg-quick)" down "$conf"
+'''
+preview_cmd = "scutil --nc list"
+deps = ["fzf", "wg", "wg-quick", "wireguard-go"]
+
+[commands.port-audit]
+deps = ["lsof", "fzf"]
+preview_cmd = "lsof -nP -iTCP -sTCP:LISTEN | head -n 12"
+
+[commands.speedtest]
+preview_cmd = "ping -c 2 -W 1000 1.1.1.1 | tail -n 2"
+
+[commands.speed-check]
+preview_cmd = "ping -c 2 -W 1000 1.1.1.1 | tail -n 2"
+
+[commands.lan-scan]
+description = "Show cached IPv4 and IPv6 neighbors"
+command = "arp -an; ndp -an"
+preview_cmd = "route -n get default"
+deps = ["arp", "ndp"]
+
+[commands.dns-flush]
+command = "sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder"
+preview_cmd = "scutil --dns | head -n 25"
+deps = ["dscacheutil", "killall"]
+requires_sudo = true
+
+[commands.wifi]
+description = "Scan and manage Wi-Fi networks via CoreWLAN and networksetup"
+deps = ["networksetup", "fzf", "xcrun"]
+preview_cmd = "networksetup -listallhardwareports"
+
+[commands.git-clean-branches]
+command = '''
+git branch --merged | grep -v -E '^\*|main|master|develop' | while IFS= read -r branch; do
+    git branch -d -- "${branch#  }" || exit
+done
+'''
+
+[commands.clip-hist]
+description = "Browse clipboard entries captured by CoreX and copy a selection"
+command = "cx __builtin mac-clipboard"
+preview_cmd = "printf '%s\n' 'CoreX saves text copied by its actions. Run cx clip-hist --capture to save the current pasteboard.'"
+deps = ["pbcopy", "pbpaste", "fzf"]
+
+[commands.qr-read]
+description = "Decode a QR code from an image or an interactive macOS screen capture"
+command = '''
+tmp=$(mktemp -d) || exit
+trap 'rm -rf "$tmp"' EXIT
+read -r -p 'Image path (Enter for screen selection): ' image
+if [ -z "$image" ]; then
+    image="$tmp/qr.png"
+    screencapture -i "$image"
+fi
+[ -f "$image" ] && zbarimg -q --raw -- "$image"
+'''
+preview_cmd = "printf '%s\n' 'Decodes a QR code from an image or screen selection.'"
+deps = ["screencapture", "zbarimg"]
+
+[commands.hash-check]
+command = '''
+read -r -p 'File to hash: ' file
+[ -f "$file" ] && shasum -a 256 -- "$file" &&
+    case "$file" in -*) md5 -q "./$file" ;; *) md5 -q "$file" ;; esac
+'''
+deps = ["shasum", "md5"]
+
+[commands.trash-empty]
+description = "Empty the current user's Trash on the startup disk"
+command = "cx __builtin mac-trash"
+preview_cmd = "du -sh ~/.Trash"
+confirm = true
+
+[commands.irq-top]
+description = "Monitor Apple Silicon interrupt and CPU-wakeup telemetry"
+command = "sudo powermetrics --samplers tasks -i 1000"
+preview_cmd = "pmset -g assertions"
+deps = ["powermetrics"]
+requires_sudo = true
+
+[commands.dmesg-follow]
+description = "Follow kernel errors and faults in the macOS Unified Log"
+command = '''log stream --level default --style compact --predicate 'process == "kernel" AND (messageType == error OR messageType == fault)' '''
+preview_cmd = '''log show --last 5m --style compact --predicate 'process == "kernel" AND messageType == error' | tail -n 10'''
+deps = ["log"]
+
+[commands.kmod-fzf]
+description = "Inspect loaded macOS kernel extensions"
+command = "kmutil showloaded | fzf --header-lines=1 --prompt='Loaded kernel extensions > '"
+preview_cmd = "kmutil showloaded | head -n 15"
+deps = ["kmutil", "fzf"]
+
+[commands.sysctl-search]
+command = '''sysctl -a 2>/dev/null | fzf --prompt='sysctl parameter > ' '''
+deps = ["sysctl", "fzf"]
+
+[commands.cgroup-inspect]
+description = "Inspect the current macOS launchd GUI session and its jobs"
+command = '''launchctl print "gui/$(id -u)" | less'''
+preview_cmd = "launchctl list | head -n 20"
+deps = ["launchctl", "less"]
+
+[commands.oom-score]
+description = "Show system memory pressure and processes with the highest resident memory"
+command = "memory_pressure; ps -Am -o pid,user,rss,%mem,comm | head -n 16"
+preview_cmd = "sysctl kern.memorystatus_level"
+deps = ["memory_pressure", "ps"]
+
+[commands.klog-err]
+description = "Show recent kernel errors and faults from the Unified Log"
+command = '''log show --last 1h --style compact --predicate 'process == "kernel" AND (messageType == error OR messageType == fault)' | tail -n 31'''
+preview_cmd = ""
+deps = ["log"]
+
+[commands.pcie-topo]
+description = "Inspect reported PCI and Thunderbolt devices"
+command = "system_profiler SPPCIDataType SPThunderboltDataType"
+preview_cmd = ""
+deps = ["system_profiler"]
+
+[commands.slab-top]
+description = "Inspect Mach kernel zone memory allocation"
+command = "sudo zprint -s | less"
+preview_cmd = "vm_stat"
+deps = ["zprint", "less"]
+requires_sudo = true
+
+[commands.numa-stat]
+description = "Inspect CPU topology and performance levels"
+command = "sysctl hw.physicalcpu hw.logicalcpu; sysctl -a 2>/dev/null | grep '^hw.perflevel'"
+preview_cmd = "sysctl hw.model hw.physicalcpu hw.logicalcpu"
+deps = ["sysctl"]
+
+[commands.ipc-audit]
+command = "ipcs -a"
+
+[commands.vk-caps]
+description = "Browse Vulkan capabilities exposed through MoltenVK"
+preview_cmd = "vulkaninfo --summary 2>/dev/null"
+deps = ["vulkaninfo", "fzf"]
+
+[commands.vk-layers]
+description = "Inspect Vulkan layers and ICD manifests for the macOS loader"
+command = "cx __builtin mac-vulkan"
+preview_cmd = "vulkaninfo --summary 2>/dev/null"
+
+[commands.glmark-quick]
+description = "Benchmark offscreen 1080p Metal rendering"
+command = "cx __builtin mac-native metal-benchmark"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["xcrun"]
+
+[commands.shader-cache-purge]
+unavailable = "NVIDIA, Mesa and DXVK caches are Linux-specific. macOS and Metal manage driver caches internally."
+
+[commands.display-edid]
+description = "Read display EDID from I/O Registry when the driver publishes it"
+command = "cx __builtin mac-edid"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["ioreg"]
+
+[commands.vrr-status]
+description = "Inspect display refresh modes and open Adaptive Sync settings"
+command = "system_profiler SPDisplaysDataType && open 'x-apple.systempreferences:com.apple.Displays-Settings.extension'"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["system_profiler", "open"]
+
+[commands.nv-enc-stat]
+description = "List Apple VideoToolbox encoders available to FFmpeg"
+command = "ffmpeg -hide_banner -encoders | grep videotoolbox"
+preview_cmd = "ffmpeg -hide_banner -encoders | grep videotoolbox"
+deps = ["ffmpeg"]
+
+[commands.dri-info]
+description = "Inspect graphics hardware, Metal support and displays"
+command = "system_profiler SPDisplaysDataType"
+preview_cmd = "system_profiler SPDisplaysDataType"
+deps = ["system_profiler"]
+
+[commands.wayland-diag]
+description = "Inspect the macOS WindowServer and active display configuration"
+command = "pgrep -lx WindowServer; system_profiler SPDisplaysDataType"
+preview_cmd = "pgrep -lx WindowServer"
+deps = ["pgrep", "system_profiler"]
+
+[commands.mangohud-config]
+description = "Enable the Metal Performance HUD for one executable"
+command = "cx __builtin mac-metal-hud"
+preview_cmd = "printf '%s\n' 'Usage: cx mangohud-config /path/to/metal-executable [args...]'"
+
+[commands.ram-breakdown]
+description = "Inspect macOS virtual memory, compression and memory pressure"
+preview_cmd = "vm_stat"
+deps = ["vm_stat", "memory_pressure", "sysctl"]
+
+[commands.hugepages-toggle]
+unavailable = "XNU has no Linux transparent hugepage toggle. The macOS VM manages page sizes."
+
+[commands.zram-stats]
+description = "Show macOS memory compression and swap usage"
+command = '''vm_stat | grep -iE 'compress|swap'; sysctl vm.swapusage'''
+preview_cmd = "sysctl vm.swapusage"
+deps = ["vm_stat", "sysctl"]
+
+[commands.io-top]
+description = "Watch per-device disk I/O with macOS iostat"
+command = "iostat -d -w 1"
+preview_cmd = "iostat -d -c 1"
+deps = ["iostat"]
+
+[commands.inode-check]
+command = "df -i"
+preview_cmd = "df -i | head -n 15"
+
+[commands.file-locks]
+description = "Browse open files with advisory locks visible to lsof"
+command = '''lsof -nP | awk 'NR == 1 || $4 ~ /^[0-9]+[ruw][rRwWuUxXN]$/' | fzf --header-lines=1 --prompt='File locks > ' '''
+preview_cmd = ""
+deps = ["lsof", "fzf"]
+
+[commands.btrfs-scrub]
+description = "Verify the startup APFS volume using Disk Utility"
+command = "diskutil verifyVolume /"
+preview_cmd = "diskutil info /"
+deps = ["diskutil"]
+
+[commands.btrfs-dedup]
+description = "Report APFS containers, volumes and shared-space usage"
+command = "diskutil apfs list"
+preview_cmd = "diskutil info /"
+deps = ["diskutil"]
+
+[commands.fstrim-all]
+unavailable = "macOS manages TRIM on supported Apple SSDs. There is no equivalent on-demand fstrim operation."
+
+[commands.smart-health]
+description = "Inspect Disk Utility SMART status for physical drives"
+command = '''
+diskutil list physical
+for disk in $(diskutil list physical | grep '^/dev/disk' | cut -d ' ' -f 1); do
+    diskutil info "$disk" | grep -iE 'Device / Media Name|SMART'
+done
+system_profiler SPNVMeDataType SPSerialATADataType
+'''
+preview_cmd = "diskutil list physical"
+deps = ["diskutil", "system_profiler"]
+
+[commands.swap-compact]
+unavailable = "macOS manages dynamic swap and compressed memory. Use cx zram-stats to inspect its current usage."
+
+[commands.socket-summary]
+command = "netstat -s"
+preview_cmd = "netstat -an | head -n 15"
+deps = ["netstat"]
+
+[commands.dns-leak-test]
+preview_cmd = "scutil --dns | head -n 20"
+deps = ["curl", "jq"]
+
+[commands.tcp-dump-quick]
+command = '''
+iface=$(route -n get default | awk '/interface:/{print $2; exit}')
+[ -n "$iface" ] && sudo tcpdump -i "$iface" -nn -c 50 'port 53 or port 80 or port 443'
+'''
+preview_cmd = "route -n get default"
+deps = ["route", "tcpdump"]
+
+[commands.mtu-bench]
+preview_cmd = "ifconfig -a | grep ' mtu '"
+
+[commands.band-top]
+description = "Watch network throughput per process with nettop"
+command = "nettop -P"
+deps = ["nettop"]
+
+[commands.conntrack-dump]
+description = "Inspect the macOS PF state table"
+command = "sudo pfctl -s states"
+preview_cmd = "netstat -an | head -n 15"
+deps = ["pfctl"]
+requires_sudo = true
+
+[commands.dns-benchmark]
+command = '''
+for dns in 1.1.1.1 9.9.9.9 8.8.8.8 system; do
+    printf 'Testing %s: ' "$dns"
+    server=()
+    [ "$dns" = system ] || server=("@$dns")
+    dig "${server[@]}" google.com +time=2 +tries=1 +stats | grep 'Query time:' || echo 'Timeout'
+done
+'''
+preview_cmd = "scutil --dns | head -n 20"
+
+[commands.wifi-radar]
+description = "Scan for nearby Wi-Fi access points and signal levels"
+command = "cx __builtin mac-wifi-scan"
+preview_cmd = "networksetup -listallhardwareports"
+deps = ["xcrun"]
+
+[commands.firewall-status]
+description = "Inspect the macOS application firewall and PF status"
+command = '''
+/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate
+/usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode
+sudo pfctl -s info
+'''
+preview_cmd = "/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate"
+deps = ["pfctl"]
+
+[commands.spectrogram]
+command = "cava"
+deps = ["cava"]
+
+[commands.xrun-dump]
+description = "Show recent Core Audio underrun and overrun messages"
+command = '''log show --last 2h --style compact --predicate 'process == "coreaudiod" AND (eventMessage CONTAINS[c] "underrun" OR eventMessage CONTAINS[c] "overrun")' | tail -n 31'''
+preview_cmd = "pgrep -lx coreaudiod"
+deps = ["log"]
+
+[commands.audio-resample-bench]
+description = "Benchmark sample-rate conversion using Apple's afconvert"
+command = "cx __builtin mac-resample"
+preview_cmd = "system_profiler SPAudioDataType"
+deps = ["afconvert"]
+
+[commands.pw-link-fzf]
+description = "Open Audio MIDI Setup to configure aggregate and multi-output devices"
+command = "open -a 'Audio MIDI Setup'"
+preview_cmd = "system_profiler SPAudioDataType"
+deps = ["open"]
+
+[commands.latency-test]
+description = "Show reported Core Audio device latency and buffer sizing"
+command = "cx __builtin mac-native audio-latency"
+preview_cmd = "system_profiler SPAudioDataType"
+deps = ["xcrun"]
+
+[commands.bit-depth-check]
+description = "Inspect Core Audio formats, channel counts and sample rates in Audio MIDI Setup"
+command = "open -a 'Audio MIDI Setup'"
+preview_cmd = "system_profiler SPAudioDataType"
+deps = ["open"]
+
+[commands.sweep-gen]
+command = '''ffmpeg -f lavfi -i 'aevalsrc=0.12*sin(2*PI*200/log(1000)*(exp(log(1000)*t/10)-1)):s=48000:d=10' -f wav - | mpv -'''
+
+[commands.image-dive]
+deps = ["docker", "fzf", "dive"]
+
+[commands.podman-pods]
+command = "podman pod ps"
+deps = ["podman"]
+
+[commands.k8s-nodes]
+command = "kubectl get nodes -o wide"
+deps = ["kubectl"]
+
+[commands.cron-inspect]
+description = "List launchd jobs and the current user's crontab"
+command = "launchctl list; crontab -l"
+preview_cmd = "launchctl list | head -n 15"
+deps = ["launchctl", "crontab"]
+
+[commands.perf-stat]
+description = "Measure elapsed CPU time, peak resident memory and resource counts for a command"
+command = "cx __builtin mac-perf"
+preview_cmd = "printf '%s\n' 'Usage: cx perf-stat command [args...]'"
+deps = []
+
+[commands.entropy-check]
+description = "Verify that the macOS system random-number generator returns bytes"
+command = "od -An -tx1 -N 32 /dev/urandom"
+preview_cmd = "printf '%s\n' 'macOS does not expose a Linux-style entropy pool counter.'"
+deps = ["od"]
+
+[commands.gamescope-run]
+unavailable = "Gamescope is a Linux compositor. Use cx game-mode for native macOS game mode."
+
+[commands.noise-gate]
+description = "Reduce low-level noise in an audio recording with FFmpeg's gate filter"
+command = "cx __builtin mac-noise-gate"
+preview_cmd = "echo 'Usage: cx noise-gate input.wav output.wav'"
+deps = ["ffmpeg"]
+requires_sudo = false
+confirm = false
+
+[commands.doctor]
+preview_cmd = "printf '%s\n' 'Checks macOS action syntax, system tools and Homebrew dependencies.'"
+
+[commands.audio-test]
+deps = ["afplay"]
+
+[commands.sensors]
+description = "Show macOS thermal, battery and power telemetry (use --watch for live sampling)"
+preview_cmd = "pmset -g batt; pmset -g therm"
+deps = ["pmset"]
+
+[commands.integrations]
+description = "Show Finder, Spotlight and Terminal integration"
+preview_cmd = "printf '%s\n' 'Use cx install-desktop to install CoreX.app.'"

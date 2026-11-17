@@ -1,7 +1,7 @@
 # Fish function for CoreX (cx)
 # Installed to ~/.config/fish/functions/cx.fish
 
-function cx --description "CoreX (cx) - Elite Linux Systems Multitool & Launcher"
+function cx --description "CoreX (cx) - Workstation Multitool & Launcher"
     # Locate corex binary in ~/.local/bin or current PATH
     set -l cx_bin (command -v cx 2>/dev/null; or command -v corex 2>/dev/null; or echo "$HOME/.local/bin/cx")
 

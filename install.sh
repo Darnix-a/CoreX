@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # CoreX (cx) Automated Installer & Environment Setup
-# Tailored for CachyOS / Arch Linux, Hyprland, Fish, Bash, and Zsh.
+# Supports Linux and macOS with Fish, Bash, and Zsh.
 # ==============================================================================
 
 set -eo pipefail
@@ -26,6 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${HOME}/.config/corex"
 NOTES_DIR="${HOME}/.local/share/corex/notes"
+PLATFORM="$(uname -s)"
 FISH_FUNCTIONS="${HOME}/.config/fish/functions"
 FISH_COMPLETIONS="${HOME}/.config/fish/completions"
 
@@ -52,7 +53,18 @@ check_dep() {
 }
 
 # Detect distro package manager for install hints
-if command -v pacman >/dev/null 2>&1; then
+if [ "$PLATFORM" = "Darwin" ]; then
+    PM_INSTALL="brew install"
+    PY_PKG="python"
+    if ! command -v brew >/dev/null 2>&1; then
+        for brew_bin in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            if [ -x "$brew_bin" ]; then
+                eval "$("$brew_bin" shellenv)"
+                break
+            fi
+        done
+    fi
+elif command -v pacman >/dev/null 2>&1; then
     PM_INSTALL="sudo pacman -S"
     PY_PKG="python"
 elif command -v apt-get >/dev/null 2>&1 || command -v apt >/dev/null 2>&1; then
@@ -78,12 +90,29 @@ fi
 REQ_FAILED=0
 check_dep "python3" "required" "${PM_INSTALL} ${PY_PKG}" || REQ_FAILED=1
 check_dep "fzf" "required" "${PM_INSTALL} fzf" || REQ_FAILED=1
+if command -v python3 >/dev/null 2>&1 && ! python3 -c 'import tomllib' 2>/dev/null; then
+    echo -e "  [${RED}✖${RESET}] Python 3.11 or newer is required. Run ${PM_INSTALL} ${PY_PKG}."
+    REQ_FAILED=1
+fi
+if command -v fzf >/dev/null 2>&1 &&
+    ! fzf --with-shell='sh -c' --footer='CoreX' --filter=corex <<< corex >/dev/null; then
+    echo -e "  [${RED}✖${RESET}] Upgrade fzf to a release with --with-shell and --footer support."
+    REQ_FAILED=1
+fi
 check_dep "mpv" "optional" "${PM_INSTALL} mpv"
 check_dep "ffmpeg" "optional" "${PM_INSTALL} ffmpeg"
 check_dep "yt-dlp" "optional" "${PM_INSTALL} yt-dlp"
-check_dep "nvidia-smi" "optional" "Install nvidia proprietary drivers"
-check_dep "snapper" "optional" "${PM_INSTALL} snapper"
-check_dep "docker" "optional" "${PM_INSTALL} docker"
+if [ "$PLATFORM" = "Darwin" ]; then
+    check_dep "docker" "optional" "Install Docker Desktop or configure another Docker engine"
+    if ! xcrun --find swiftc >/dev/null 2>&1; then
+        echo "  Xcode Command Line Tools enable Wi-Fi scanning, monitor presets and audio latency."
+        echo "  Run xcode-select --install to add those features."
+    fi
+else
+    check_dep "nvidia-smi" "optional" "Install nvidia proprietary drivers"
+    check_dep "snapper" "optional" "${PM_INSTALL} snapper"
+    check_dep "docker" "optional" "${PM_INSTALL} docker"
+fi
 
 if [ $REQ_FAILED -ne 0 ]; then
     echo -e "\n${RED}${BOLD}Error:${RESET} Missing required dependencies. Please install them and rerun install.sh."
@@ -113,11 +142,11 @@ mkdir -p "$CONFIG_DIR"
 mkdir -p "$NOTES_DIR"
 
 if [ -f "${CONFIG_DIR}/config.toml" ]; then
-    cp "${CONFIG_DIR}/config.toml" "${CONFIG_DIR}/config.toml.bak"
-    echo -e "  [${GRAY}i${RESET}] Backed up existing config to ${CONFIG_DIR}/config.toml.bak"
+    echo -e "  [${GRAY}i${RESET}] Using existing config at ${CONFIG_DIR}/config.toml"
+else
+    cp "${SCRIPT_DIR}/config.default.toml" "${CONFIG_DIR}/config.toml"
+    echo -e "  [${GREEN}✔${RESET}] Installed config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
 fi
-cp "${SCRIPT_DIR}/config.default.toml" "${CONFIG_DIR}/config.toml"
-echo -e "  [${GREEN}✔${RESET}] Updated config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
 
 # 4. Setup Fish Shell Integrations
 if command -v fish >/dev/null 2>&1; then
@@ -127,7 +156,7 @@ if command -v fish >/dev/null 2>&1; then
     mkdir -p "$FISH_COMPLETIONS"
 
     cp "${SCRIPT_DIR}/shell/cx.fish" "${FISH_FUNCTIONS}/cx.fish"
-    cp "${SCRIPT_DIR}/completions/cx.fish" "${FISH_COMPLETIONS}/cx.fish"
+    "${BIN_DIR}/cx" completions fish > "${FISH_COMPLETIONS}/cx.fish"
     rm -f "${FISH_CONFD}/cx_key_bindings.fish"
     echo -e "  [${GREEN}✔${RESET}] Installed function to ${CYAN}${FISH_FUNCTIONS}/cx.fish${RESET}"
     echo -e "  [${GREEN}✔${RESET}] Installed completions to ${CYAN}${FISH_COMPLETIONS}/cx.fish${RESET}"
@@ -141,25 +170,19 @@ COREX_SHARE_DIR="${HOME}/.local/share/corex"
 
 mkdir -p "$BASH_COMP_DIR"
 mkdir -p "$COREX_SHARE_DIR"
-cp "${SCRIPT_DIR}/completions/cx.bash" "${BASH_COMP_DIR}/cx"
+"${BIN_DIR}/cx" completions bash > "${BASH_COMP_DIR}/cx"
 rm -f "${COREX_SHARE_DIR}/cx.bash" "${COREX_SHARE_DIR}/cx.zsh"
 echo -e "  [${GREEN}✔${RESET}] Bash completions written to ${CYAN}${BASH_COMP_DIR}/cx${RESET}"
 
 if [ -d "$HOME/.zsh" ] || command -v zsh >/dev/null 2>&1; then
     mkdir -p "$ZSH_COMP_DIR"
-    cp "${SCRIPT_DIR}/completions/_cx" "${ZSH_COMP_DIR}/_cx"
+    "${BIN_DIR}/cx" completions zsh > "${ZSH_COMP_DIR}/_cx"
     echo -e "  [${GREEN}✔${RESET}] Zsh completions written to ${CYAN}${ZSH_COMP_DIR}/_cx${RESET}"
 fi
 
-# 6. Desktop Entry Installation
-echo -e "\n${CYAN}λ${RESET} ${BOLD}Installing XDG Desktop Entry...${RESET}"
-APP_DIR="${HOME}/.local/share/applications"
-mkdir -p "$APP_DIR"
-cp "${SCRIPT_DIR}/packaging/corex.desktop" "${APP_DIR}/corex.desktop"
-if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$APP_DIR" 2>/dev/null || true
-fi
-echo -e "  [${GREEN}✔${RESET}] Desktop entry written to ${CYAN}${APP_DIR}/corex.desktop${RESET}"
+# 6. Desktop launcher
+echo -e "\n${CYAN}λ${RESET} ${BOLD}Installing Desktop Launcher...${RESET}"
+"${BIN_DIR}/cx" install-desktop
 
 # 7. Verification Self-Test
 echo -e "\n${CYAN}λ${RESET} ${BOLD}Verifying Installation...${RESET}"
@@ -177,6 +200,6 @@ echo -e "  • Favorites: Highlight any action and press ${CYAN}${BOLD}Tab${RESE
 echo -e "  • Themes: Run ${CYAN}${BOLD}cx theme${RESET} to preview and switch between 6 color themes"
 echo -e "  • Run ${CYAN}${BOLD}cx <command>${RESET} for zero-latency direct execution (e.g. ${CYAN}cx comfy-boot${RESET}, ${CYAN}cx vram-watch${RESET})"
 echo -e "  • Run ${CYAN}${BOLD}cx --dry-run <command>${RESET} to preview actions safely"
-echo -e "  • Run ${CYAN}${BOLD}cx --bg <command>${RESET} to detach into a background systemd user scope"
+echo -e "  • Run ${CYAN}${BOLD}cx --bg <command>${RESET} to detach into a background process"
 echo -e "  • Run ${CYAN}${BOLD}cx --list${RESET} to inspect all registered actions"
 echo -e "  • Run ${CYAN}${BOLD}cx --help${RESET} for full documentation\n"

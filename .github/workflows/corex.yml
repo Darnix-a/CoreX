@@ -1,0 +1,40 @@
+name: Linux and macOS
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install fzf on Ubuntu
+        if: runner.os == 'Linux'
+        run: |
+          version=0.74.5
+          archive="fzf-$version-linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/junegunn/fzf/releases/download/v$version/$archive"
+          tar -xf "$archive" -C "$RUNNER_TEMP" fzf
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Install fzf on Apple Silicon
+        if: runner.os == 'macOS'
+        run: |
+          test "$(uname -m)" = arm64
+          brew list fzf >/dev/null 2>&1 || brew install fzf
+      - name: Verify CLI, installer and platform implementations
+        run: |
+          python3 -m py_compile corex corex_macos.py
+          bash -n install.sh
+          bash -n uninstall.sh
+          python3 -m unittest discover -s tests -v

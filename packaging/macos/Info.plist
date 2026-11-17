@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.darnix-a.corex.workstation</string>
+    <key>CFBundleExecutable</key>
+    <string>workstation</string>
+    <key>CFBundleName</key>
+    <string>CoreX Workstation</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>CoreX uses Location Services to show nearby Wi-Fi network names when you run its Wi-Fi scanner.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>CoreX uses Location Services to show nearby Wi-Fi network names when you run its Wi-Fi scanner.</string>
+</dict>
+</plist>

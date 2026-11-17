@@ -26,7 +26,8 @@ echo -e "${RESET}${GRAY}──────────────────�
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${HOME}/.config/corex"
-SHARE_DIR="${HOME}/.local/share/corex"
+SHARE_DIR="$HOME/.local/share/corex"
+CACHE_DIR="$HOME/.cache/corex"
 FISH_FUNCTIONS="${HOME}/.config/fish/functions"
 FISH_COMPLETIONS="${HOME}/.config/fish/completions"
 FISH_CONFD="${HOME}/.config/fish/conf.d"
@@ -118,6 +119,16 @@ if [ -f "${HOME}/.local/share/applications/corex.desktop" ]; then
     fi
     echo -e "  [${GREEN}✔${RESET}] Removed ${CYAN}${HOME}/.local/share/applications/corex.desktop${RESET}"
 fi
+
+# macOS launcher and cached native helpers
+if [ "$(uname -s)" = "Darwin" ]; then
+    app="$HOME/Applications/CoreX.app"
+    if [ -f "$app/Contents/Info.plist" ] &&
+        [ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist" 2>/dev/null)" = "io.github.darnix-a.corex" ]; then
+        rm -rf "$app"
+    fi
+fi
+rm -rf "$CACHE_DIR"
 
 echo -e "\n${CYAN}λ${RESET} ${BOLD}Removing Configurations & User Data...${RESET}"
 if [ -d "$CONFIG_DIR" ]; then
