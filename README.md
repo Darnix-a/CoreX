@@ -10,7 +10,7 @@
 ──────────────────────────────────────────
   </pre>
   <p align="center">
-    <b>The Modular CLI Multitool, Terminal Launcher & Workstation Engine for Modern Linux</b>
+    <b>The Modular CLI Multitool, Terminal Launcher & Workstation Engine for Linux and macOS</b>
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/version-3.2.0-blue.svg?style=flat-square" alt="Version 3.2.0" />
@@ -23,7 +23,7 @@
 
 A fast, zero-bloat CLI multitool and interactive terminal launcher designed so you never have to memorize hundreds of flags, aliases, and one-liner bash scripts again.
 
-Type `cx` and instantly launch an interactive `fzf` menu featuring live preview panes for GPU overclocking & thermals, PipeWire routing, Docker & Kubernetes management, Linux kernel diagnostics, local AI copilot workflows (ComfyUI & Ollama), and everyday developer utilities.
+Type `cx` to open an interactive `fzf` launcher with live previews for system diagnostics, audio and media tools, Docker and Kubernetes, local AI workflows, and developer utilities. The catalog selects platform-specific implementations automatically.
 
 ---
 
@@ -31,14 +31,14 @@ Type `cx` and instantly launch an interactive `fzf` menu featuring live preview 
 
 -  **Sub-30ms Startup**: Pure Python standard library with binary configuration caching (`~/.cache/corex/config_cache.pickle`) and lazy runtime imports.
 -  **180+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
--  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via `nmcli` and `fzf`.
+-  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via NetworkManager on Linux and CoreWLAN on macOS.
 -  **Deep Process Forensics (`cx proc`)**: Process inspector with physical RSS/Virtual/Swap breakdown, active sockets/ports, open file descriptors, and interactive signal manager (`SIGKILL`, `SIGTERM`, `SIGSTOP`, `SIGCONT`, renice).
 -  **Media & Codec Forensics (`cx media-info`)**: Deep video, audio, and image codec inspection, frame rates, color spaces, and tag extraction via `ffprobe`.
 -  **Theme Studio**: 6 built-in color palettes (`catppuccin-mocha`, `tokyonight`, `nord`, `gruvbox`, `dracula`, `rose-pine`) with live ANSI swatches.
 -  **Telemetry & Analytics (`cx stats`)**: Track execution frequency, catalog coverage, category distribution, and recent command history.
 -  **Instant Cheatsheet Mode (`cx find <query>`)**: Search across all actions, descriptions, categories, and shell commands instantly.
 -  **Profile Sync (`cx export` / `cx import`)**: Export and restore your pinned favorites, themes, and custom commands across workstations with automatic backups.
--  **Desktop & WM Integrations (`cx integrations`)**: Native `corex.desktop` application entry plus ready-to-paste floating window rules for **Hyprland**, **Sway**, and **i3**.
+-  **Desktop & WM Integrations (`cx integrations`)**: Native `corex.desktop` application entry and window rules for **Hyprland**, **Sway**, and **i3** on Linux. On macOS, install **CoreX.app** for Finder, Spotlight, and the Dock.
 -  **Automated Updater (`cx upgrade`)**: One-command git remote synchronization, shell completion regeneration, cache invalidation, and system doctor audit.
 -  **Intelligent Fuzzy Suggestions**: Automatic "Did you mean...?" suggestions with aliases and descriptions when a command is misspelled.
 -  **Workstation Toys**: Real-time growing sakura bonsai (`cx bonsai`), typing speed test (`cx type-test`), terminal snake (`cx snake`), digital clock (`cx clock`), cyberpunk matrix (`cx matrix`), system fetch (`cx fetch`), disk visualizer (`cx disks`), hardware sensors (`cx sensors`), stereo DAC audio test (`cx audio-test`), and ephemeral file sharing (`cx share`).
@@ -48,7 +48,33 @@ Type `cx` and instantly launch an interactive `fzf` menu featuring live preview 
 
 ## Installation
 
-### Method 1: Arch Linux / CachyOS (PKGBUILD / Paru)
+### macOS (Apple Silicon)
+
+Install [Homebrew](https://brew.sh/) and activate it in your shell using the setup command printed by its installer. Then run:
+
+```bash
+brew install python fzf
+git clone --branch macos-support https://github.com/Darnix-a/CoreX.git
+cd CoreX
+./install.sh
+```
+
+CoreX needs Python 3.11 or newer and fzf 0.63 or newer on both platforms. Add `$HOME/.local/bin` to your PATH if the installer reports it missing. For the default macOS Zsh shell, put this in `~/.zshrc`:
+
+```zsh
+export PATH="$HOME/.local/bin:$PATH"
+fpath=("$HOME/.zsh/completions" $fpath)
+autoload -Uz compinit
+compinit
+```
+
+If your shell config already runs `compinit`, place the `fpath` line before that call. Bash users can source `~/.local/share/bash-completion/completions/cx` from their shell config. Fish loads the installed completion automatically.
+
+Run `xcode-select --install` for Wi-Fi scanning, display controls, the Metal benchmark, and Core Audio latency reporting. On first Wi-Fi scan, grant Location Services access when macOS prompts. `cx install-desktop` installs `~/Applications/CoreX.app`. When opening it for the first time, macOS may ask for permission to control Terminal.
+
+Use `cx doctor --dry-run` to review optional Homebrew packages. Container actions also need a running Docker or Podman engine. For local AI, install Ollama separately and point `comfyui_path` at a ComfyUI checkout with a Metal-compatible PyTorch environment.
+
+### Arch Linux / CachyOS (PKGBUILD / Paru)
 
 CoreX includes native Arch packaging files in `packaging/`. You can build and install via `paru` or `makepkg`:
 
@@ -65,7 +91,7 @@ makepkg -si
 
 *(Note: Direct `paru -S corex-git` will be enabled as soon as Arch Linux AUR re-opens new account registrations).*
 
-### Method 2: One-Line Git Clone (Universal Linux)
+### Other Linux distributions
 
 ```bash
 git clone https://github.com/Darnix-a/CoreX.git
@@ -76,12 +102,31 @@ chmod +x install.sh
 
 The installer:
 1. Links `cx` and `corex` into `~/.local/bin/`.
-2. Generates initial configuration at `~/.config/corex/config.toml`.
+2. Creates `~/.config/corex/config.toml` on first install and uses the existing file on subsequent installs.
 3. Installs autocompletions for **Fish**, **Bash**, and **Zsh**.
 4. Installs the XDG desktop entry to `~/.local/share/applications/corex.desktop`.
-5. Verifies syntax and dependencies via `cx doctor`.
+5. Verifies the launcher and action catalog. Run `cx doctor --dry-run` to audit action dependencies and syntax.
 
 ---
+
+## macOS action behavior
+
+Both systems expose the same stock action IDs. On macOS, `config.macos.toml` adapts the Linux-oriented IDs to the following tools and workflows.
+
+| Workflow | macOS implementation |
+| --- | --- |
+| Wi-Fi and networking | CoreWLAN scan with signal and channel data, Wi-Fi status and radio controls, personal-network join, DNS and PF diagnostics, route and socket inspection. Use `cx wifi settings` for hidden, enterprise, or managed networks. |
+| Processes, logs, and services | BSD `ps` and `lsof`, interactive signals and renice, Unified Log, `launchctl`, and Mach memory data. Some process details require additional privileges. |
+| Disk and snapshots | APFS and Time Machine snapshots, volume verification, and disk telemetry. Use Time Machine to restore files. |
+| GPU and display | Apple Silicon `powermetrics`, display refresh-rate selection, mirroring and extending the display, offscreen Metal benchmark, and optional MoltenVK tools. macOS activates Game Mode for supported full-screen games. |
+| Audio and media | Core Audio playback and device details, Audio MIDI Setup, a recording noise-gate filter, Apple Music and Spotify metadata when Automation permission is granted, and the macOS pasteboard. |
+| Updates | `cx sys-update` updates Homebrew packages. `cx sys-update --os` opens Apple Software Update. `cx sys-update --os --preview` lists macOS updates. |
+| Local AI | Ollama model sizing uses unified memory estimates on Apple Silicon. ComfyUI starts with its configured Python environment and uses PyTorch MPS when available. |
+| Clipboard and background jobs | `cx clip-hist` browses text copied through CoreX. `--capture` saves the current pasteboard and `--clear` removes CoreX history. `cx --bg` logs detached actions under `~/.local/share/corex/logs/`. |
+
+macOS reports nine stock actions as unavailable: `cuda-purge`, `gpu-clock`, `cpu-turboboost`, `journal-vacuum`, `shader-cache-purge`, `hugepages-toggle`, `fstrim-all`, `swap-compact`, and `gamescope-run`. The launcher, `cx --list`, and `cx doctor` show the status, and direct invocation explains the platform limitation.
+
+Custom actions can set macOS-specific fields under `[commands.<id>.macos]`. Custom action scripts run in Bash, so they can also check the host with `uname`. Configuration, profiles, notes, and favorites use the same paths and formats across Linux and macOS.
 
 ## How to Use
 
@@ -90,7 +135,7 @@ Simply run:
 ```bash
 cx
 ```
-- Type to fuzzy-search across all 180+ workstation actions.
+- Type to fuzzy-search across the workstation catalog.
 - Filter directly by category tag:
   - `@pinned` — Pinned favorite actions (hit `Tab` to toggle favorites)
   - `@daily` — Daily driver tools, clipboard, notes, todo, stats, disk visualizer
@@ -113,7 +158,7 @@ While inside `cx`:
 - `Tab` — Toggle Pin/Favorite status live (starred `★ ` at top of menu)
 - `Ctrl+N` — Open In-App Command Builder to register a new action
 - `Ctrl+R` — Invalidate cache and reload command matrix in-place
-- `Ctrl+Y` — Copy underlying shell command to clipboard (`wl-copy` / `xclip`)
+- `Ctrl+Y` — Copy the shell command to the clipboard
 - `Ctrl+E` — Open command in `$EDITOR` before executing
 - `Ctrl+D` — Preview command safely via `--dry-run`
 - `?` — Toggle preview pane on/off
@@ -144,7 +189,7 @@ cx import ~/.config/corex/my-profile.json
 ```
 
 ### 6. Desktop & Window Manager Integrations
-Add CoreX to your application launcher (Rofi, Wofi, Walker, Fuzzel, KDE, GNOME):
+Install a desktop launcher. On Linux it appears in freedesktop application menus such as Rofi, KDE, and GNOME. On macOS it opens CoreX in Terminal.
 ```bash
 cx install-desktop
 ```
@@ -195,14 +240,14 @@ deps = ["rsync"]
 
 ## System Doctor & Dependency Audit
 
-Verify all 175+ actions and automatically install missing packages for your detected distribution:
+Audit the action catalog and install missing dependencies using the detected package manager:
 ```bash
 cx doctor                 # Audit command matrix, shell syntax, and dependencies
 cx doctor -y              # Automatically install all missing packages
 cx doctor --dry-run       # Dry-run audit without making any system changes
 ```
 
-Supported package managers: `pacman` (Arch/CachyOS), `apt` (Debian/Ubuntu), `dnf` (Fedora/RHEL), `zypper` (openSUSE), and `apk` (Alpine).
+Supported package managers include Homebrew (macOS), pacman (Arch/CachyOS), apt (Debian/Ubuntu), dnf (Fedora/RHEL), zypper (openSUSE), apk (Alpine), and xbps (Void).
 
 ---
 
@@ -235,10 +280,23 @@ chmod +x uninstall.sh
 ./uninstall.sh
 ```
 
-To remove binaries and completions while preserving your configurations and notes:
+To uninstall CoreX and preserve the Git checkout:
 ```bash
 ./uninstall.sh --keep-folder
 ```
+
+## Development checks
+
+Run these from the checkout:
+
+```bash
+python3 -m py_compile corex corex_macos.py
+bash -n install.sh
+bash -n uninstall.sh
+python3 -m unittest discover -s tests -v
+```
+
+GitHub Actions runs the tests on Linux and Apple Silicon macOS. Hardware-dependent Wi-Fi, audio, displays, and power actions require a physical Mac and the relevant system permissions.
 
 ---
 

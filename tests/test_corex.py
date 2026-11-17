@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import io
 import os
+import pty
 import shutil
 import subprocess
 import sys
@@ -100,11 +101,15 @@ class CatalogTests(unittest.TestCase):
 
     def test_builtin_arguments_and_background_dispatch(self):
         cfg = self.load(True)
-        with mock.patch.object(cx, "record_action_usage"), mock.patch.object(cx, "dispatch_builtin") as run:
-            run.return_value = None
+        with (
+            mock.patch.object(cx, "IS_MACOS", True),
+            mock.patch.object(cx.shutil, "which", return_value="/usr/local/bin/tool"),
+            mock.patch.object(cx, "record_action_usage"),
+            mock.patch.object(cx, "dispatch_builtin", return_value=None) as run,
+            mock.patch.object(cx, "detach_background") as detach,
+        ):
             cx.execute_command("rip-flac", cfg)
             run.assert_called_once_with("rip-audio", cfg, dry_run=False, extra_args=["flac"])
-        with mock.patch.object(cx, "detach_background") as detach:
             cx.execute_command("mon-res", cfg, dry_run=True, bg_run=True, extra_args=["60"])
             self.assertIn("__builtin mac-display 60", detach.call_args.args[1])
 
@@ -164,6 +169,18 @@ class CLITests(unittest.TestCase):
         self.assertIn("flac", self.run_cli("rip-flac", "--dry-run").stdout)
         self.assertIn("PROCESS FORENSICS", self.run_cli("proc", str(os.getpid())).stdout)
 
+    def test_launcher_with_fzf(self):
+        master, slave = pty.openpty()
+        try:
+            result = subprocess.run(
+                [str(ROOT / "cx"), "--dry-run"], stdin=slave, text=True, check=True,
+                capture_output=True, timeout=10, env={**self.env, "FZF_DEFAULT_OPTS": "--filter=calc"},
+            )
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertIn("Built-in action: cx __builtin calc", result.stdout)
+
     def test_process_arguments_keep_their_order(self):
         parsed, unknown = cx.parse_cli_args(["proc", "100", "--nice", "-1"])
         self.assertEqual(parsed.args, ["100", "--nice", "-1"])
@@ -204,6 +221,19 @@ class CLITests(unittest.TestCase):
         self.assertIn("macOS", self.run_cli("sys-info").stdout)
         self.assertIn("STORAGE & PARTITION TELEMETRY", self.run_cli("disks").stdout)
         self.assertEqual(self.run_cli("cuda-purge", check=False).returncode, 1)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS command-line tools")
+    def test_mac_hashes_and_resource_accounting(self):
+        sample = self.home / "sample file"
+        sample.write_text("CoreX\n")
+        result = subprocess.run(
+            [str(ROOT / "cx"), "hash-check"], env=self.env,
+            input=f"{sample}\n", text=True, capture_output=True, check=True, timeout=10,
+        )
+        self.assertRegex(result.stdout, r"[a-f0-9]{64}")
+        self.assertRegex(result.stdout, r"[a-f0-9]{32}\n")
+        result = self.run_cli("perf-stat", "/usr/bin/true")
+        self.assertIn("maximum resident set size", result.stderr)
 
 
 if __name__ == "__main__":
