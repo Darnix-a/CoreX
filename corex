@@ -6507,6 +6507,44 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
 # ---------------------------------------------------------------------------
 # IN-APP COMMAND BUILDER & ACTION STUDIO
 # ---------------------------------------------------------------------------
+def save_action_definition(
+    cid: str, definition: Dict[str, Any], config_path: Optional[Path] = None, macos_only: bool = False,
+):
+    """Write editable action fields while preserving all other action tables."""
+    fields = ("category", "description", "command", "preview_cmd", "requires_sudo", "confirm", "deps", "unavailable")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", cid):
+        raise ValueError(f"Invalid action ID {cid!r}")
+    path = config_path or CONFIG_FILE
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if DEFAULT_CONFIG_TEMPLATE.exists():
+            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
+        else:
+            path.write_text("[general]\neditor = ''\n", encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+
+    base = f"commands.{cid}"
+    tables = {f"{base}.macos": definition} if macos_only else {base: definition}
+    if not macos_only and isinstance(definition.get("macos"), dict):
+        tables[f"{base}.macos"] = definition["macos"]
+    for name, values in tables.items():
+        assignments = [f"{key} = {json.dumps(values[key], ensure_ascii=False)}" for key in fields if key in values]
+        if not assignments:
+            continue
+        block = "\n".join([f"[{name}]", *assignments]) + "\n\n"
+        pattern = rf"(?ms)^\[{re.escape(name)}\].*?(?=(?:^\[|\Z))"
+        text, found = re.subn(pattern, lambda _: block, text)
+        if not found:
+            doctor_pos = text.find("[commands.doctor]")
+            if doctor_pos != -1:
+                text = text[:doctor_pos] + block + text[doctor_pos:]
+            else:
+                text = text.rstrip() + "\n\n" + block
+
+    path.write_text(text, encoding="utf-8")
+    invalidate_config_cache()
+
+
 def save_command_to_config(
     cid: str,
     category: str,
@@ -6517,54 +6555,17 @@ def save_command_to_config(
     confirm: bool = False,
     deps: Optional[List[str]] = None,
     config_path: Optional[Path] = None,
-) -> bool:
-    """Saves or updates a command in config.toml, keeping doctor at the bottom."""
-    path = config_path or CONFIG_FILE
-    if not path.exists():
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("[general]\neditor = ''\n\n[commands]\n", encoding="utf-8")
-
-    text = path.read_text(encoding="utf-8")
-
-    def escape_toml(val: str) -> str:
-        return val.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
-
-    lines = [
-        f"[commands.{cid}]",
-        f'category = "{escape_toml(category)}"',
-        f'description = "{escape_toml(description)}"',
-        f'command = "{escape_toml(command)}"',
-    ]
-    if preview_cmd:
-        lines.append(f'preview_cmd = "{escape_toml(preview_cmd)}"')
-    else:
-        lines.append(f'preview_cmd = "echo \\"Action: {escape_toml(cid)}\\""')
-    lines.append(f'requires_sudo = {"true" if requires_sudo else "false"}')
-    lines.append(f'confirm = {"true" if confirm else "false"}')
-    deps_list = deps or []
-    deps_formatted = ", ".join([f'"{escape_toml(d)}"' for d in deps_list])
-    lines.append(f'deps = [{deps_formatted}]')
-    block = "\n".join(lines) + "\n\n"
-
-    # If updating an existing command:
-    pattern = rf"(?ms)^\[commands\.{re.escape(cid)}\].*?(?=(?:^\[|\Z))"
-    if re.search(pattern, text):
-        new_text = re.sub(pattern, block, text)
-    else:
-        # Insert before [commands.doctor] if present to keep doctor at bottom
-        doctor_pos = text.find("[commands.doctor]")
-        if doctor_pos != -1:
-            new_text = text[:doctor_pos] + block + text[doctor_pos:]
-        else:
-            new_text = text.rstrip() + "\n\n" + block
-
-    path.write_text(new_text, encoding="utf-8")
-    invalidate_config_cache()
-    return True
+    macos_only: bool = False,
+):
+    save_action_definition(cid, {
+        "category": category,
+        "description": description,
+        "command": command,
+        "preview_cmd": preview_cmd,
+        "requires_sudo": requires_sudo,
+        "confirm": confirm,
+        "deps": deps or [],
+    }, config_path, macos_only)
 
 
 def remove_command_from_config(cid: str, config_path: Optional[Path] = None) -> bool:
@@ -6573,7 +6574,7 @@ def remove_command_from_config(cid: str, config_path: Optional[Path] = None) -> 
     if not path.exists():
         return False
     text = path.read_text(encoding="utf-8")
-    pattern = rf"(?ms)^\[commands\.{re.escape(cid)}\].*?(?=(?:^\[|\Z))"
+    pattern = rf"(?ms)^\[commands\.{re.escape(cid)}(?:\.macos)?\].*?(?=(?:^\[|\Z))"
     if not re.search(pattern, text):
         return False
     new_text = re.sub(pattern, "", text)
@@ -6749,7 +6750,8 @@ def wizard_create_action(cfg: CoreXConfig, initial_id: Optional[str] = None):
         ret = subprocess.run(test_cmd, shell=True, executable=ACTION_SHELL)
         print(f"{Style.CYAN}--- Test Exited with Code {ret.returncode} ---{Style.RESET}\n")
 
-    save_ans = prompt_user(f"Save and register action '{cid}' to ~/.config/corex/config.toml? [Y/n]: ", default="y").lower()
+    config_path = cfg.source_path or CONFIG_FILE
+    save_ans = prompt_user(f"Save and register action '{cid}' to {config_path}? [Y/n]: ", default="y").lower()
     if save_ans in ("", "y", "yes"):
         save_command_to_config(
             cid=cid,
@@ -6760,6 +6762,7 @@ def wizard_create_action(cfg: CoreXConfig, initial_id: Optional[str] = None):
             requires_sudo=req_sudo,
             confirm=confirm,
             deps=deps,
+            config_path=config_path,
         )
         cfg.commands[cid] = CommandSpec(
             id=cid,
@@ -6773,7 +6776,7 @@ def wizard_create_action(cfg: CoreXConfig, initial_id: Optional[str] = None):
         )
         sync_completions(cfg)
         print(f"\n{box_header('ACTION SUCCESSFULLY REGISTERED', color=Style.GREEN)}")
-        print(f"  {Style.GREEN}✔ Action '{cid}' saved to ~/.config/corex/config.toml{Style.RESET}")
+        print(f"  {Style.GREEN}✔ Action '{cid}' saved to {config_path}{Style.RESET}")
         print(f"  {Style.GREEN}✔ Shell completions updated for Fish, Bash, and Zsh{Style.RESET}")
         print(f"  ⚡ Run it immediately with: {Style.BOLD}{Style.CYAN}cx {cid}{Style.RESET}")
         print(box_footer(color=Style.GREEN) + "\n")
@@ -6796,6 +6799,7 @@ def wizard_edit_action(cfg: CoreXConfig, target_id: Optional[str] = None):
         return
 
     spec = cfg.commands[cid]
+    config_path = cfg.source_path or CONFIG_FILE
     print(f"\n{box_header(f'EDIT ACTION: {cid}', color=Style.YELLOW)}")
     print(f"  [1] Interactive Field-by-Field Wizard")
     print(f"  [2] Open in Text Editor ($EDITOR)")
@@ -6805,14 +6809,14 @@ def wizard_edit_action(cfg: CoreXConfig, target_id: Optional[str] = None):
     if mode == "2":
         ed = get_default_editor(cfg)
         line_num = 1
-        if CONFIG_FILE.exists():
-            for idx, line in enumerate(CONFIG_FILE.read_text(encoding="utf-8").splitlines(), 1):
+        if config_path.exists():
+            for idx, line in enumerate(config_path.read_text(encoding="utf-8").splitlines(), 1):
                 if line.strip() == f"[commands.{cid}]":
                     line_num = idx
                     break
-        subprocess.run([ed, f"+{line_num}", str(CONFIG_FILE)])
+        subprocess.run([ed, f"+{line_num}", str(config_path)])
         log_success(f"Configuration file edited. Shell completions updating...")
-        sync_completions(load_config())
+        sync_completions(load_config(cfg.source_path))
         return
 
     if mode != "1":
@@ -6838,6 +6842,8 @@ def wizard_edit_action(cfg: CoreXConfig, target_id: Optional[str] = None):
         requires_sudo=new_sudo,
         confirm=new_conf,
         deps=new_deps,
+        config_path=config_path,
+        macos_only=IS_MACOS,
     )
     cfg.commands[cid] = CommandSpec(
         id=cid,
@@ -6871,7 +6877,7 @@ def wizard_delete_action(cfg: CoreXConfig, target_id: Optional[str] = None):
 
     ans = prompt_user(f"Are you sure you want to permanently delete action '{cid}'? [y/N]: ", default="n").lower()
     if ans in ("y", "yes"):
-        if remove_command_from_config(cid):
+        if remove_command_from_config(cid, cfg.source_path):
             if cid in cfg.commands:
                 del cfg.commands[cid]
             sync_completions(cfg)
@@ -7034,7 +7040,7 @@ def builtin_theme(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
                 print(f"  • {Style.CYAN}{tid:<18}{Style.RESET} {Style.WHITE}{tinfo['name']:<18}{Style.RESET} {Style.GRAY}{tinfo['desc']}{Style.RESET}{active}")
             return
         if sub in THEMES:
-            set_config_theme(sub)
+            set_config_theme(sub, cfg.source_path)
             apply_theme(sub)
             log_success(f"Active theme set to '{sub}'. Saved to {CONFIG_FILE}.")
             return
@@ -7074,7 +7080,7 @@ def builtin_theme(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
 
     chosen_theme = sel[0].split("\t")[0].strip()
     if chosen_theme in THEMES:
-        set_config_theme(chosen_theme)
+        set_config_theme(chosen_theme, cfg.source_path)
         apply_theme(chosen_theme)
         log_success(f"Theme '{chosen_theme}' applied and saved to {CONFIG_FILE}.")
 
@@ -7294,28 +7300,22 @@ def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None):
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     state = load_user_state()
-    custom_cmds = {}
-    default_cmd_keys = set()
-    if DEFAULT_CONFIG_TEMPLATE.exists():
-        try:
-            import tomllib
-            with open(DEFAULT_CONFIG_TEMPLATE, "rb") as df:
-                d_data = tomllib.load(df)
-                default_cmd_keys = set(d_data.get("commands", {}).keys())
-        except Exception:
-            pass
+    import tomllib
 
-    for cid, spec in cfg.commands.items():
-        if cid not in default_cmd_keys:
-            custom_cmds[cid] = {
-                "category": spec.category,
-                "description": spec.description,
-                "command": spec.command,
-                "preview_cmd": spec.preview_cmd,
-                "requires_sudo": spec.requires_sudo,
-                "confirm": spec.confirm,
-                "deps": spec.deps,
-            }
+    custom_cmds = {}
+    source = cfg.source_path or CONFIG_FILE
+    if source.is_file():
+        with source.open("rb") as handle:
+            commands = tomllib.load(handle).get("commands", {})
+        defaults = {}
+        if DEFAULT_CONFIG_TEMPLATE.is_file():
+            with DEFAULT_CONFIG_TEMPLATE.open("rb") as handle:
+                defaults = tomllib.load(handle).get("commands", {})
+        for cid, definition in commands.items():
+            stock = defaults.get(cid, {})
+            overrides = {key: value for key, value in definition.items() if value != stock.get(key)}
+            if overrides:
+                custom_cmds[cid] = overrides
 
     export_data = {
         "format": "corex-profile",
@@ -7362,13 +7362,14 @@ def builtin_import(cfg: CoreXConfig, source_path: Optional[str] = None):
         log_error("Invalid profile format. File must be generated by 'cx export'.")
         return
 
-    bak_path = CONFIG_FILE.parent / f"config.toml.bak.{int(time.time())}"
-    if CONFIG_FILE.exists():
-        shutil.copy(CONFIG_FILE, bak_path)
+    path = cfg.source_path or CONFIG_FILE
+    bak_path = path.with_name(f"{path.name}.bak.{int(time.time())}")
+    if path.exists():
+        shutil.copy(path, bak_path)
 
     imp_theme = data.get("theme")
     if imp_theme and imp_theme in THEMES:
-        set_config_theme(imp_theme)
+        set_config_theme(imp_theme, path)
         apply_theme(imp_theme)
 
     imp_pinned = data.get("pinned", [])
@@ -7377,20 +7378,14 @@ def builtin_import(cfg: CoreXConfig, source_path: Optional[str] = None):
         state["pinned"] = imp_pinned
         save_user_state(state)
 
-    imp_custom = data.get("custom_commands", {})
     restored_count = 0
+    imp_custom = data.get("custom_commands", {})
     if isinstance(imp_custom, dict):
-        for cid, cdef in imp_custom.items():
-            save_command_to_config(
-                cid=cid,
-                category=cdef.get("category", "General"),
-                description=cdef.get("description", ""),
-                command=cdef.get("command", ""),
-                preview_cmd=cdef.get("preview_cmd", ""),
-                requires_sudo=bool(cdef.get("requires_sudo", False)),
-                confirm=bool(cdef.get("confirm", False)),
-                deps=list(cdef.get("deps", []))
-            )
+        for cid, definition in imp_custom.items():
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", cid) or not isinstance(definition, dict):
+                log_warn(f"Skipping invalid action definition for {cid!r}.")
+                continue
+            save_action_definition(cid, definition, path)
             restored_count += 1
 
     invalidate_config_cache()

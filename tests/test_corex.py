@@ -2,12 +2,14 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import io
+import json
 import os
 import pty
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import unittest
 from pathlib import Path
@@ -195,6 +197,27 @@ class CLITests(unittest.TestCase):
         self.run_cli("import", str(profile))
         self.assertIn("disks", self.run_cli("pinned").stdout)
 
+    def test_portable_profile_preserves_platform_variants(self):
+        original = self.home / "original.toml"
+        restored = self.home / "restored.toml"
+        profile = self.home / "portable.json"
+        original.write_text(
+            '[commands.custom]\ncommand = "echo portable"\n'
+            '[commands.custom.macos]\ncommand = "echo Mac"\n'
+            '[commands.pw-devices.macos]\ncommand = "echo override"\n'
+        )
+        restored.write_text("[general]\n")
+        self.run_cli("--config", str(original), "export", str(profile))
+        exported = json.loads(profile.read_text())
+        self.assertEqual(exported["custom_commands"]["custom"]["command"], "echo portable")
+        self.run_cli("--config", str(restored), "import", str(profile))
+        with restored.open("rb") as stream:
+            actions = tomllib.load(stream)["commands"]
+        self.assertEqual(actions["custom"]["macos"]["command"], "echo Mac")
+        self.assertEqual(actions["pw-devices"]["macos"]["command"], "echo override")
+        result = self.run_cli("--config", str(restored), "custom")
+        self.assertEqual(result.stdout.strip(), "Mac" if sys.platform == "darwin" else "portable")
+
     def test_install_and_uninstall(self):
         config = self.home / ".config/corex/config.toml"
         config.parent.mkdir(parents=True)
@@ -234,6 +257,18 @@ class CLITests(unittest.TestCase):
         self.assertRegex(result.stdout, r"[a-f0-9]{32}\n")
         result = self.run_cli("perf-stat", "/usr/bin/true")
         self.assertIn("maximum resident set size", result.stderr)
+
+    @unittest.skipUnless(sys.platform == "darwin", "requires the macOS detach path")
+    def test_mac_background_job_logs_output(self):
+        config = self.home / "background.toml"
+        config.write_text('[commands.smoke]\ncommand = "echo detached"\n')
+        self.run_cli("--config", str(config), "--bg", "smoke")
+        logs = list((self.home / ".local/share/corex/logs").glob("corex-smoke-*.log"))
+        self.assertEqual(len(logs), 1)
+        deadline = time.monotonic() + 5
+        while logs[0].stat().st_size == 0 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(logs[0].read_text().strip(), "detached")
 
 
 if __name__ == "__main__":
