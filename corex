@@ -29,9 +29,14 @@ if IS_MACOS:
 VERSION = "3.2.0"
 CACHE_SCHEMA = 4
 CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
-DEFAULT_CONFIG_TEMPLATE = SOURCE_DIR / "config.default.toml"
-if not DEFAULT_CONFIG_TEMPLATE.is_file():
-    DEFAULT_CONFIG_TEMPLATE = Path("/usr/share/corex/config.default.toml")
+DEFAULT_CONFIG_TEMPLATE = next(
+    (path for path in (
+        SOURCE_DIR / "config.default.toml",
+        SOURCE_DIR.parent / "share/corex/config.default.toml",
+        SOURCE_DIR.parent.parent / "share/corex/config.default.toml",
+    ) if path.is_file()),
+    Path("/usr/share/corex/config.default.toml"),
+)
 MACOS_CONFIG_TEMPLATE = SOURCE_DIR / "config.macos.toml"
 MAC_CLIPBOARD_FILE = Path.home() / ".local" / "share" / "corex" / "clipboard.json"
 CONFIG_CACHE_FILE = Path.home() / ".cache" / "corex" / "config_cache.pickle"
@@ -640,6 +645,10 @@ def changed_fields(defaults, overrides):
     return {key: value for key, value in overrides.items() if value != defaults.get(key)}
 
 
+def action_disabled(definition):
+    return str(definition.get("disabled", False)).lower() in ("true", "1", "yes")
+
+
 def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) -> CoreXConfig:
     path = custom_path or CONFIG_FILE
     if not path.exists():
@@ -722,7 +731,7 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
                 if "command" in local_platform:
                     cdef.pop("unavailable", None)
                 cdef.update(local_platform)
-            if cdef.get("disabled") is True:
+            if action_disabled(cdef):
                 cfg.disabled_actions.add(cid)
                 continue
             cfg.commands[cid] = CommandSpec(
@@ -6631,6 +6640,14 @@ def sync_completions(cfg: CoreXConfig):
             pass
 
 
+def refresh_action_config(cfg: CoreXConfig):
+    updated = load_config(cfg.source_path)
+    cfg.commands = updated.commands
+    cfg.action_overrides = updated.action_overrides
+    cfg.disabled_actions = updated.disabled_actions
+    sync_completions(cfg)
+
+
 def detect_command_dependencies(cmd_str: str) -> List[str]:
     """Scans shell command string to detect common CLI binaries."""
     ignore = {
@@ -6787,17 +6804,7 @@ def wizard_create_action(cfg: CoreXConfig, initial_id: Optional[str] = None):
             deps=deps,
             config_path=config_path,
         )
-        cfg.commands[cid] = CommandSpec(
-            id=cid,
-            category=category,
-            description=desc,
-            command=cmd_str,
-            preview_cmd=preview_cmd,
-            requires_sudo=req_sudo,
-            confirm=confirm,
-            deps=deps,
-        )
-        sync_completions(cfg)
+        refresh_action_config(cfg)
         print(f"\n{box_header('ACTION SUCCESSFULLY REGISTERED', color=Style.GREEN)}")
         print(f"  {Style.GREEN}✔ Action '{cid}' saved to {config_path}{Style.RESET}")
         print(f"  {Style.GREEN}✔ Shell completions updated for Fish, Bash, and Zsh{Style.RESET}")
@@ -6839,7 +6846,7 @@ def wizard_edit_action(cfg: CoreXConfig, target_id: Optional[str] = None):
                     break
         subprocess.run([ed, f"+{line_num}", str(config_path)])
         log_success(f"Configuration file edited. Shell completions updating...")
-        sync_completions(load_config(cfg.source_path))
+        refresh_action_config(cfg)
         return
 
     if mode != "1":
@@ -6856,29 +6863,16 @@ def wizard_edit_action(cfg: CoreXConfig, target_id: Optional[str] = None):
     new_deps_raw = prompt_user(f"Dependencies [{deps_str}]: ", default=deps_str)
     new_deps = [d.strip() for d in new_deps_raw.replace(" ", ",").split(",") if d.strip()]
 
-    save_command_to_config(
-        cid=cid,
-        category=spec.category,
-        description=new_desc,
-        command=new_cmd,
-        preview_cmd=new_prev,
-        requires_sudo=new_sudo,
-        confirm=new_conf,
-        deps=new_deps,
-        config_path=config_path,
-        macos_only=IS_MACOS,
-    )
-    cfg.commands[cid] = CommandSpec(
-        id=cid,
-        category=spec.category,
-        description=new_desc,
-        command=new_cmd,
-        preview_cmd=new_prev,
-        requires_sudo=new_sudo,
-        confirm=new_conf,
-        deps=new_deps,
-    )
-    sync_completions(cfg)
+    updates = {
+        "description": new_desc, "command": new_cmd, "preview_cmd": new_prev,
+        "requires_sudo": new_sudo, "confirm": new_conf, "deps": new_deps,
+    }
+    diff = changed_fields({key: getattr(spec, key) for key in updates}, updates)
+    if not diff:
+        log_info(f"No changes to '{cid}'.")
+        return
+    save_action_definition(cid, diff, config_path, macos_only=IS_MACOS, merge=True)
+    refresh_action_config(cfg)
     log_success(f"Action '{cid}' updated successfully!")
 
 
@@ -6908,7 +6902,7 @@ def wizard_delete_action(cfg: CoreXConfig, target_id: Optional[str] = None):
         else:
             log_error(f"Could not remove '{cid}' from config file.")
             return
-        sync_completions(load_config(cfg.source_path))
+        refresh_action_config(cfg)
     else:
         log_info("Deletion canceled.")
 
@@ -7325,7 +7319,7 @@ def personal_actions(cfg):
     overrides = {}
     disabled = []
     for cid, definition in sorted(cfg.action_overrides.items()):
-        if definition.get("disabled") is True:
+        if action_disabled(definition):
             disabled.append(cid)
             definition = {key: value for key, value in definition.items() if key != "disabled"}
         if definition:
@@ -9205,7 +9199,8 @@ def start_background(cmd_id: str, shell_cmd: str, dry_run: bool = False) -> int:
             print(f"Log: {jobs.log_path(unit)}")
         return 0
 
-    if use_systemd:
+    active = jobs.status(unit) if use_systemd else None
+    if not active and use_systemd:
         # The service manager owns the name. A concurrent start cannot create a duplicate.
         active = corex_bg.systemd_info(unit)
         if not active or active["state"] not in ("active", "activating", "reloading"):
@@ -9217,7 +9212,7 @@ def start_background(cmd_id: str, shell_cmd: str, dry_run: bool = False) -> int:
                 if not active or active["state"] not in ("active", "activating", "reloading"):
                     log_error(result.stderr.strip() or f"Could not start {unit}")
                     return result.returncode
-    else:
+    elif not active:
         active = jobs.start(unit, ACTION_SHELL, shell_cmd)
 
     if active:
@@ -9342,7 +9337,8 @@ def builtin_bg(extra_args: Optional[List[str]] = None, config_path: Optional[Pat
     elif action == "logs":
         follow = "--no-follow" not in args[2:]
         path = jobs.log_path(unit)
-        if jobs.status(unit) or path.is_file():
+        local_job = jobs.status(unit)
+        if local_job or (path.is_file() and not (use_systemd and corex_bg.systemd_info(unit))):
             cmd = ["tail", "-n", "30", *(["-F"] if follow else []), str(path)]
             return subprocess.call(cmd)
         if use_systemd:

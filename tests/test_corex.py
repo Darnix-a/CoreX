@@ -249,6 +249,19 @@ class CLITests(unittest.TestCase):
             self.assertEqual(tomllib.load(handle)["commands"],
                              {"calc": {"macos": {"disabled": True}}, "fetch": {"disabled": True}})
 
+    def test_builder_edits_only_the_changed_field(self):
+        config = self.home / "builder.toml"
+        editing = subprocess.run(
+            [str(ROOT / "cx"), "--config", str(config), "edit", "calc"],
+            input="1\nMy calculator\n\n\n\n\n\n",
+            cwd=ROOT, env=self.env, capture_output=True, text=True, check=True, timeout=10,
+        )
+        self.assertIn("updated successfully", editing.stdout)
+        with config.open("rb") as handle:
+            definition = tomllib.load(handle)["commands"]["calc"]
+        expected = {"description": "My calculator"}
+        self.assertEqual(definition, {"macos": expected} if sys.platform == "darwin" else expected)
+
     def test_fresh_config_contains_only_user_tables(self):
         result = self.run_cli("--list")
         self.assertEqual(len(result.stdout.splitlines()), len(STOCK))

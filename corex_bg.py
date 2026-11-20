@@ -78,10 +78,11 @@ class LocalJobs:
         self.logs = state_dir / "logs"
 
     @contextlib.contextmanager
-    def transaction(self):
+    def transaction(self, *, blocking=True):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         with (self.root / "manager.lock").open("a") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+            mode = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+            fcntl.flock(handle, mode)
             yield
 
     def log_path(self, unit):
@@ -128,6 +129,7 @@ class LocalJobs:
             pipe = path.with_suffix(".fifo")
             self.logs.mkdir(parents=True, exist_ok=True, mode=0o700)
             os.mkfifo(pipe, mode=0o600)
+            worker = None
             try:
                 with path.with_suffix(".lock").open("x") as lock, self.log_path(unit).open("a") as log:
                     fcntl.flock(lock, fcntl.LOCK_EX)
@@ -141,13 +143,17 @@ class LocalJobs:
                     while not path.exists() and worker.poll() is None and time.monotonic() < deadline:
                         time.sleep(0.02)
                     if not path.exists():
-                        if worker.poll() is None:
-                            worker.terminate()
-                            worker.wait(timeout=5)
                         raise RuntimeError(f"Background job failed to start. See {self.log_path(unit)}")
             except BaseException:
+                if worker is not None and worker.poll() is None:
+                    worker.terminate()
+                    try:
+                        worker.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        worker.kill()
+                        worker.wait()
+                self.info(unit)
                 pipe.unlink(missing_ok=True)
-                path.with_suffix(".lock").unlink(missing_ok=True)
                 raise
             return None
 
@@ -228,8 +234,9 @@ def run_worker(path, fd, shell, command):
         os.close(read_fd)
         os.close(fd)
         jobs = LocalJobs(path.parent.parent)
-        with jobs.transaction():
-            jobs.info(path.name)
+        with contextlib.suppress(BlockingIOError):
+            with jobs.transaction(blocking=False):
+                jobs.info(path.name)
 
 
 if __name__ == "__main__":
