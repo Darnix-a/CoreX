@@ -461,13 +461,10 @@ def get_fzf_theme_colors() -> str:
 def set_config_theme(theme_name: str, config_path: Optional[Path] = None) -> bool:
     path = config_path or CONFIG_FILE
     if not path.exists():
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"[general]\ntheme = \"{theme_name}\"\n\n[commands]\n", encoding="utf-8")
-            return True
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f'[general]\ntheme = "{theme_name}"\n\n[commands]\n', encoding="utf-8")
+        invalidate_config_cache()
+        return True
 
     text = path.read_text(encoding="utf-8")
     if re.search(r'^\s*theme\s*=\s*["\'].*?["\']', text, flags=re.MULTILINE):
@@ -587,31 +584,40 @@ class CoreXConfig:
         self.commands: Dict[str, CommandSpec] = {}
 
 
+def get_default_config_path() -> Optional[Path]:
+    """Finds the built-in base configuration template path."""
+    candidates = [
+        DEFAULT_CONFIG_TEMPLATE,
+        Path(__file__).resolve().parent / "config.default.toml",
+        Path("/usr/share/corex/config.default.toml"),
+        Path("/usr/local/share/corex/config.default.toml"),
+        Path.home() / ".local" / "share" / "corex" / "config.default.toml",
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+
 def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) -> CoreXConfig:
-    path = custom_path or CONFIG_FILE
-    if not path.exists():
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
-        else:
-            return CoreXConfig()
+    user_config_path = custom_path or CONFIG_FILE
+    default_path = get_default_config_path()
+
+    user_stat = user_config_path.stat() if user_config_path.exists() else None
+    tmpl_stat = default_path.stat() if default_path and default_path.exists() else None
 
     # Fast binary cache path (sub-1ms cold starts)
     if not ignore_cache and custom_path is None and CONFIG_CACHE_FILE.exists():
         try:
             import pickle
-            path_stat = path.stat()
-            tmpl_stat = DEFAULT_CONFIG_TEMPLATE.stat() if DEFAULT_CONFIG_TEMPLATE.exists() else None
             with open(CONFIG_CACHE_FILE, "rb") as cf:
                 cache_meta = pickle.load(cf)
             if (
                 cache_meta.get("version") == VERSION
-                and cache_meta.get("user_mtime") == path_stat.st_mtime
-                and cache_meta.get("user_size") == path_stat.st_size
-                and (tmpl_stat is None or (
-                    cache_meta.get("tmpl_mtime") == tmpl_stat.st_mtime
-                    and cache_meta.get("tmpl_size") == tmpl_stat.st_size
-                ))
+                and cache_meta.get("user_mtime") == (user_stat.st_mtime if user_stat else None)
+                and cache_meta.get("user_size") == (user_stat.st_size if user_stat else None)
+                and cache_meta.get("tmpl_mtime") == (tmpl_stat.st_mtime if tmpl_stat else None)
+                and cache_meta.get("tmpl_size") == (tmpl_stat.st_size if tmpl_stat else None)
             ):
                 cached_cfg = cache_meta["cfg"]
                 if cached_cfg.color:
@@ -623,69 +629,171 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
     cfg = CoreXConfig()
     try:
         import tomllib
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
 
-        gen = data.get("general", {})
-        cfg.editor = gen.get("editor", "")
-        cfg.notes_dir = Path(os.path.expanduser(gen.get("notes_dir", str(NOTES_DIR))))
-        cfg.todo_file = Path(os.path.expanduser(gen.get("todo_file", str(TODO_FILE))))
-        cfg.color = gen.get("color", True)
-        cfg.theme = str(gen.get("theme", "catppuccin-mocha")).strip()
-        if cfg.color:
-            apply_theme(cfg.theme)
-
-        ai = data.get("ai", {})
-        cfg.comfyui_path = Path(os.path.expanduser(ai.get("comfyui_path", "~/ComfyUI")))
-        cfg.comfyui_venv = ai.get("comfyui_venv", "venv")
-        cfg.comfyui_port = int(ai.get("comfyui_port", 8188))
-        cfg.comfyui_host = str(ai.get("comfyui_host", "127.0.0.1"))
-        cfg.vram_high_threshold_mb = int(ai.get("vram_high_threshold_mb", 8192))
-        cfg.vram_low_threshold_mb = int(ai.get("vram_low_threshold_mb", 4096))
-        cfg.comfyui_extra_flags = ai.get("comfyui_extra_flags", ["--preview-method", "auto"])
-        cfg.comfyui_auto_browser = ai.get("comfyui_auto_browser", True)
-        cfg.comfyui_notify = ai.get("comfyui_notify", True)
-        cfg.ollama_url = ai.get("ollama_url", "http://127.0.0.1:11434")
-        cfg.ollama_model = str(ai.get("model", "qwen2.5-coder:1.5b"))
-        cfg.ollama_auto_boot = bool(ai.get("auto_boot", True))
-
-        raw_cmds = data.get("commands", {})
-        if DEFAULT_CONFIG_TEMPLATE.exists() and path != DEFAULT_CONFIG_TEMPLATE:
+        # 1. Layer 1: Load built-in defaults first (base catalog)
+        if default_path and default_path.exists():
             try:
-                with open(DEFAULT_CONFIG_TEMPLATE, "rb") as df:
+                with open(default_path, "rb") as df:
                     default_data = tomllib.load(df)
-                    default_cmds = default_data.get("commands", {})
-                    for dcid, dcdef in default_cmds.items():
-                        if dcid not in raw_cmds:
-                            raw_cmds[dcid] = dcdef
+
+                def_gen = default_data.get("general", {})
+                cfg.editor = def_gen.get("editor", "")
+                cfg.notes_dir = Path(os.path.expanduser(def_gen.get("notes_dir", str(NOTES_DIR))))
+                cfg.todo_file = Path(os.path.expanduser(def_gen.get("todo_file", str(TODO_FILE))))
+                cfg.color = def_gen.get("color", True)
+                cfg.theme = str(def_gen.get("theme", "catppuccin-mocha")).strip()
+
+                def_ai = default_data.get("ai", {})
+                cfg.comfyui_path = Path(os.path.expanduser(def_ai.get("comfyui_path", "~/ComfyUI")))
+                cfg.comfyui_venv = def_ai.get("comfyui_venv", "venv")
+                cfg.comfyui_port = int(def_ai.get("comfyui_port", 8188))
+                cfg.comfyui_host = str(def_ai.get("comfyui_host", "127.0.0.1"))
+                cfg.vram_high_threshold_mb = int(def_ai.get("vram_high_threshold_mb", 8192))
+                cfg.vram_low_threshold_mb = int(def_ai.get("vram_low_threshold_mb", 4096))
+                cfg.comfyui_extra_flags = list(def_ai.get("comfyui_extra_flags", ["--preview-method", "auto"]))
+                cfg.comfyui_auto_browser = def_ai.get("comfyui_auto_browser", True)
+                cfg.comfyui_notify = def_ai.get("comfyui_notify", True)
+                cfg.ollama_url = def_ai.get("ollama_url", "http://127.0.0.1:11434")
+                cfg.ollama_model = str(def_ai.get("model", "qwen2.5-coder:1.5b"))
+                cfg.ollama_auto_boot = bool(def_ai.get("auto_boot", True))
+
+                for cid, cdef in default_data.get("commands", {}).items():
+                    cfg.commands[cid] = CommandSpec(
+                        id=cid,
+                        category=cdef.get("category", "General"),
+                        description=cdef.get("description", ""),
+                        command=cdef.get("command", ""),
+                        preview_cmd=cdef.get("preview_cmd", ""),
+                        requires_sudo=bool(cdef.get("requires_sudo", False)),
+                        confirm=bool(cdef.get("confirm", False)),
+                        deps=list(cdef.get("deps", [])),
+                    )
+            except Exception as e:
+                log_warn(f"Failed parsing default config ({default_path}): {e}")
+
+        # 2. If user config does not exist, initialize lightweight starter config
+        if not user_config_path.exists():
+            try:
+                user_config_path.parent.mkdir(parents=True, exist_ok=True)
+                starter_toml = (
+                    "# CoreX (cx) User Configuration & Overrides\n"
+                    "# Location: ~/.config/corex/config.toml\n"
+                    "# Built-in defaults are automatically loaded. Add custom commands,\n"
+                    "# setting overrides, or use 'disabled = true' to disable built-in actions.\n\n"
+                    "[general]\n"
+                    f'theme = "{cfg.theme}"\n\n'
+                    "[commands]\n"
+                )
+                user_config_path.write_text(starter_toml, encoding="utf-8")
+                user_stat = user_config_path.stat()
             except Exception:
                 pass
 
-        for cid, cdef in raw_cmds.items():
-            cfg.commands[cid] = CommandSpec(
-                id=cid,
-                category=cdef.get("category", "General"),
-                description=cdef.get("description", ""),
-                command=cdef.get("command", ""),
-                preview_cmd=cdef.get("preview_cmd", ""),
-                requires_sudo=bool(cdef.get("requires_sudo", False)),
-                confirm=bool(cdef.get("confirm", False)),
-                deps=list(cdef.get("deps", [])),
-            )
+        # 3. Layer 2: Deep-merge user overrides on top of defaults
+        if user_config_path.exists() and (default_path is None or user_config_path != default_path):
+            try:
+                with open(user_config_path, "rb") as uf:
+                    user_data = tomllib.load(uf)
 
-        # Save to fast cache
+                u_gen = user_data.get("general", {})
+                if "editor" in u_gen:
+                    cfg.editor = u_gen["editor"]
+                if "notes_dir" in u_gen:
+                    cfg.notes_dir = Path(os.path.expanduser(u_gen["notes_dir"]))
+                if "todo_file" in u_gen:
+                    cfg.todo_file = Path(os.path.expanduser(u_gen["todo_file"]))
+                if "color" in u_gen:
+                    cfg.color = bool(u_gen["color"])
+                if "theme" in u_gen:
+                    cfg.theme = str(u_gen["theme"]).strip()
+
+                u_ai = user_data.get("ai", {})
+                if "comfyui_path" in u_ai:
+                    cfg.comfyui_path = Path(os.path.expanduser(u_ai["comfyui_path"]))
+                if "comfyui_venv" in u_ai:
+                    cfg.comfyui_venv = u_ai["comfyui_venv"]
+                if "comfyui_port" in u_ai:
+                    cfg.comfyui_port = int(u_ai["comfyui_port"])
+                if "comfyui_host" in u_ai:
+                    cfg.comfyui_host = str(u_ai["comfyui_host"])
+                if "vram_high_threshold_mb" in u_ai:
+                    cfg.vram_high_threshold_mb = int(u_ai["vram_high_threshold_mb"])
+                if "vram_low_threshold_mb" in u_ai:
+                    cfg.vram_low_threshold_mb = int(u_ai["vram_low_threshold_mb"])
+                if "comfyui_extra_flags" in u_ai:
+                    cfg.comfyui_extra_flags = list(u_ai["comfyui_extra_flags"])
+                if "comfyui_auto_browser" in u_ai:
+                    cfg.comfyui_auto_browser = bool(u_ai["comfyui_auto_browser"])
+                if "comfyui_notify" in u_ai:
+                    cfg.comfyui_notify = bool(u_ai["comfyui_notify"])
+                if "ollama_url" in u_ai:
+                    cfg.ollama_url = str(u_ai["ollama_url"])
+                if "model" in u_ai:
+                    cfg.ollama_model = str(u_ai["model"])
+                elif "ollama_model" in u_ai:
+                    cfg.ollama_model = str(u_ai["ollama_model"])
+                if "auto_boot" in u_ai:
+                    cfg.ollama_auto_boot = bool(u_ai["auto_boot"])
+                elif "ollama_auto_boot" in u_ai:
+                    cfg.ollama_auto_boot = bool(u_ai["ollama_auto_boot"])
+
+                # Command overrides & extensions
+                for cid, cdef in user_data.get("commands", {}).items():
+                    # Check for disabled flag
+                    is_dis = cdef.get("disabled", False)
+                    if is_dis is True or str(is_dis).lower() in ("true", "1", "yes"):
+                        if cid in cfg.commands:
+                            del cfg.commands[cid]
+                        continue
+
+                    if cid in cfg.commands:
+                        # Override existing built-in command properties
+                        spec = cfg.commands[cid]
+                        if "category" in cdef:
+                            spec.category = cdef["category"]
+                        if "description" in cdef:
+                            spec.description = cdef["description"]
+                        if "command" in cdef:
+                            spec.command = cdef["command"]
+                        if "preview_cmd" in cdef:
+                            spec.preview_cmd = cdef["preview_cmd"]
+                        if "requires_sudo" in cdef:
+                            spec.requires_sudo = bool(cdef["requires_sudo"])
+                        if "confirm" in cdef:
+                            spec.confirm = bool(cdef["confirm"])
+                        if "deps" in cdef:
+                            spec.deps = list(cdef["deps"])
+                    else:
+                        # Append new custom user command
+                        cfg.commands[cid] = CommandSpec(
+                            id=cid,
+                            category=cdef.get("category", "Custom Actions"),
+                            description=cdef.get("description", ""),
+                            command=cdef.get("command", ""),
+                            preview_cmd=cdef.get("preview_cmd", ""),
+                            requires_sudo=bool(cdef.get("requires_sudo", False)),
+                            confirm=bool(cdef.get("confirm", False)),
+                            deps=list(cdef.get("deps", [])),
+                        )
+            except Exception as e:
+                log_warn(f"User config parse warning ({user_config_path}): {e}")
+
+        if cfg.color:
+            apply_theme(cfg.theme)
+
+        # Save to fast binary cache
         if custom_path is None:
             try:
                 import pickle
                 CONFIG_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-                path_stat = path.stat()
-                tmpl_stat = DEFAULT_CONFIG_TEMPLATE.stat() if DEFAULT_CONFIG_TEMPLATE.exists() else None
+                u_stat = user_config_path.stat() if user_config_path.exists() else None
+                t_stat = default_path.stat() if default_path and default_path.exists() else None
                 cache_meta = {
                     "version": VERSION,
-                    "user_mtime": path_stat.st_mtime,
-                    "user_size": path_stat.st_size,
-                    "tmpl_mtime": tmpl_stat.st_mtime if tmpl_stat else None,
-                    "tmpl_size": tmpl_stat.st_size if tmpl_stat else None,
+                    "user_mtime": u_stat.st_mtime if u_stat else None,
+                    "user_size": u_stat.st_size if u_stat else None,
+                    "tmpl_mtime": t_stat.st_mtime if t_stat else None,
+                    "tmpl_size": t_stat.st_size if t_stat else None,
                     "cfg": cfg,
                 }
                 with open(CONFIG_CACHE_FILE, "wb") as cf:
@@ -694,7 +802,7 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
                 pass
 
     except Exception as e:
-        log_warn(f"Config parse warning ({path}): {e}")
+        log_warn(f"Config load error: {e}")
 
     return cfg
 
@@ -6166,7 +6274,8 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "sys-update", "update", "fetch", "type-test", "typing", "snake", "quote", "zen", "clock", "matrix", "cmatrix",
         "bonsai", "tree", "share", "upload", "paste", "disks", "disk", "df", "audio-test", "sound-test", "sensors", "thermals", "colors", "palette", "colortest",
         "stats", "top", "telemetry", "find", "search", "lookup", "export", "import", "integrations", "wm", "install-desktop", "desktop", "upgrade", "update-self", "self-update",
-        "wifi", "wlan", "wifi-manager", "wifi-scan", "proc", "process", "procs", "ps-inspect", "media-info", "mediainfo", "media", "ffprobe-info"
+        "wifi", "wlan", "wifi-manager", "wifi-scan", "proc", "process", "procs", "ps-inspect", "media-info", "mediainfo", "media", "ffprobe-info",
+        "bg", "background", "units", "daemons", "custom", "custom-commands", "list-custom"
     }
 
     for cid, spec in cfg.commands.items():
@@ -6308,12 +6417,8 @@ def save_command_to_config(
     """Saves or updates a command in config.toml, keeping doctor at the bottom."""
     path = config_path or CONFIG_FILE
     if not path.exists():
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("[general]\neditor = ''\n\n[commands]\n", encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[general]\n\n[commands]\n", encoding="utf-8")
 
     text = path.read_text(encoding="utf-8")
 
@@ -6355,19 +6460,48 @@ def save_command_to_config(
 
 
 def remove_command_from_config(cid: str, config_path: Optional[Path] = None) -> bool:
-    """Removes a command from config.toml."""
+    """Removes a custom command from config.toml or sets disabled=true for built-in commands."""
     path = config_path or CONFIG_FILE
+    default_path = get_default_config_path()
+    is_builtin = False
+    if default_path and default_path.exists():
+        try:
+            import tomllib
+            with open(default_path, "rb") as df:
+                d_data = tomllib.load(df)
+            if cid in d_data.get("commands", {}):
+                is_builtin = True
+        except Exception:
+            pass
+
     if not path.exists():
+        if is_builtin:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"[general]\n\n[commands.{cid}]\ndisabled = true\n\n", encoding="utf-8")
+            invalidate_config_cache()
+            return True
         return False
+
     text = path.read_text(encoding="utf-8")
     pattern = rf"(?ms)^\[commands\.{re.escape(cid)}\].*?(?=(?:^\[|\Z))"
-    if not re.search(pattern, text):
-        return False
-    new_text = re.sub(pattern, "", text)
-    new_text = re.sub(r"\n{3,}", "\n\n", new_text)
-    path.write_text(new_text, encoding="utf-8")
-    invalidate_config_cache()
-    return True
+
+    if is_builtin:
+        dis_block = f"[commands.{cid}]\ndisabled = true\n\n"
+        if re.search(pattern, text):
+            new_text = re.sub(pattern, dis_block, text)
+        else:
+            new_text = text.rstrip() + "\n\n" + dis_block
+        path.write_text(new_text, encoding="utf-8")
+        invalidate_config_cache()
+        return True
+    else:
+        if not re.search(pattern, text):
+            return False
+        new_text = re.sub(pattern, "", text)
+        new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+        path.write_text(new_text, encoding="utf-8")
+        invalidate_config_cache()
+        return True
 
 
 def sync_completions(cfg: CoreXConfig):
@@ -7073,24 +7207,87 @@ def builtin_find(cfg: CoreXConfig, query: str = "", extra_args: Optional[List[st
 # ---------------------------------------------------------------------------
 # PROFILE & DOTFILES SYNCHRONIZATION
 # ---------------------------------------------------------------------------
-def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None):
+def save_command_override(cid: str, override_dict: Dict[str, Any], config_path: Optional[Path] = None):
+    """Saves or updates overridden fields for a built-in command in user's config.toml."""
+    path = config_path or CONFIG_FILE
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[general]\n\n[commands]\n", encoding="utf-8")
+
+    text = path.read_text(encoding="utf-8")
+    pattern = rf"(?ms)^\[commands\.{re.escape(cid)}\].*?(?=(?:^\[|\Z))"
+
+    def escape_toml(val: str) -> str:
+        return val.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+
+    lines = [f"[commands.{cid}]"]
+    for k, v in override_dict.items():
+        if isinstance(v, bool):
+            lines.append(f'{k} = {"true" if v else "false"}')
+        elif isinstance(v, list):
+            fmtd = ", ".join([f'"{escape_toml(str(x))}"' for x in v])
+            lines.append(f'{k} = [{fmtd}]')
+        elif isinstance(v, (int, float)):
+            lines.append(f'{k} = {v}')
+        else:
+            lines.append(f'{k} = "{escape_toml(str(v))}"')
+
+    block = "\n".join(lines) + "\n\n"
+    if re.search(pattern, text):
+        new_text = re.sub(pattern, block, text)
+    else:
+        new_text = text.rstrip() + "\n\n" + block
+
+    path.write_text(new_text, encoding="utf-8")
+    invalidate_config_cache()
+
+
+def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None, full: bool = False):
     out_path = Path(target_path).expanduser() if target_path else Path.home() / ".local" / "share" / "corex" / f"corex-profile-{int(time.time())}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     state = load_user_state()
-    custom_cmds = {}
-    default_cmd_keys = set()
-    if DEFAULT_CONFIG_TEMPLATE.exists():
+    default_path = get_default_config_path()
+    default_cmds = {}
+    if default_path and default_path.exists():
         try:
             import tomllib
-            with open(DEFAULT_CONFIG_TEMPLATE, "rb") as df:
+            with open(default_path, "rb") as df:
                 d_data = tomllib.load(df)
-                default_cmd_keys = set(d_data.get("commands", {}).keys())
+                default_cmds = d_data.get("commands", {})
         except Exception:
             pass
 
+    user_data = {}
+    if CONFIG_FILE.exists():
+        try:
+            import tomllib
+            with open(CONFIG_FILE, "rb") as uf:
+                user_data = tomllib.load(uf)
+        except Exception:
+            pass
+
+    u_cmds = user_data.get("commands", {})
+    custom_cmds = {}
+    overrides = {}
+    disabled_cmds = []
+
+    for cid, cdef in u_cmds.items():
+        if cdef.get("disabled") is True or str(cdef.get("disabled")).lower() in ("true", "1", "yes"):
+            disabled_cmds.append(cid)
+        elif cid not in default_cmds:
+            custom_cmds[cid] = cdef
+        else:
+            diff = {}
+            d_spec = default_cmds[cid]
+            for fld in ("category", "description", "command", "preview_cmd", "requires_sudo", "confirm", "deps"):
+                if fld in cdef and cdef[fld] != d_spec.get(fld):
+                    diff[fld] = cdef[fld]
+            if diff:
+                overrides[cid] = diff
+
     for cid, spec in cfg.commands.items():
-        if cid not in default_cmd_keys:
+        if cid not in default_cmds and cid not in custom_cmds:
             custom_cmds[cid] = {
                 "category": spec.category,
                 "description": spec.description,
@@ -7104,14 +7301,33 @@ def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None):
     export_data = {
         "format": "corex-profile",
         "version": VERSION,
+        "type": "full-catalog" if full else "user-overrides",
         "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "hostname": socket.gethostname(),
         "theme": cfg.theme,
         "editor": cfg.editor,
         "pinned": state.get("pinned", []),
-        "custom_commands": custom_cmds,
-        "total_catalog_count": len(cfg.commands),
     }
+
+    if full:
+        export_data["commands"] = {
+            cid: {
+                "category": spec.category,
+                "description": spec.description,
+                "command": spec.command,
+                "preview_cmd": spec.preview_cmd,
+                "requires_sudo": spec.requires_sudo,
+                "confirm": spec.confirm,
+                "deps": spec.deps,
+            }
+            for cid, spec in cfg.commands.items()
+        }
+        export_data["total_catalog_count"] = len(cfg.commands)
+    else:
+        export_data["custom_commands"] = custom_cmds
+        export_data["overrides"] = overrides
+        export_data["disabled_commands"] = disabled_cmds
+        export_data["total_catalog_count"] = len(cfg.commands)
 
     with open(out_path, "w") as f:
         json.dump(export_data, f, indent=2)
@@ -7119,9 +7335,17 @@ def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None):
     c_green = "\033[38;2;166;227;161m"
     print(f"\n {c_green}{Style.BOLD}✔ CoreX Profile Successfully Exported!{Style.RESET}")
     print(f"   • Destination: {Style.CYAN}{out_path}{Style.RESET}")
+    print(f"   • Export Type: {Style.BOLD}{'Full Catalog (--full)' if full else 'User Overrides & Custom Actions'}{Style.RESET}")
     print(f"   • Theme:       {Style.BOLD}{cfg.theme}{Style.RESET}")
     print(f"   • Pinned:      {len(export_data['pinned'])} favorites")
-    print(f"   • Custom Cmds: {len(custom_cmds)} custom actions")
+    if full:
+        print(f"   • Commands:    {len(cfg.commands)} catalog actions")
+    else:
+        print(f"   • Custom Cmds: {len(custom_cmds)} custom actions")
+        if overrides:
+            print(f"   • Overrides:   {len(overrides)} built-in modifications")
+        if disabled_cmds:
+            print(f"   • Disabled:    {len(disabled_cmds)} hidden built-ins")
     print(f"\n   To restore on another machine: {Style.CYAN}cx import {out_path}{Style.RESET}\n")
 
 
@@ -7161,30 +7385,75 @@ def builtin_import(cfg: CoreXConfig, source_path: Optional[str] = None):
         state["pinned"] = imp_pinned
         save_user_state(state)
 
+    restored_custom = 0
+    restored_overrides = 0
+    restored_disabled = 0
+
     imp_custom = data.get("custom_commands", {})
-    restored_count = 0
     if isinstance(imp_custom, dict):
         for cid, cdef in imp_custom.items():
             save_command_to_config(
                 cid=cid,
-                category=cdef.get("category", "General"),
+                category=cdef.get("category", "Custom Actions"),
                 description=cdef.get("description", ""),
                 command=cdef.get("command", ""),
                 preview_cmd=cdef.get("preview_cmd", ""),
                 requires_sudo=bool(cdef.get("requires_sudo", False)),
                 confirm=bool(cdef.get("confirm", False)),
-                deps=list(cdef.get("deps", []))
+                deps=list(cdef.get("deps", [])),
             )
-            restored_count += 1
+            restored_custom += 1
+
+    imp_overrides = data.get("overrides", {})
+    if isinstance(imp_overrides, dict):
+        for cid, diff in imp_overrides.items():
+            save_command_override(cid, diff)
+            restored_overrides += 1
+
+    imp_disabled = data.get("disabled_commands", [])
+    if isinstance(imp_disabled, list):
+        for cid in imp_disabled:
+            remove_command_from_config(cid)
+            restored_disabled += 1
+
+    # Also handle legacy / full catalog profiles
+    imp_all_cmds = data.get("commands", {})
+    if isinstance(imp_all_cmds, dict) and not imp_custom and not imp_overrides:
+        default_path = get_default_config_path()
+        default_cmds = {}
+        if default_path and default_path.exists():
+            try:
+                import tomllib
+                with open(default_path, "rb") as df:
+                    default_cmds = tomllib.load(df).get("commands", {})
+            except Exception:
+                pass
+        for cid, cdef in imp_all_cmds.items():
+            if cid not in default_cmds:
+                save_command_to_config(
+                    cid=cid,
+                    category=cdef.get("category", "Custom Actions"),
+                    description=cdef.get("description", ""),
+                    command=cdef.get("command", ""),
+                    preview_cmd=cdef.get("preview_cmd", ""),
+                    requires_sudo=bool(cdef.get("requires_sudo", False)),
+                    confirm=bool(cdef.get("confirm", False)),
+                    deps=list(cdef.get("deps", [])),
+                )
+                restored_custom += 1
 
     invalidate_config_cache()
 
     c_green = "\033[38;2;166;227;161m"
     print(f"\n {c_green}{Style.BOLD}✔ CoreX Profile Successfully Imported!{Style.RESET}")
-    print(f"   • Backup created:   {Style.GRAY}{bak_path}{Style.RESET}")
-    print(f"   • Theme applied:    {Style.BOLD}{imp_theme or 'unchanged'}{Style.RESET}")
-    print(f"   • Pinned favorites: {len(imp_pinned)} restored")
-    print(f"   • Custom actions:   {restored_count} added to catalog")
+    print(f"   • Backup created:    {Style.GRAY}{bak_path}{Style.RESET}")
+    print(f"   • Theme applied:     {Style.BOLD}{imp_theme or 'unchanged'}{Style.RESET}")
+    print(f"   • Pinned favorites:  {len(imp_pinned)} restored")
+    print(f"   • Custom actions:    {restored_custom} restored")
+    if restored_overrides:
+        print(f"   • Overrides applied: {restored_overrides} restored")
+    if restored_disabled:
+        print(f"   • Disabled actions:  {restored_disabled} restored")
     print(f"\n   Run {Style.CYAN}cx{Style.RESET} to open your updated menu.\n")
 
 
@@ -8201,6 +8470,491 @@ def builtin_media_info(target_file: Optional[str] = None, extra_args: Optional[L
 
 
 # ---------------------------------------------------------------------------
+# BACKGROUND SYSTEMD UNIT MANAGER & DAEMON ENGINE
+# ---------------------------------------------------------------------------
+def _resolve_bg_unit_name(target: str) -> str:
+    """Normalize input into a full corex-*.service unit name."""
+    t = target.strip()
+    if not t.endswith(".service"):
+        t = f"{t}.service"
+    if not t.startswith("corex-"):
+        t = f"corex-{t}"
+    return t
+
+
+def _get_corex_bg_units() -> List[Dict[str, Any]]:
+    """Scan and retrieve all transient and persistent CoreX background units."""
+    if not shutil.which("systemctl"):
+        return []
+    res = subprocess.run(
+        ["systemctl", "--user", "list-units", "corex-*", "--all", "--no-legend", "--plain", "-l"],
+        capture_output=True, text=True
+    )
+    units = []
+    seen = set()
+    for line in res.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(None, 4)
+        if len(parts) >= 4:
+            uname = parts[0]
+            if uname in seen:
+                continue
+            seen.add(uname)
+            load_st = parts[1]
+            act_st = parts[2]
+            sub_st = parts[3]
+            desc = parts[4] if len(parts) > 4 else ""
+            units.append({
+                "unit": uname,
+                "load": load_st,
+                "active": act_st,
+                "sub": sub_st,
+                "description": desc,
+            })
+    return units
+
+
+def render_bg_preview(unit_name: str):
+    """Render comprehensive live preview card for a background service in fzf."""
+    uname = _resolve_bg_unit_name(unit_name)
+    show_res = subprocess.run(
+        ["systemctl", "--user", "show", uname, "--property=Id,ActiveState,SubState,MainPID,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp,Description"],
+        capture_output=True, text=True
+    )
+    props = dict(l.split("=", 1) for l in show_res.stdout.splitlines() if "=" in l)
+    if not props.get("Id") or (props.get("ActiveState") == "inactive" and not props.get("SubState")):
+        print(box_header("BACKGROUND UNIT PREVIEW"))
+        print(f"  {Style.YELLOW}Unit '{uname}' not found or no telemetry available.{Style.RESET}")
+        print(box_footer())
+        return
+
+    active_st = props.get("ActiveState", "unknown")
+    sub_st = props.get("SubState", "unknown")
+    pid = props.get("MainPID", "0")
+    if active_st == "active":
+        badge = f"{Style.GREEN}{Style.BOLD}● ACTIVE ({sub_st}){Style.RESET}"
+    elif active_st == "failed":
+        badge = f"{Style.RED}{Style.BOLD}× FAILED ({sub_st}){Style.RESET}"
+    else:
+        badge = f"{Style.YELLOW}○ {active_st.upper()} ({sub_st}){Style.RESET}"
+
+    mem_raw = props.get("MemoryCurrent", "")
+    mem_disp = "N/A"
+    if mem_raw.isdigit() and int(mem_raw) < 18446744073709551615:
+        b = int(mem_raw)
+        if b >= 1024**3:
+            mem_disp = f"{b / (1024**3):.2f} GB"
+        elif b >= 1024**2:
+            mem_disp = f"{b / (1024**2):.1f} MB"
+        elif b >= 1024:
+            mem_disp = f"{b / 1024:.0f} KB"
+        else:
+            mem_disp = f"{b} B"
+
+    cpu_raw = props.get("CPUUsageNSec", "")
+    cpu_disp = "N/A"
+    if cpu_raw.isdigit():
+        sec = int(cpu_raw) / 1e9
+        if sec >= 60:
+            cpu_disp = f"{int(sec // 60)}m {sec % 60:.1f}s"
+        elif sec >= 1:
+            cpu_disp = f"{sec:.2f}s"
+        else:
+            cpu_disp = f"{sec * 1000:.1f}ms"
+
+    started = props.get("ActiveEnterTimestamp", "N/A")
+    desc = props.get("Description", "")
+    if desc.startswith("[systemd-run] "):
+        desc = desc[14:]
+
+    print(box_header(f"BACKGROUND UNIT: {uname}"))
+    print(f"  • {Style.BOLD}Service Unit:{Style.RESET}    {Style.WHITE}{Style.BOLD}{uname}{Style.RESET}")
+    print(f"  • {Style.BOLD}Unit Status:{Style.RESET}     {badge}")
+    print(f"  • {Style.BOLD}Process ID:{Style.RESET}      {Style.CYAN}{pid}{Style.RESET}")
+    print(f"  • {Style.BOLD}Memory Footprint:{Style.RESET} {Style.GREEN}{mem_disp}{Style.RESET}")
+    print(f"  • {Style.BOLD}CPU Consumed:{Style.RESET}     {Style.YELLOW}{cpu_disp}{Style.RESET}")
+    print(f"  • {Style.BOLD}Active Since:{Style.RESET}     {started}")
+    if desc:
+        print(f"  • {Style.BOLD}Command Exec:{Style.RESET}     {Style.GRAY}{desc[:120]}{Style.RESET}")
+
+    # Tail recent journal lines
+    log_res = subprocess.run(
+        ["journalctl", "--user", "-u", uname, "-n", "8", "--no-pager"],
+        capture_output=True, text=True
+    )
+    lines = [l for l in log_res.stdout.splitlines() if l.strip()]
+    if lines:
+        print(f"\n  {Style.BOLD}RECENT JOURNAL LOGS:{Style.RESET}")
+        for l in lines[-8:]:
+            disp_l = l if len(l) < 140 else l[:137] + "..."
+            print(f"   {Style.DARK_GRAY}│{Style.RESET} {disp_l}")
+
+    print(f"\n  {Style.DARK_GRAY}Hotkeys: [^L] Tail Logs  [^S] Status  [^R] Restart  [^X] Stop{Style.RESET}")
+    print(box_footer())
+
+
+def builtin_bg(extra_args: Optional[List[str]] = None):
+    """First-class interactive background service manager and CLI controller."""
+    args = extra_args or []
+
+    if not shutil.which("systemctl"):
+        log_error("systemctl is required for managing background units.")
+        return
+
+    # Help flag
+    if args and args[0] in ("-h", "--help", "help"):
+        print(box_header("COREX BACKGROUND DAEMON & UNIT MANAGER"))
+        print(f"""
+ {Style.BOLD}USAGE:{Style.RESET}
+   cx bg                           Launch interactive background unit cockpit
+   cx bg list, ls                  List active background services in clean table
+   cx bg logs, log <unit>          Tail live journalctl logs for background unit
+   cx bg status, info <unit>       Inspect detailed systemd status & resource usage
+   cx bg restart <unit>            Restart background unit
+   cx bg stop, kill <unit>         Stop background unit
+   cx --bg <command> [args...]     Run any command detached in background
+""")
+        print(box_footer())
+        return
+
+    # CLI subcommands: logs
+    if args and args[0] in ("logs", "log", "-f"):
+        if len(args) < 2:
+            units = _get_corex_bg_units()
+            if not units:
+                log_warn("No active background units to view logs for.")
+                return
+            target_unit = units[0]["unit"]
+        else:
+            target_unit = _resolve_bg_unit_name(args[1])
+        log_info(f"Tailing live journal logs for {target_unit} (Press Ctrl+C to exit)...")
+        try:
+            subprocess.run(["journalctl", "--user", "-u", target_unit, "-f"])
+        except KeyboardInterrupt:
+            pass
+        return
+
+    # CLI subcommands: status / info
+    if args and args[0] in ("status", "info"):
+        if len(args) < 2:
+            units = _get_corex_bg_units()
+            if not units:
+                log_warn("No active background units found.")
+                return
+            target_unit = units[0]["unit"]
+        else:
+            target_unit = _resolve_bg_unit_name(args[1])
+        subprocess.run(["systemctl", "--user", "status", target_unit])
+        return
+
+    # CLI subcommands: restart
+    if args and args[0] in ("restart", "reboot"):
+        if len(args) < 2:
+            log_error("Usage: cx bg restart <unit>")
+            return
+        target_unit = _resolve_bg_unit_name(args[1])
+        res = subprocess.run(["systemctl", "--user", "restart", target_unit])
+        if res.returncode == 0:
+            log_success(f"Restarted background unit: {target_unit}")
+        else:
+            log_error(f"Failed to restart unit: {target_unit}")
+        return
+
+    # CLI subcommands: stop / kill
+    if args and args[0] in ("stop", "kill", "down"):
+        if len(args) < 2:
+            log_error("Usage: cx bg stop <unit>")
+            return
+        target_unit = _resolve_bg_unit_name(args[1])
+        res = subprocess.run(["systemctl", "--user", "stop", target_unit])
+        if res.returncode == 0:
+            subprocess.run(["systemctl", "--user", "reset-failed", target_unit], capture_output=True)
+            log_success(f"Stopped background unit: {target_unit}")
+        else:
+            log_error(f"Failed to stop unit: {target_unit}")
+        return
+
+    # CLI subcommands: list / ls
+    if args and args[0] in ("list", "ls"):
+        units = _get_corex_bg_units()
+        print(box_header("ACTIVE BACKGROUND SERVICES"))
+        if not units:
+            print(f"  {Style.GRAY}No active background units found (corex-*.service).{Style.RESET}")
+            print(f"  {Style.DARK_GRAY}Tip: Run any command with '--bg' to detach it (e.g. 'cx --bg serve-dir'){Style.RESET}")
+            print(box_footer())
+            return
+
+        print(f" {'UNIT':<34} {'STATUS':<12} {'PID':<8} {'MEMORY':<10} {'CPU':<10} {'ACTIVE SINCE'}")
+        print(f" {Style.DARK_GRAY}{'─' * 88}{Style.RESET}")
+        for u in units:
+            uname = u["unit"]
+            show_res = subprocess.run(
+                ["systemctl", "--user", "show", uname, "--property=ActiveState,SubState,MainPID,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp"],
+                capture_output=True, text=True
+            )
+            props = dict(l.split("=", 1) for l in show_res.stdout.splitlines() if "=" in l)
+            pid = props.get("MainPID", "-")
+            mem_raw = props.get("MemoryCurrent", "")
+            mem_disp = "-"
+            if mem_raw.isdigit() and int(mem_raw) < 18446744073709551615:
+                b = int(mem_raw)
+                mem_disp = f"{b / (1024**2):.1f} MB" if b >= 1024**2 else f"{b / 1024:.0f} KB"
+            cpu_raw = props.get("CPUUsageNSec", "")
+            cpu_disp = "-"
+            if cpu_raw.isdigit():
+                sec = int(cpu_raw) / 1e9
+                cpu_disp = f"{sec:.1f}s" if sec >= 1 else f"{sec * 1000:.0f}ms"
+            started = props.get("ActiveEnterTimestamp", "")
+            time_part = started.split()[1] if len(started.split()) > 1 else started
+            st_col = Style.GREEN if u["active"] == "active" else (Style.RED if u["active"] == "failed" else Style.YELLOW)
+            status_str = f"{st_col}{u['sub']}{Style.RESET}"
+            print(f" {uname[:33]:<34} {status_str:<21} {pid:<8} {mem_disp:<10} {cpu_disp:<10} {time_part}")
+        print(box_footer())
+        return
+
+    # Interactive Cockpit
+    units = _get_corex_bg_units()
+    if not units:
+        print(box_header("COREX BACKGROUND DAEMON & UNIT MANAGER"))
+        print(f"  {Style.GRAY}No active background units found (corex-*.service).{Style.RESET}\n")
+        print(f"  {Style.DARK_GRAY}To detach any command into background execution:{Style.RESET}")
+        print(f"    ❯ {Style.WHITE}cx --bg <command> [args...]{Style.RESET}")
+        print(f"    Example: {Style.CYAN}cx --bg serve-dir{Style.RESET} or {Style.CYAN}cx --bg comfy-boot{Style.RESET}\n")
+        print(box_footer())
+        return
+
+    # Check for fzf
+    if not shutil.which("fzf") or not sys.stdin.isatty():
+        builtin_bg(["list"])
+        return
+
+    self_exe = os.path.abspath(sys.argv[0])
+    fzf_lines = []
+    for u in units:
+        uname = u["unit"]
+        show_res = subprocess.run(
+            ["systemctl", "--user", "show", uname, "--property=ActiveState,SubState,MainPID,MemoryCurrent,CPUUsageNSec,ActiveEnterTimestamp,Description"],
+            capture_output=True, text=True
+        )
+        props = dict(l.split("=", 1) for l in show_res.stdout.splitlines() if "=" in l)
+        pid = props.get("MainPID", "-")
+        mem_raw = props.get("MemoryCurrent", "")
+        mem_disp = "-"
+        if mem_raw.isdigit() and int(mem_raw) < 18446744073709551615:
+            b = int(mem_raw)
+            mem_disp = f"{b / (1024**2):.1f} MB" if b >= 1024**2 else f"{b / 1024:.0f} KB"
+        cpu_raw = props.get("CPUUsageNSec", "")
+        cpu_disp = "-"
+        if cpu_raw.isdigit():
+            sec = int(cpu_raw) / 1e9
+            cpu_disp = f"{sec:.1f}s" if sec >= 1 else f"{sec * 1000:.0f}ms"
+        started = props.get("ActiveEnterTimestamp", "")
+        time_part = started.split()[1] if len(started.split()) > 1 else started
+        desc = props.get("Description", "")
+        if desc.startswith("[systemd-run] "):
+            desc = desc[14:]
+        fzf_lines.append(f"{uname}\t{u['sub']}\t{pid}\t{mem_disp}\t{cpu_disp}\t{time_part}\t{desc}")
+
+    fzf_input = "\n".join(fzf_lines)
+    preview_cmd = f"python3 '{self_exe}' __preview_bg {{1}}"
+    fzf_cmd = [
+        "fzf",
+        "--delimiter=\t",
+        "--with-nth=1,2,3,4,5,6",
+        "--prompt=  ◈ Select Background Unit ❯ ",
+        "--header= [Enter] Actions  │  [^L] Logs  │  [^S] Status  │  [^R] Restart  │  [^X] Stop  │  [ESC] Exit ",
+        "--header-label= COREX BACKGROUND SERVICES ",
+        "--header-label-pos=3",
+        "--border=rounded",
+        "--border-label= CoreX Daemon Studio ",
+        "--border-label-pos=3",
+        "--preview", preview_cmd,
+        "--preview-window=right:50%:border-rounded:wrap",
+        f"--bind=ctrl-l:execute(journalctl --user -u {{1}} -n 100 -f)",
+        f"--bind=ctrl-s:execute(systemctl --user status {{1}})",
+        f"--bind=ctrl-r:execute-silent(systemctl --user restart {{1}})",
+        f"--bind=ctrl-x:execute-silent(systemctl --user stop {{1}})",
+        "--height=85%",
+    ]
+    try:
+        proc = subprocess.Popen(fzf_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        out, _ = proc.communicate(input=fzf_input)
+        if proc.returncode != 0 or not out.strip():
+            return
+        selected_parts = out.strip().split("\t")
+        selected_unit = selected_parts[0]
+
+        print(f"\n {Style.BOLD}Background Unit Selected:{Style.RESET} {Style.CYAN}{selected_unit}{Style.RESET}")
+        print(f"  [1] Tail Live Logs (journalctl --user -u {selected_unit} -f)")
+        print(f"  [2] Inspect Full Systemd Status & Resource Usage")
+        print(f"  [3] Restart Unit")
+        print(f"  [4] Stop Unit")
+        print(f"  [Q] Exit")
+        ans = input(f" Select action [1-4, Q]: ").strip().lower()
+        if ans == "1":
+            builtin_bg(["logs", selected_unit])
+        elif ans == "2":
+            builtin_bg(["status", selected_unit])
+        elif ans == "3":
+            builtin_bg(["restart", selected_unit])
+        elif ans == "4":
+            builtin_bg(["stop", selected_unit])
+    except KeyboardInterrupt:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# USER CUSTOM ACTIONS & OVERRIDES EXPLORER
+# ---------------------------------------------------------------------------
+def builtin_custom(cfg: CoreXConfig, extra_args: Optional[List[str]] = None):
+    """List, inspect, and manage user-defined custom actions and overrides."""
+    args = extra_args or []
+
+    default_path = get_default_config_path()
+    default_cmds = {}
+    if default_path and default_path.exists():
+        try:
+            import tomllib
+            with open(default_path, "rb") as df:
+                d_data = tomllib.load(df)
+            default_cmds = d_data.get("commands", {})
+        except Exception:
+            pass
+
+    user_cmds = {}
+    disabled_cmds = []
+    overrides = {}
+    if CONFIG_FILE.exists():
+        try:
+            import tomllib
+            with open(CONFIG_FILE, "rb") as uf:
+                u_data = tomllib.load(uf)
+            for ucid, ucdef in u_data.get("commands", {}).items():
+                if ucdef.get("disabled") is True or str(ucdef.get("disabled")).lower() in ("true", "1", "yes"):
+                    disabled_cmds.append(ucid)
+                elif ucid not in default_cmds:
+                    user_cmds[ucid] = ucdef
+                else:
+                    diff = {}
+                    d_spec = default_cmds.get(ucid, {})
+                    for fld in ("category", "description", "command", "preview_cmd", "requires_sudo", "confirm", "deps"):
+                        if fld in ucdef and ucdef[fld] != d_spec.get(fld):
+                            diff[fld] = ucdef[fld]
+                    if diff:
+                        overrides[ucid] = diff
+        except Exception:
+            pass
+
+    # Also check cfg.commands for any custom actions not in default_cmds
+    for cid, spec in cfg.commands.items():
+        if cid not in default_cmds and cid not in user_cmds:
+            user_cmds[cid] = {
+                "category": spec.category,
+                "description": spec.description,
+                "command": spec.command,
+                "preview_cmd": spec.preview_cmd,
+                "requires_sudo": spec.requires_sudo,
+                "confirm": spec.confirm,
+                "deps": spec.deps,
+            }
+
+    # CLI subcommands: --list / --raw for scripting
+    if args and args[0] in ("--list", "-l", "--raw"):
+        for cid in sorted(user_cmds.keys()):
+            spec = cfg.commands.get(cid)
+            desc = spec.description if spec else user_cmds[cid].get("description", "")
+            cat = spec.category if spec else user_cmds[cid].get("category", "Custom")
+            print(f"{cid}\t{cat}\t{desc}")
+        return
+
+    # Help
+    if args and args[0] in ("-h", "--help", "help"):
+        print(box_header("USER CUSTOM ACTIONS & OVERRIDES"))
+        print(f"""
+ {Style.BOLD}USAGE:{Style.RESET}
+   cx custom                       Interactive custom action browser & launcher
+   cx custom --list, -l            Print tab-delimited list of custom actions
+   cx new [name]                   Create a new custom action via interactive wizard
+   cx builder                      Launch Action Studio to create, edit, or delete actions
+""")
+        print(box_footer())
+        return
+
+    print(box_header("USER CUSTOM ACTIONS & OVERRIDES"))
+    if not user_cmds and not disabled_cmds and not overrides:
+        print(f"  {Style.GRAY}No custom actions or overrides found in {CONFIG_FILE}.{Style.RESET}\n")
+        print(f"  {Style.DARK_GRAY}To create a new custom action:{Style.RESET}")
+        print(f"    ❯ {Style.WHITE}cx new [action-name]{Style.RESET}     (Interactive Wizard)")
+        print(f"    ❯ {Style.WHITE}cx builder{Style.RESET}               (Command Studio Menu)\n")
+        print(f"  {Style.DARK_GRAY}To add an action manually, edit {CONFIG_FILE}:{Style.RESET}")
+        print(f"    {Style.WHITE}[commands.my-task]{Style.RESET}")
+        print(f"    category = \"Daily Driver Quality-of-Life & Crypto/Files\"")
+        print(f"    description = \"My custom routine\"")
+        print(f"    command = \"echo 'Hello CoreX'\"\n")
+        print(box_footer())
+        return
+
+    if user_cmds:
+        print(f"  {Style.BOLD}{Style.WHITE}REGISTERED CUSTOM ACTIONS ({len(user_cmds)}):{Style.RESET}")
+        print(f"  {'ID':<20} {'CATEGORY':<28} {'DESCRIPTION'}")
+        print(f"  {Style.DARK_GRAY}{'─' * 76}{Style.RESET}")
+        for cid in sorted(user_cmds.keys()):
+            spec = cfg.commands.get(cid)
+            cat = (spec.category if spec else user_cmds[cid].get("category", "Custom Actions"))
+            desc = (spec.description if spec else user_cmds[cid].get("description", ""))
+            tag = CATEGORY_TAGS.get(cat, "@custom")
+            t_col = get_tag_color(tag)
+            print(f"  {Style.BOLD}{cid:<20}{Style.RESET} {t_col}{tag:<10}{Style.RESET} {Style.GRAY}{cat[:16]:<17}{Style.RESET} {desc}")
+
+    if overrides:
+        print(f"\n  {Style.BOLD}{Style.YELLOW}BUILT-IN OVERRIDES ({len(overrides)}):{Style.RESET}")
+        for oid in sorted(overrides.keys()):
+            print(f"  • {Style.BOLD}{oid}{Style.RESET}: {Style.CYAN}{list(overrides[oid].keys())}{Style.RESET}")
+
+    if disabled_cmds:
+        print(f"\n  {Style.BOLD}{Style.RED}DISABLED BUILT-IN ACTIONS ({len(disabled_cmds)}):{Style.RESET}")
+        for did in sorted(disabled_cmds):
+            print(f"  • {Style.DARK_GRAY}{did} (hidden from catalog){Style.RESET}")
+
+    print(box_footer())
+
+    # If running interactively with custom commands, offer fzf execution
+    if user_cmds and shutil.which("fzf") and sys.stdin.isatty() and not args:
+        print(f"  {Style.CYAN}Launch interactive picker for custom actions? [Y/n]: {Style.RESET}", end="", flush=True)
+        try:
+            ans = input().strip().lower()
+            if ans in ("", "y", "yes"):
+                self_exe = os.path.abspath(sys.argv[0])
+                fzf_lines = []
+                for cid in sorted(user_cmds.keys()):
+                    spec = cfg.commands.get(cid)
+                    desc = spec.description if spec else ""
+                    cat = spec.category if spec else "Custom Actions"
+                    tag = CATEGORY_TAGS.get(cat, "@custom")
+                    fzf_lines.append(f"{cid}\t{tag}\t{cat}\t{desc}")
+                fzf_cmd = [
+                    "fzf",
+                    "--delimiter=\t",
+                    "--with-nth=1,2,4",
+                    "--prompt=  ◈ Run Custom Action ❯ ",
+                    "--header= [Enter] Execute  │  [ESC] Exit ",
+                    "--border=rounded",
+                    "--border-label= CoreX Custom Actions ",
+                    "--preview", f"python3 '{self_exe}' __preview {{1}}",
+                    "--preview-window=right:48%:border-rounded:wrap",
+                    "--height=70%",
+                ]
+                proc = subprocess.Popen(fzf_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+                out, _ = proc.communicate(input="\n".join(fzf_lines))
+                if proc.returncode == 0 and out.strip():
+                    selected_id = out.strip().split("\t")[0]
+                    execute_command(selected_id, cfg)
+        except KeyboardInterrupt:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # DYNAMIC PREVIEW ENGINE (Internal Callback for FZF)
 # ---------------------------------------------------------------------------
 def render_preview(cmd_id: str, cfg: CoreXConfig):
@@ -8487,7 +9241,7 @@ def execute_command(
         return
 
     if bg_run:
-        detach_background(actual_id, final_cmd)
+        detach_background(actual_id, final_cmd, dry_run=dry_run)
         return
 
     try:
@@ -8498,13 +9252,52 @@ def execute_command(
 
 
 def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
-    """Detaches command into a systemd-run user service or background nohup subshell."""
-    ts = int(time.time())
-    unit_name = f"corex-{cmd_id}-{ts}"
+    """Detaches command into a deterministic systemd-run user service or background nohup subshell."""
+    slug = re.sub(r'[^a-zA-Z0-9_-]', '-', cmd_id).strip('-').lower() or "cmd"
+    unit_name = f"corex-{slug}"
+    service_name = f"{unit_name}.service"
     has_systemd_run = shutil.which("systemd-run") is not None
 
     if has_systemd_run:
-        full_cmd = ["systemd-run", "--user", f"--unit={unit_name}", "sh", "-c", shell_cmd]
+        # Idempotency / Duplicate Guard: check if unit is already active
+        is_active = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", service_name]
+        ).returncode == 0
+
+        if is_active:
+            # Query unit details
+            show_res = subprocess.run(
+                ["systemctl", "--user", "show", service_name, "--property=MainPID,ActiveEnterTimestamp,ActiveState,SubState"],
+                capture_output=True, text=True
+            )
+            props = dict(line.split("=", 1) for line in show_res.stdout.splitlines() if "=" in line)
+            pid = props.get("MainPID", "unknown")
+            started = props.get("ActiveEnterTimestamp", "")
+            sub_st = props.get("SubState", "running")
+
+            print(box_header("BACKGROUND SERVICE ALREADY RUNNING"))
+            print(f"  • {Style.BOLD}Unit Name:{Style.RESET}    {Style.CYAN}{service_name}{Style.RESET}")
+            print(f"  • {Style.BOLD}Process ID:{Style.RESET}   {Style.GREEN}{pid}{Style.RESET}")
+            print(f"  • {Style.BOLD}Unit Status:{Style.RESET}  {Style.GREEN}{Style.BOLD}active ({sub_st}){Style.RESET}")
+            if started:
+                print(f"  • {Style.BOLD}Active Since:{Style.RESET} {Style.YELLOW}{started}{Style.RESET}")
+            print(f"\n  {Style.GRAY}To monitor, restart, inspect, or stop this unit:{Style.RESET}")
+            print(f"    ❯ {Style.WHITE}cx bg{Style.RESET}                     (Interactive Unit Cockpit)")
+            print(f"    ❯ {Style.WHITE}cx bg logs {slug}{Style.RESET}            (Tail live journal logs)")
+            print(f"    ❯ {Style.WHITE}cx bg restart {slug}{Style.RESET}         (Restart background unit)")
+            print(f"    ❯ {Style.WHITE}cx bg stop {slug}{Style.RESET}            (Stop background unit)")
+            print(box_footer())
+            return
+
+        # Prepare systemd-run command with deterministic name and automatic cleanup on exit
+        full_cmd = [
+            "systemd-run",
+            "--user",
+            f"--unit={unit_name}",
+            "--collect",
+            "--property=CollectMode=inactive-or-failed",
+            "sh", "-c", shell_cmd
+        ]
     else:
         full_cmd = ["nohup", "sh", "-c", shell_cmd]
 
@@ -8512,12 +9305,17 @@ def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
         print(f"{Style.YELLOW}[DRY-RUN BG]{Style.RESET} {' '.join(full_cmd)}")
         return
 
-    log_info(f"Detaching '{cmd_id}' into background scope ({unit_name})...")
+    log_info(f"Detaching '{cmd_id}' into background scope ({service_name})...")
     if has_systemd_run:
+        # Clean any stale residual failed state before starting
+        subprocess.run(["systemctl", "--user", "reset-failed", service_name], capture_output=True)
         res = subprocess.run(full_cmd, capture_output=True, text=True)
         if res.returncode == 0:
-            log_success(f"Command '{cmd_id}' running as systemd user unit: {unit_name}.service")
+            log_success(f"Command '{cmd_id}' running in background as {service_name}")
+            print(f"  {Style.GRAY}• Monitor logs:  {Style.CYAN}cx bg logs {slug}{Style.RESET} (or journalctl --user -u {service_name} -f)")
+            print(f"  {Style.GRAY}• Manage unit:   {Style.CYAN}cx bg{Style.RESET} (or cx bg stop {slug})")
         else:
+            log_warn(f"systemd-run failed ({res.stderr.strip()}), falling back to nohup...")
             subprocess.Popen(["nohup", "sh", "-c", shell_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
             log_success(f"Command '{cmd_id}' detached via background subshell.")
     else:
@@ -8640,8 +9438,10 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         q = args[0] if args else ""
         builtin_find(cfg, query=q, extra_args=args[1:] if len(args) > 1 else [])
     elif name == "export":
-        target = args[0] if args else None
-        builtin_export(cfg, target_path=target)
+        full_export = "--full" in args
+        target_args = [a for a in args if a != "--full"]
+        target = target_args[0] if target_args else None
+        builtin_export(cfg, target_path=target, full=full_export)
     elif name == "import":
         src = args[0] if args else None
         builtin_import(cfg, source_path=src)
@@ -8712,6 +9512,10 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         tgt = args[0] if args and not args[0].startswith("-") else None
         ext = args[1:] if tgt and len(args) > 1 else args
         builtin_media_info(target_file=tgt, extra_args=ext)
+    elif name in ("bg", "background", "units", "daemons"):
+        builtin_bg(extra_args=args)
+    elif name in ("custom", "custom-commands", "list-custom"):
+        builtin_custom(cfg, extra_args=args)
     else:
         log_warn(f"Built-in {name} not implemented.")
 
@@ -9042,6 +9846,22 @@ def main():
             builtin_media_info(target_file=tgt, extra_args=ext)
         sys.exit(0)
 
+    # Direct built-in shortcuts for Background manager
+    if parsed.command in ("bg", "background", "units", "daemons"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx bg")
+        else:
+            builtin_bg(extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
+    # Direct built-in shortcuts for Custom commands / overrides
+    if parsed.command in ("custom", "custom-commands", "list-custom"):
+        if parsed.dry_run:
+            print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} Built-in action: cx custom")
+        else:
+            builtin_custom(cfg, extra_args=(parsed.args or []) + unknown)
+        sys.exit(0)
+
     # Internal preview callback for Wi-Fi manager
     if parsed.command == "__preview_wifi":
         ssid = (parsed.args[0] if len(parsed.args) > 0 else "")
@@ -9053,6 +9873,12 @@ def main():
     if parsed.command == "__preview_proc":
         pid_target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
         render_proc_preview(pid_target)
+        sys.exit(0)
+
+    # Internal preview callback for Background units
+    if parsed.command == "__preview_bg":
+        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
+        render_bg_preview(target)
         sys.exit(0)
 
     # Internal helper for Process signal handling
@@ -9148,8 +9974,11 @@ def main():
 
     # Profile Export & Import
     if parsed.command == "export":
-        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
-        builtin_export(cfg, target_path=target)
+        args = (parsed.args or []) + unknown
+        full_export = "--full" in args
+        target_args = [a for a in args if a != "--full"]
+        target = target_args[0] if target_args else ""
+        builtin_export(cfg, target_path=target, full=full_export)
         sys.exit(0)
 
     if parsed.command == "import":
@@ -9219,11 +10048,13 @@ USAGE:
   cx <command> [args...]          Execute command directly with zero latency
   cx find <query>                 Fast CLI cheatsheet search across all actions
   cx stats                        View execution telemetry & usage analytics dashboard
+  cx bg [list|logs|stop...]       Inspect & manage background systemd services and daemons
+  cx custom                       List user-defined actions and configuration overrides
   cx theme [name]                 Switch color theme or open interactive Theme Studio
   cx pin <command>                Pin an action to favorites (starred at top of TUI)
   cx unpin <command>              Remove an action from favorites
   cx pinned                       List all currently pinned favorite actions
-  cx export [file.json]           Export configuration, pinned favorites & notes to JSON
+  cx export [file.json] [--full]  Export configuration overrides, pinned favorites & notes
   cx import <file.json>           Import and restore configuration from profile JSON
   cx install-desktop              Install XDG desktop entry for Rofi, Wofi, KDE, GNOME
   cx integrations                 View Hyprland, Sway, and i3 floating window rules

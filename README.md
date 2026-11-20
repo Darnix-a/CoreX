@@ -30,14 +30,17 @@ Type `cx` and instantly launch an interactive `fzf` menu featuring live preview 
 ## Key Features
 
 -  **Sub-30ms Startup**: Pure Python standard library with binary configuration caching (`~/.cache/corex/config_cache.pickle`) and lazy runtime imports.
--  **180+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
+-  **185+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
+-  **Interactive Background Unit Manager (`cx bg`)**: Live cockpit for managing transient systemd user daemons (`systemd-run --user`) with real-time log tailing, status inspection, restarts, and stop controls.
+-  **Deterministic & Auto-Cleaning Background Tasks (`--bg`)**: Run any action in the background with deterministic unit naming (`corex-<slug>.service`), active duplicate guards, and automatic self-cleaning on completion (`CollectMode=inactive-or-failed`).
+-  **Layered Configuration & Custom Actions (`cx custom`)**: Keep lightweight personal configs in `~/.config/corex/config.toml` that cleanly override defaults without copying 180+ commands. Disable built-ins with `disabled = true` and manage custom routines with `cx custom`.
 -  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via `nmcli` and `fzf`.
 -  **Deep Process Forensics (`cx proc`)**: Process inspector with physical RSS/Virtual/Swap breakdown, active sockets/ports, open file descriptors, and interactive signal manager (`SIGKILL`, `SIGTERM`, `SIGSTOP`, `SIGCONT`, renice).
 -  **Media & Codec Forensics (`cx media-info`)**: Deep video, audio, and image codec inspection, frame rates, color spaces, and tag extraction via `ffprobe`.
 -  **Theme Studio**: 6 built-in color palettes (`catppuccin-mocha`, `tokyonight`, `nord`, `gruvbox`, `dracula`, `rose-pine`) with live ANSI swatches.
 -  **Telemetry & Analytics (`cx stats`)**: Track execution frequency, catalog coverage, category distribution, and recent command history.
 -  **Instant Cheatsheet Mode (`cx find <query>`)**: Search across all actions, descriptions, categories, and shell commands instantly.
--  **Profile Sync (`cx export` / `cx import`)**: Export and restore your pinned favorites, themes, and custom commands across workstations with automatic backups.
+-  **Profile Sync (`cx export` / `cx import`)**: Export and restore your personal overrides, custom actions, themes, and favorites across workstations (`--full` for full catalog).
 -  **Desktop & WM Integrations (`cx integrations`)**: Native `corex.desktop` application entry plus ready-to-paste floating window rules for **Hyprland**, **Sway**, and **i3**.
 -  **Automated Updater (`cx upgrade`)**: One-command git remote synchronization, shell completion regeneration, cache invalidation, and system doctor audit.
 -  **Intelligent Fuzzy Suggestions**: Automatic "Did you mean...?" suggestions with aliases and descriptions when a command is misspelled.
@@ -149,9 +152,35 @@ Add CoreX to your application launcher (Rofi, Wofi, Walker, Fuzzel, KDE, GNOME):
 cx install-desktop
 ```
 
+### 7. Background Service & Daemon Manager (`cx bg` & `--bg`)
+Run long-running processes or servers in the background as transient systemd user units:
+```bash
+cx --bg ollama-up           # Run action in background via deterministic unit corex-ollama-up.service
+cx bg                       # Interactive background service cockpit (tail logs, status, restart, stop)
+cx bg list                  # Fast CLI table of running background units with PID, memory, and CPU
+cx bg logs <unit>           # Live tail journal logs for a service
+cx bg status <unit>         # Inspect full systemd status, invocation ID, and cgroups
+cx bg restart <unit>        # Restart background unit
+cx bg stop <unit>           # Gracefully stop background unit
+```
+- **Deterministic Unit Naming**: Background units follow `corex-<slug>.service` naming conventions.
+- **Duplicate Guard**: If an action is already active, CoreX displays its active PID, uptime, and management instructions instead of spawning duplicate processes.
+- **Auto-Cleanup**: Units automatically unload upon completion or failure (`CollectMode=inactive-or-failed`).
 
+### 8. Custom Actions & Layered Overrides (`cx custom`)
+CoreX uses a clean layered configuration system: built-in defaults stay untouched, while your `~/.config/corex/config.toml` holds only personal additions and overrides:
+```bash
+cx custom                   # List user-defined actions and configuration overrides with interactive launcher
+cx custom --list            # Scriptable tab-delimited list of custom actions
+cx new [action-name]        # Interactive wizard to create a new action
+```
+To hide any built-in action without deleting it:
+```toml
+[commands.demucs-stems]
+disabled = true
+```
 
-### 7. Automated Self-Updater
+### 9. Automated Self-Updater
 Keep your CoreX installation synchronized with the latest upstream features:
 ```bash
 cx upgrade                # Pull from git, rebuild completions, refresh cache & verify doctor
