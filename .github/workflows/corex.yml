@@ -34,7 +34,7 @@ jobs:
           brew list fzf >/dev/null 2>&1 || brew install fzf
       - name: Verify CLI, installer and platform implementations
         run: |
-          python3 -m py_compile corex corex_macos.py
+          python3 -m py_compile corex corex_bg.py corex_macos.py
           bash -n install.sh
           bash -n uninstall.sh
           python3 -m unittest discover -s tests -v

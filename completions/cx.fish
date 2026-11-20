@@ -63,6 +63,7 @@ complete -c cx -n '__fish_use_subcommand' -a 'service-fail' -d 'List all failed 
 complete -c cx -n '__fish_use_subcommand' -a 'journal-vacuum' -d 'Trim systemd logs to under 200MB'
 complete -c cx -n '__fish_use_subcommand' -a 'boot-analyze' -d 'Profile kernel and userspace boot duration via systemd-analyze blame'
 complete -c cx -n '__fish_use_subcommand' -a 'proc' -d 'Deep process forensics inspector, memory breakdown & signal manager'
+complete -c cx -n '__fish_use_subcommand' -a 'bg' -d 'List, inspect, restart, and stop CoreX background jobs'
 complete -c cx -n '__fish_use_subcommand' -a 'my-ip' -d 'Detailed ANSI card showing Public IP, Local IP, Gateway, ISP, and Geo-coordinates'
 complete -c cx -n '__fish_use_subcommand' -a 'vpn-up' -d 'Interactive fzf selector for WireGuard/OpenVPN/Proton configuration profiles'
 complete -c cx -n '__fish_use_subcommand' -a 'vpn-down' -d 'Clean disconnect and DNS leak prevention restore'
@@ -177,6 +178,7 @@ complete -c cx -n '__fish_use_subcommand' -a 'git-rebase-i' -d 'Interactive reba
 complete -c cx -n '__fish_use_subcommand' -a 'semver-bump' -d 'Interactive Semantic Version bumper (patch, minor, major) for project configs'
 complete -c cx -n '__fish_use_subcommand' -a 'k8s-pods-fzf' -d 'Interactive fuzzy selector to view logs or exec into Kubernetes cluster pods'
 complete -c cx -n '__fish_use_subcommand' -a 'builder' -d 'In-App Command Builder & Action Studio (Create, edit, or test custom actions)'
+complete -c cx -n '__fish_use_subcommand' -a 'custom' -d 'List, inspect & manage user-defined custom actions and overrides'
 complete -c cx -n '__fish_use_subcommand' -a 'doctor' -d 'Run diagnostic health checks on all 150+ commands & install missing dependencies'
 complete -c cx -n '__fish_use_subcommand' -a 'sys-update' -d 'Full system, AUR, and Flatpak updater with live preview and reboot detection'
 complete -c cx -n '__fish_use_subcommand' -a 'fetch' -d 'Custom CoreX ASCII workstation fetch card with CPU, GPU, VRAM, and RAM telemetry'
@@ -197,4 +199,5 @@ complete -c cx -n '__fish_use_subcommand' -a 'export' -d 'Export user configurat
 complete -c cx -n '__fish_use_subcommand' -a 'import' -d 'Restore and synchronize configuration and pinned favorites from a profile JSON'
 complete -c cx -n '__fish_use_subcommand' -a 'integrations' -d 'Display ready-to-paste floating window rules & keybindings for Hyprland, Sway, and i3'
 complete -c cx -n '__fish_use_subcommand' -a 'upgrade' -d 'Automated git synchronization, completion refresh, and system doctor audit'
+complete -c cx -n '__fish_use_subcommand' -a install-desktop -d 'Install desktop launcher'
 complete -c corex -w cx

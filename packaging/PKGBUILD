@@ -29,7 +29,10 @@ pkgver() {
 
 package() {
     cd "${srcdir}/CoreX"
-    install -Dm755 corex "${pkgdir}/usr/bin/corex"
+    install -Dm755 corex "${pkgdir}/usr/lib/corex/corex"
+    install -Dm644 corex_bg.py "${pkgdir}/usr/lib/corex/corex_bg.py"
+    install -d "${pkgdir}/usr/bin"
+    ln -sf ../lib/corex/corex "${pkgdir}/usr/bin/corex"
     ln -sf corex "${pkgdir}/usr/bin/cx"
 
     install -Dm644 config.default.toml "${pkgdir}/usr/share/corex/config.default.toml"

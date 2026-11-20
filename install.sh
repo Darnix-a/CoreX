@@ -144,7 +144,7 @@ mkdir -p "$NOTES_DIR"
 if [ -f "${CONFIG_DIR}/config.toml" ]; then
     echo -e "  [${GRAY}i${RESET}] Using existing config at ${CONFIG_DIR}/config.toml"
 else
-    cp "${SCRIPT_DIR}/config.default.toml" "${CONFIG_DIR}/config.toml"
+    "${BIN_DIR}/cx" --list >/dev/null
     echo -e "  [${GREEN}✔${RESET}] Installed config at ${CYAN}${CONFIG_DIR}/config.toml${RESET}"
 fi
 

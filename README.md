@@ -30,7 +30,9 @@ Type `cx` to open an interactive `fzf` launcher with live previews for system di
 ## Key Features
 
 -  **Sub-30ms Startup**: Pure Python standard library with binary configuration caching (`~/.cache/corex/config_cache.pickle`) and lazy runtime imports.
--  **180+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
+-  **184 Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
+-  **Background Job Manager (`cx bg`)**: Inspect jobs started with `--bg`, follow logs, restart, or stop them.
+-  **Layered Configuration (`cx custom`)**: Inspect personal actions, field overrides, and disabled actions. Built-in defaults load automatically.
 -  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via NetworkManager on Linux and CoreWLAN on macOS.
 -  **Deep Process Forensics (`cx proc`)**: Process inspector with physical RSS/Virtual/Swap breakdown, active sockets/ports, open file descriptors, and interactive signal manager (`SIGKILL`, `SIGTERM`, `SIGSTOP`, `SIGCONT`, renice).
 -  **Media & Codec Forensics (`cx media-info`)**: Deep video, audio, and image codec inspection, frame rates, color spaces, and tag extraction via `ffprobe`.
@@ -181,8 +183,9 @@ cx stats --reset          # Clear execution history
 ### 5. Profile Export & Import (Multi-Machine Sync)
 Sync your customized setup across machines:
 ```bash
-# Export preferences, pinned items, and custom commands:
+# Export personal settings, favorites, and action overrides:
 cx export ~/.config/corex/my-profile.json
+cx export --full ~/.config/corex/catalog.json
 
 # Restore on a new machine (creates safety backup automatically):
 cx import ~/.config/corex/my-profile.json
@@ -196,7 +199,38 @@ cx install-desktop
 
 
 
-### 7. Automated Self-Updater
+### 7. Background jobs
+
+```bash
+cx --bg serve-dir
+cx bg
+cx bg list
+cx bg logs serve-dir
+cx bg logs serve-dir --no-follow
+cx bg status serve-dir
+cx bg restart serve-dir
+cx bg stop serve-dir
+```
+
+Jobs use predictable `corex-<action>.service` names. Starting an active action again displays its PID, state, and start time. In the picker, Enter follows logs, Ctrl+S shows status, Ctrl+R restarts, and Ctrl+X stops the job.
+
+Linux uses transient systemd user services when a systemd user session is available. macOS and Linux without a systemd user session use a detached CoreX worker. Finished and failed jobs leave the active list on both backends. Linux systemd logs use the user journal. Detached workers append logs to `~/.local/share/corex/logs/`.
+
+### 8. Custom actions and overrides
+
+`~/.config/corex/config.toml` can contain just your changes. Override a built-in field or disable a built-in by action ID:
+
+```toml
+[commands.calc]
+description = "My calculator"
+
+[commands.demucs-stems]
+disabled = true
+```
+
+`cx custom` opens the custom action browser. Use `cx custom --list` for tab-delimited output or `cx new` to create an action. Older configs that copied the stock catalog still load. Unedited copies of built-in fields are ignored when listing personal overrides.
+
+### 9. Automated Self-Updater
 Keep your CoreX installation synchronized with the latest upstream features:
 ```bash
 cx upgrade                # Pull from git, rebuild completions, refresh cache & verify doctor
@@ -290,7 +324,7 @@ To uninstall CoreX and preserve the Git checkout:
 Run these from the checkout:
 
 ```bash
-python3 -m py_compile corex corex_macos.py
+python3 -m py_compile corex corex_bg.py corex_macos.py
 bash -n install.sh
 bash -n uninstall.sh
 python3 -m unittest discover -s tests -v

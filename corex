@@ -27,11 +27,11 @@ if IS_MACOS:
     import corex_macos
 
 VERSION = "3.2.0"
-CACHE_SCHEMA = 3
+CACHE_SCHEMA = 4
 CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
 DEFAULT_CONFIG_TEMPLATE = SOURCE_DIR / "config.default.toml"
 if not DEFAULT_CONFIG_TEMPLATE.is_file():
-    DEFAULT_CONFIG_TEMPLATE = SOURCE_DIR.parent / "share" / "corex" / "config.default.toml"
+    DEFAULT_CONFIG_TEMPLATE = Path("/usr/share/corex/config.default.toml")
 MACOS_CONFIG_TEMPLATE = SOURCE_DIR / "config.macos.toml"
 MAC_CLIPBOARD_FILE = Path.home() / ".local" / "share" / "corex" / "clipboard.json"
 CONFIG_CACHE_FILE = Path.home() / ".cache" / "corex" / "config_cache.pickle"
@@ -147,6 +147,17 @@ COMMAND_ALIASES: Dict[str, str] = {
     "type": "type-test",
     "zen": "quote",
     "cmatrix": "matrix",
+    "background": "bg", "units": "bg", "daemons": "bg",
+    "custom-commands": "custom", "list-custom": "custom",
+    "np": "now-playing", "speed-check": "speedtest", "tree": "bonsai",
+    "upload": "share", "paste": "share", "disk": "disks", "df": "disks",
+    "sound-test": "audio-test", "thermals": "sensors", "palette": "colors", "colortest": "colors",
+    "wlan": "wifi", "wifi-manager": "wifi", "wifi-scan": "wifi",
+    "process": "proc", "procs": "proc", "ps-inspect": "proc",
+    "mediainfo": "media-info", "media": "media-info", "ffprobe-info": "media-info",
+    "top": "stats", "telemetry": "stats", "search": "find", "lookup": "find",
+    "wm": "integrations", "hyprland": "integrations", "sway": "integrations", "i3": "integrations",
+    "update-self": "upgrade", "self-update": "upgrade",
 }
 
 REVERSE_COMMAND_ALIASES: Dict[str, List[str]] = {}
@@ -473,13 +484,7 @@ def get_fzf_theme_colors() -> str:
 def set_config_theme(theme_name: str, config_path: Optional[Path] = None) -> bool:
     path = config_path or CONFIG_FILE
     if not path.exists():
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
-        else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(f"[general]\ntheme = \"{theme_name}\"\n\n[commands]\n", encoding="utf-8")
-            return True
+        initialize_user_config(path)
 
     text = path.read_text(encoding="utf-8")
     if re.search(r'^\s*theme\s*=\s*["\'].*?["\']', text, flags=re.MULTILINE):
@@ -601,39 +606,63 @@ class CoreXConfig:
         self.ollama_auto_boot: bool = True
         self.commands: Dict[str, CommandSpec] = {}
         self.source_path: Optional[Path] = None
+        self.action_overrides: Dict[str, Any] = {}
+        self.disabled_actions = set()
+        self.default_actions = set()
+        self.setting_overrides: Dict[str, Any] = {}
+
+
+def initialize_user_config(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write("# CoreX user overrides. Built-in actions are loaded automatically.\n"
+                         "# Set disabled = true in an action table to hide it.\n\n"
+                         "[general]\n\n[commands]\n")
+    except FileExistsError:
+        pass
+
+
+def read_config_toml(path: Path) -> Dict[str, Any]:
+    import tomllib
+
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        log_warn(f"Could not read {path}: {exc}")
+        return {}
+
+
+def changed_fields(defaults, overrides):
+    return {key: value for key, value in overrides.items() if value != defaults.get(key)}
 
 
 def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) -> CoreXConfig:
     path = custom_path or CONFIG_FILE
-    macos_mtime = MACOS_CONFIG_TEMPLATE.stat().st_mtime_ns if IS_MACOS and MACOS_CONFIG_TEMPLATE.exists() else None
     if not path.exists():
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
-        else:
-            return CoreXConfig()
+        try:
+            initialize_user_config(path)
+        except OSError as exc:
+            log_warn(f"Could not initialize {path}: {exc}")
 
-    # Fast binary cache path (sub-1ms cold starts)
+    def stamp(file):
+        try:
+            stats = file.stat()
+            return str(file), stats.st_mtime_ns, stats.st_size
+        except FileNotFoundError:
+            return None
+
+    cache_key = (VERSION, CACHE_SCHEMA, sys.platform, stamp(path), stamp(DEFAULT_CONFIG_TEMPLATE),
+                 stamp(MACOS_CONFIG_TEMPLATE) if IS_MACOS else None)
     if not ignore_cache and custom_path is None and CONFIG_CACHE_FILE.exists():
         try:
             import pickle
-            path_stat = path.stat()
-            tmpl_stat = DEFAULT_CONFIG_TEMPLATE.stat() if DEFAULT_CONFIG_TEMPLATE.exists() else None
-            with open(CONFIG_CACHE_FILE, "rb") as cf:
-                cache_meta = pickle.load(cf)
-            if (
-                cache_meta.get("version") == VERSION
-                and cache_meta.get("schema") == CACHE_SCHEMA
-                and cache_meta.get("platform") == sys.platform
-                and cache_meta.get("macos_mtime") == macos_mtime
-                and cache_meta.get("user_mtime") == path_stat.st_mtime
-                and cache_meta.get("user_size") == path_stat.st_size
-                and (tmpl_stat is None or (
-                    cache_meta.get("tmpl_mtime") == tmpl_stat.st_mtime
-                    and cache_meta.get("tmpl_size") == tmpl_stat.st_size
-                ))
-            ):
-                cached_cfg = cache_meta["cfg"]
+            with CONFIG_CACHE_FILE.open("rb") as handle:
+                key, cached_cfg = pickle.load(handle)
+            if key == cache_key:
                 if cached_cfg.color:
                     apply_theme(cached_cfg.theme)
                 return cached_cfg
@@ -642,11 +671,17 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
 
     cfg = CoreXConfig()
     cfg.source_path = custom_path.resolve() if custom_path else None
+    defaults = read_config_toml(DEFAULT_CONFIG_TEMPLATE)
+    user_data = read_config_toml(path) if path.resolve() != DEFAULT_CONFIG_TEMPLATE.resolve() else {}
+    data = {}
+    for section in ("general", "ai"):
+        stock = defaults.get(section, {})
+        user = user_data.get(section, {})
+        data[section] = {**stock, **user}
+        diff = changed_fields(stock, user)
+        if diff:
+            cfg.setting_overrides[section] = diff
     try:
-        import tomllib
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
-
         gen = data.get("general", {})
         cfg.editor = gen.get("editor", "")
         cfg.notes_dir = Path(os.path.expanduser(gen.get("notes_dir", str(NOTES_DIR))))
@@ -670,32 +705,26 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
         cfg.ollama_model = str(ai.get("model", "qwen2.5-coder:1.5b"))
         cfg.ollama_auto_boot = bool(ai.get("auto_boot", True))
 
-        raw_cmds = data.get("commands", {})
-        defaults = {}
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            if path == DEFAULT_CONFIG_TEMPLATE:
-                defaults = raw_cmds
-            else:
-                with DEFAULT_CONFIG_TEMPLATE.open("rb") as df:
-                    defaults = tomllib.load(df).get("commands", {})
+        raw_cmds = user_data.get("commands", {})
+        default_cmds = defaults.get("commands", {})
+        cfg.default_actions = set(default_cmds)
+        macos_commands = read_config_toml(MACOS_CONFIG_TEMPLATE).get("commands", {}) if IS_MACOS else {}
 
-        macos_commands = {}
-        if macos_mtime is not None:
-            with MACOS_CONFIG_TEMPLATE.open("rb") as mf:
-                macos_commands = tomllib.load(mf).get("commands", {})
-
-        for cid, definition in {**defaults, **raw_cmds}.items():
-            stock = defaults.get(cid, {})
-            overrides = {key: value for key, value in definition.items() if value != stock.get(key)}
-            platform = {}
-            if IS_MACOS and "command" not in overrides:
-                platform = macos_commands.get(cid, {})
+        for cid, definition in {**default_cmds, **raw_cmds}.items():
+            stock = default_cmds.get(cid, {})
+            overrides = changed_fields(stock, raw_cmds.get(cid, {}))
+            if overrides:
+                cfg.action_overrides[cid] = overrides
+            platform = macos_commands.get(cid, {}) if IS_MACOS and "command" not in overrides else {}
             cdef = {**stock, **platform, **overrides}
             if IS_MACOS:
                 local_platform = definition.get("macos", {})
                 if "command" in local_platform:
                     cdef.pop("unavailable", None)
                 cdef.update(local_platform)
+            if cdef.get("disabled") is True:
+                cfg.disabled_actions.add(cid)
+                continue
             cfg.commands[cid] = CommandSpec(
                 id=cid,
                 category=cdef.get("category", "General"),
@@ -713,21 +742,8 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
             try:
                 import pickle
                 CONFIG_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-                path_stat = path.stat()
-                tmpl_stat = DEFAULT_CONFIG_TEMPLATE.stat() if DEFAULT_CONFIG_TEMPLATE.exists() else None
-                cache_meta = {
-                    "version": VERSION,
-                    "schema": CACHE_SCHEMA,
-                    "platform": sys.platform,
-                    "macos_mtime": macos_mtime,
-                    "user_mtime": path_stat.st_mtime,
-                    "user_size": path_stat.st_size,
-                    "tmpl_mtime": tmpl_stat.st_mtime if tmpl_stat else None,
-                    "tmpl_size": tmpl_stat.st_size if tmpl_stat else None,
-                    "cfg": cfg,
-                }
-                with open(CONFIG_CACHE_FILE, "wb") as cf:
-                    pickle.dump(cache_meta, cf, protocol=pickle.HIGHEST_PROTOCOL)
+                with CONFIG_CACHE_FILE.open("wb") as handle:
+                    pickle.dump((cache_key, cfg), handle, protocol=pickle.HIGHEST_PROTOCOL)
             except Exception:
                 pass
 
@@ -6354,7 +6370,7 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
         "stream-video", "stream-radio", "rip-audio", "trim-video", "make-gif",
         "pw-devices", "pw-volume", "fkill", "snap-fzf", "my-ip", "port-audit",
         "serve-dir", "docker-fzf", "calc", "timer", "stopwatch", "notes", "todo",
-        "sys-info", "irq-top", "oom-score", "ram-breakdown", "hugepages-toggle",
+        "sys-info", "bg", "custom", "irq-top", "oom-score", "ram-breakdown", "hugepages-toggle",
         "socket-summary", "kmod-fzf", "vk-layers", "regex-test", "semver-bump",
         "mtu-bench", "pw-link-fzf", "port-forward", "doctor", "sens-watch",
         "gpu-clock", "cpu-turboboost", "mon-res", "mon-preset", "game-mode", "builder",
@@ -6507,40 +6523,47 @@ def builtin_doctor(cfg: CoreXConfig, dry_run: bool = False, auto_install: bool =
 # ---------------------------------------------------------------------------
 # IN-APP COMMAND BUILDER & ACTION STUDIO
 # ---------------------------------------------------------------------------
+ACTION_FIELDS = ("category", "description", "command", "preview_cmd", "requires_sudo",
+                 "confirm", "deps", "unavailable", "disabled")
+
+
+def replace_config_section(text, name, values):
+    assignments = [f"{key} = {json.dumps(value, ensure_ascii=False)}" for key, value in values.items()]
+    if not assignments:
+        return text
+    block = "\n".join([f"[{name}]", *assignments]) + "\n\n"
+    pattern = rf"(?ms)^\s*\[{re.escape(name)}\][^\n]*\n.*?(?=(?:^[ \t]*\[|\Z))"
+    updated, found = re.subn(pattern, lambda _: "\n" + block, text)
+    return updated if found else text.rstrip() + "\n\n" + block
+
+
+def save_config_section(path, name, values):
+    text = path.read_text(encoding="utf-8")
+    path.write_text(replace_config_section(text, name, values), encoding="utf-8")
+    invalidate_config_cache()
+
+
 def save_action_definition(
-    cid: str, definition: Dict[str, Any], config_path: Optional[Path] = None, macos_only: bool = False,
+    cid: str, definition: Dict[str, Any], config_path: Optional[Path] = None,
+    macos_only: bool = False, merge: bool = False,
 ):
-    """Write editable action fields while preserving all other action tables."""
-    fields = ("category", "description", "command", "preview_cmd", "requires_sudo", "confirm", "deps", "unavailable")
+    """Write editable action fields while preserving other tables."""
     if not re.fullmatch(r"[A-Za-z0-9_-]+", cid):
         raise ValueError(f"Invalid action ID {cid!r}")
     path = config_path or CONFIG_FILE
     if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if DEFAULT_CONFIG_TEMPLATE.exists():
-            shutil.copy(DEFAULT_CONFIG_TEMPLATE, path)
-        else:
-            path.write_text("[general]\neditor = ''\n", encoding="utf-8")
+        initialize_user_config(path)
     text = path.read_text(encoding="utf-8")
-
+    existing = read_config_toml(path).get("commands", {}).get(cid, {}) if merge else {}
     base = f"commands.{cid}"
-    tables = {f"{base}.macos": definition} if macos_only else {base: definition}
-    if not macos_only and isinstance(definition.get("macos"), dict):
-        tables[f"{base}.macos"] = definition["macos"]
+    tables = {}
+    if not macos_only:
+        tables[base] = {**existing, **definition}
+    variant = definition if macos_only else definition.get("macos")
+    if isinstance(variant, dict):
+        tables[f"{base}.macos"] = {**existing.get("macos", {}), **variant}
     for name, values in tables.items():
-        assignments = [f"{key} = {json.dumps(values[key], ensure_ascii=False)}" for key in fields if key in values]
-        if not assignments:
-            continue
-        block = "\n".join([f"[{name}]", *assignments]) + "\n\n"
-        pattern = rf"(?ms)^\[{re.escape(name)}\].*?(?=(?:^\[|\Z))"
-        text, found = re.subn(pattern, lambda _: block, text)
-        if not found:
-            doctor_pos = text.find("[commands.doctor]")
-            if doctor_pos != -1:
-                text = text[:doctor_pos] + block + text[doctor_pos:]
-            else:
-                text = text.rstrip() + "\n\n" + block
-
+        text = replace_config_section(text, name, {key: values[key] for key in ACTION_FIELDS if key in values})
     path.write_text(text, encoding="utf-8")
     invalidate_config_cache()
 
@@ -6875,15 +6898,17 @@ def wizard_delete_action(cfg: CoreXConfig, target_id: Optional[str] = None):
         log_error(f"Action '{cid}' not found.")
         return
 
-    ans = prompt_user(f"Are you sure you want to permanently delete action '{cid}'? [y/N]: ", default="n").lower()
+    ans = prompt_user(f"Remove or disable action '{cid}'? [y/N]: ", default="n").lower()
     if ans in ("y", "yes"):
-        if remove_command_from_config(cid, cfg.source_path):
-            if cid in cfg.commands:
-                del cfg.commands[cid]
-            sync_completions(cfg)
-            log_success(f"Action '{cid}' permanently removed from configuration.")
+        if cid in cfg.default_actions:
+            save_action_definition(cid, {"disabled": True}, cfg.source_path, merge=True)
+            log_success(f"Disabled built-in action '{cid}'.")
+        elif remove_command_from_config(cid, cfg.source_path):
+            log_success(f"Removed custom action '{cid}'.")
         else:
             log_error(f"Could not remove '{cid}' from config file.")
+            return
+        sync_completions(load_config(cfg.source_path))
     else:
         log_info("Deletion canceled.")
 
@@ -7295,108 +7320,155 @@ def builtin_find(cfg: CoreXConfig, query: str = "", extra_args: Optional[List[st
 # ---------------------------------------------------------------------------
 # PROFILE & DOTFILES SYNCHRONIZATION
 # ---------------------------------------------------------------------------
-def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None):
-    out_path = Path(target_path).expanduser() if target_path else Path.home() / ".local" / "share" / "corex" / f"corex-profile-{int(time.time())}.json"
+def personal_actions(cfg):
+    custom = {}
+    overrides = {}
+    disabled = []
+    for cid, definition in sorted(cfg.action_overrides.items()):
+        if definition.get("disabled") is True:
+            disabled.append(cid)
+            definition = {key: value for key, value in definition.items() if key != "disabled"}
+        if definition:
+            target = overrides if cid in cfg.default_actions else custom
+            target[cid] = definition
+    return custom, overrides, disabled
+
+
+def builtin_custom(cfg: CoreXConfig, args: List[str]):
+    if args and args[0] in ("--help", "-h", "help"):
+        print("Usage: cx custom [--list|-l]")
+        return 0
+    raw = bool(args and args[0] in ("--list", "-l", "--raw"))
+    if args and not raw:
+        log_error("Usage: cx custom [--list|-l]")
+        return 2
+
+    custom, overrides, disabled = personal_actions(cfg)
+    if not raw:
+        print(box_header("CUSTOM ACTIONS & CONFIGURATION OVERRIDES"))
+        if not cfg.action_overrides:
+            print(f"No overrides in {cfg.source_path or CONFIG_FILE}.")
+    for cid, fields in sorted(cfg.action_overrides.items()):
+        spec = cfg.commands.get(cid)
+        category = spec.category if spec else fields.get("category", "Custom Actions")
+        description = spec.description if spec else fields.get("description", "")
+        if raw:
+            print("\t".join(str(field).replace("\t", " ").replace("\n", " ")
+                            for field in (cid, category, description)))
+        else:
+            kind = "disabled" if cid in cfg.disabled_actions else "override" if cid in overrides else "custom"
+            extra = f" ({', '.join(fields)})" if cid in overrides else ""
+            print(f" {cid} [{kind}]{extra} {description}")
+    if raw:
+        return 0
+    print(box_footer())
+    if not sys.stdin.isatty() or not cfg.action_overrides:
+        return 0
+    active = [cid for cid in sorted(custom.keys() | overrides.keys())
+              if cid in cfg.commands and not cfg.commands[cid].unavailable]
+    selected = run_fzf(
+        [f"{cid}\t{cfg.commands[cid].description}" for cid in active],
+        prompt="Custom actions > ", preview_cmd=f"{self_command(cfg.source_path)} __preview {{1}}",
+        extra_args=["--delimiter=\t"],
+    ) if active else []
+    if selected:
+        execute_command(selected[0].split("\t", 1)[0], cfg)
+    return 0
+
+
+def builtin_export(cfg: CoreXConfig, target_path: Optional[str] = None, full: bool = False):
+    out_path = Path(target_path).expanduser() if target_path else STATE_FILE.parent / f"corex-profile-{int(time.time())}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    state = load_user_state()
-    import tomllib
-
-    custom_cmds = {}
-    source = cfg.source_path or CONFIG_FILE
-    if source.is_file():
-        with source.open("rb") as handle:
-            commands = tomllib.load(handle).get("commands", {})
-        defaults = {}
-        if DEFAULT_CONFIG_TEMPLATE.is_file():
-            with DEFAULT_CONFIG_TEMPLATE.open("rb") as handle:
-                defaults = tomllib.load(handle).get("commands", {})
-        for cid, definition in commands.items():
-            stock = defaults.get(cid, {})
-            overrides = {key: value for key, value in definition.items() if value != stock.get(key)}
-            if overrides:
-                custom_cmds[cid] = overrides
-
+    custom, overrides, disabled = personal_actions(cfg)
     export_data = {
         "format": "corex-profile",
         "version": VERSION,
+        "type": "full-catalog" if full else "user-overrides",
         "exported_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "hostname": socket.gethostname(),
         "theme": cfg.theme,
         "editor": cfg.editor,
-        "pinned": state.get("pinned", []),
-        "custom_commands": custom_cmds,
+        "pinned": load_user_state().get("pinned", []),
+        "settings": cfg.setting_overrides,
+        "custom_commands": custom,
+        "overrides": overrides,
+        "disabled_commands": disabled,
         "total_catalog_count": len(cfg.commands),
     }
-
-    with open(out_path, "w") as f:
-        json.dump(export_data, f, indent=2)
-
-    c_green = "\033[38;2;166;227;161m"
-    print(f"\n {c_green}{Style.BOLD}✔ CoreX Profile Successfully Exported!{Style.RESET}")
-    print(f"   • Destination: {Style.CYAN}{out_path}{Style.RESET}")
-    print(f"   • Theme:       {Style.BOLD}{cfg.theme}{Style.RESET}")
-    print(f"   • Pinned:      {len(export_data['pinned'])} favorites")
-    print(f"   • Custom Cmds: {len(custom_cmds)} custom actions")
-    print(f"\n   To restore on another machine: {Style.CYAN}cx import {out_path}{Style.RESET}\n")
+    if full:
+        export_data["commands"] = {
+            cid: {field: getattr(spec, field) for field in ACTION_FIELDS if hasattr(spec, field)}
+            for cid, spec in cfg.commands.items()
+        }
+    out_path.write_text(json.dumps(export_data, indent=2) + "\n", encoding="utf-8")
+    log_success(f"Exported {'full catalog' if full else 'personal configuration'} to {out_path}")
 
 
 def builtin_import(cfg: CoreXConfig, source_path: Optional[str] = None):
     if not source_path:
         log_error("Usage: cx import <path-to-profile.json>")
-        return
-
+        return 2
     in_path = Path(source_path).expanduser()
-    if not in_path.is_file():
-        log_error(f"Import file not found: {in_path}")
-        return
-
-    try:
-        with open(in_path, "r") as f:
-            data = json.load(f)
-    except Exception as e:
-        log_error(f"Failed to parse profile JSON: {e}")
-        return
-
-    if data.get("format") != "corex-profile":
-        log_error("Invalid profile format. File must be generated by 'cx export'.")
-        return
+    data = json.loads(in_path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("format") != "corex-profile":
+        log_error("Invalid CoreX profile format.")
+        return 1
 
     path = cfg.source_path or CONFIG_FILE
-    bak_path = path.with_name(f"{path.name}.bak.{int(time.time())}")
     if path.exists():
-        shutil.copy(path, bak_path)
+        backup = path.with_name(f"{path.name}.bak.{time.time_ns()}")
+        shutil.copyfile(path, backup)
+        log_info(f"Backup: {backup}")
+    else:
+        initialize_user_config(path)
 
-    imp_theme = data.get("theme")
-    if imp_theme and imp_theme in THEMES:
-        set_config_theme(imp_theme, path)
-        apply_theme(imp_theme)
+    settings = data.get("settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+    defaults = read_config_toml(DEFAULT_CONFIG_TEMPLATE)
+    for section in ("general", "ai"):
+        values = settings.get(section, {})
+        values = {key: value for key, value in values.items() if key in defaults.get(section, {})} if isinstance(values, dict) else {}
+        if section == "general":
+            if data.get("theme") in THEMES:
+                values.setdefault("theme", data["theme"])
+            if isinstance(data.get("editor"), str):
+                values.setdefault("editor", data["editor"])
+        if values:
+            save_config_section(path, section, {**read_config_toml(path).get(section, {}), **values})
 
-    imp_pinned = data.get("pinned", [])
-    if isinstance(imp_pinned, list):
+    definitions = {}
+    for field in ("custom_commands", "overrides"):
+        entries = data.get(field)
+        if isinstance(entries, dict):
+            definitions.update(entries)
+    if not any(key in data for key in ("custom_commands", "overrides", "disabled_commands")):
+        entries = data.get("commands", {})
+        if isinstance(entries, dict):
+            definitions.update({cid: value for cid, value in entries.items() if cid not in cfg.default_actions})
+    disabled = data.get("disabled_commands", [])
+    if isinstance(disabled, list):
+        for cid in disabled:
+            if isinstance(cid, str) and isinstance(definitions.get(cid, {}), dict):
+                definitions[cid] = {**definitions.get(cid, {}), "disabled": True}
+
+    restored = 0
+    for cid, definition in definitions.items():
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", cid) or not isinstance(definition, dict):
+            log_warn(f"Skipping invalid action definition for {cid!r}.")
+            continue
+        save_action_definition(cid, definition, path, merge=True)
+        restored += 1
+
+    pinned = data.get("pinned")
+    if isinstance(pinned, list):
         state = load_user_state()
-        state["pinned"] = imp_pinned
+        state["pinned"] = pinned
         save_user_state(state)
-
-    restored_count = 0
-    imp_custom = data.get("custom_commands", {})
-    if isinstance(imp_custom, dict):
-        for cid, definition in imp_custom.items():
-            if not re.fullmatch(r"[A-Za-z0-9_-]+", cid) or not isinstance(definition, dict):
-                log_warn(f"Skipping invalid action definition for {cid!r}.")
-                continue
-            save_action_definition(cid, definition, path)
-            restored_count += 1
-
     invalidate_config_cache()
-
-    c_green = "\033[38;2;166;227;161m"
-    print(f"\n {c_green}{Style.BOLD}✔ CoreX Profile Successfully Imported!{Style.RESET}")
-    print(f"   • Backup created:   {Style.GRAY}{bak_path}{Style.RESET}")
-    print(f"   • Theme applied:    {Style.BOLD}{imp_theme or 'unchanged'}{Style.RESET}")
-    print(f"   • Pinned favorites: {len(imp_pinned)} restored")
-    print(f"   • Custom actions:   {restored_count} added to catalog")
-    print(f"\n   Run {Style.CYAN}cx{Style.RESET} to open your updated menu.\n")
+    sync_completions(load_config(cfg.source_path))
+    log_success(f"Imported {restored} action settings from {in_path}")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -9024,6 +9096,9 @@ def execute_command(
     extra_args: Optional[List[str]] = None,
 ):
     actual_id = COMMAND_ALIASES.get(cmd_id, cmd_id)
+    if actual_id in cfg.disabled_actions:
+        log_error(f"Action '{actual_id}' is disabled in your configuration.")
+        sys.exit(1)
     spec = cfg.commands.get(actual_id)
 
     if not spec:
@@ -9101,13 +9176,12 @@ def execute_command(
     if spec.requires_sudo and os.geteuid() != 0 and not final_cmd.strip().startswith("sudo"):
         final_cmd = f"sudo {final_cmd}"
 
-    if dry_run:
-        prefix = "[DRY-RUN BG]" if bg_run else "[DRY-RUN]"
-        print(f"{Style.YELLOW}{prefix}{Style.RESET} {Style.BOLD}{final_cmd}{Style.RESET}")
+    if bg_run:
+        detach_background(actual_id, final_cmd, dry_run=dry_run)
         return
 
-    if bg_run:
-        detach_background(actual_id, final_cmd)
+    if dry_run:
+        print(f"{Style.YELLOW}[DRY-RUN]{Style.RESET} {Style.BOLD}{final_cmd}{Style.RESET}")
         return
 
     try:
@@ -9117,46 +9191,172 @@ def execute_command(
         sys.exit(130)
 
 
-def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
-    """Detaches command into a systemd-run user service or background nohup subshell."""
-    ts = int(time.time())
-    unit_name = f"corex-{cmd_id}-{ts}"
-    if IS_MACOS:
-        log_path = STATE_FILE.parent / "logs" / f"{unit_name}.log"
-        if dry_run:
-            print(f"[DRY-RUN BG] {ACTION_SHELL} -c {shlex.quote(shell_cmd)} (log: {log_path})")
-            return
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a") as handle:
-            child = subprocess.Popen(
-                [ACTION_SHELL, "-c", shell_cmd], stdin=subprocess.DEVNULL,
-                stdout=handle, stderr=subprocess.STDOUT, start_new_session=True,
-            )
-        log_success(f"Detached '{cmd_id}' as PID {child.pid}. Log: {log_path}")
-        return
+def start_background(cmd_id: str, shell_cmd: str, dry_run: bool = False) -> int:
+    import corex_bg
 
-    has_systemd_run = shutil.which("systemd-run") is not None
-
-    if has_systemd_run:
-        full_cmd = ["systemd-run", "--user", f"--unit={unit_name}", ACTION_SHELL, "-c", shell_cmd]
-    else:
-        full_cmd = ["nohup", ACTION_SHELL, "-c", shell_cmd]
-
+    unit = corex_bg.unit_name(cmd_id, action=True)
+    jobs = corex_bg.LocalJobs(STATE_FILE.parent)
+    use_systemd = corex_bg.systemd_available()
+    full_cmd = corex_bg.systemd_command(unit, ACTION_SHELL, shell_cmd)
     if dry_run:
-        print(f"{Style.YELLOW}[DRY-RUN BG]{Style.RESET} {' '.join(full_cmd)}")
-        return
+        command = shlex.join(full_cmd if use_systemd else [ACTION_SHELL, "-c", shell_cmd])
+        print(f"[DRY-RUN BG] {unit}: {command}")
+        if not use_systemd:
+            print(f"Log: {jobs.log_path(unit)}")
+        return 0
 
-    log_info(f"Detaching '{cmd_id}' into background scope ({unit_name})...")
-    if has_systemd_run:
-        res = subprocess.run(full_cmd, capture_output=True, text=True)
-        if res.returncode == 0:
-            log_success(f"Command '{cmd_id}' running as systemd user unit: {unit_name}.service")
-        else:
-            subprocess.Popen(["nohup", ACTION_SHELL, "-c", shell_cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
-            log_success(f"Command '{cmd_id}' detached via background subshell.")
+    if use_systemd:
+        # The service manager owns the name. A concurrent start cannot create a duplicate.
+        active = corex_bg.systemd_info(unit)
+        if not active or active["state"] not in ("active", "activating", "reloading"):
+            result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=20)
+            if result.returncode == 0:
+                active = None
+            else:
+                active = corex_bg.systemd_info(unit)
+                if not active or active["state"] not in ("active", "activating", "reloading"):
+                    log_error(result.stderr.strip() or f"Could not start {unit}")
+                    return result.returncode
     else:
-        subprocess.Popen(full_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, preexec_fn=os.setpgrp)
-        log_success(f"Command '{cmd_id}' detached via background nohup.")
+        active = jobs.start(unit, ACTION_SHELL, shell_cmd)
+
+    if active:
+        print(box_header(f"BACKGROUND JOB ALREADY RUNNING: {unit}"))
+        print(f" Main PID: {active['pid']} | State: {active['state']} | Active since: {active['since']}")
+        print(box_footer())
+    else:
+        log_success(f"Started {unit} in the background.")
+    print(f" cx bg logs {unit}")
+    print(f" cx bg status {unit}")
+    print(f" cx bg restart {unit}")
+    print(f" cx bg stop {unit}")
+    return 0
+
+
+def detach_background(cmd_id: str, shell_cmd: str, dry_run: bool = False):
+    status = start_background(cmd_id, shell_cmd, dry_run)
+    if status:
+        sys.exit(status)
+
+
+def background_info(unit, jobs, use_systemd):
+    import corex_bg
+
+    info = jobs.status(unit)
+    if info is not None:
+        return info
+    return corex_bg.systemd_info(unit) if use_systemd else None
+
+
+def background_names(jobs, use_systemd):
+    import corex_bg
+
+    return sorted(set(jobs.names()) | set(corex_bg.systemd_names() if use_systemd else []))
+
+
+def render_bg_preview(unit: str):
+    import corex_bg
+
+    unit = corex_bg.unit_name(unit)
+    jobs = corex_bg.LocalJobs(STATE_FILE.parent)
+    use_systemd = corex_bg.systemd_available()
+    info = background_info(unit, jobs, use_systemd)
+    if not info:
+        log_info(f"{unit} has finished or does not exist.")
+        return 1
+    print(box_header(unit))
+    print(f" State: {info['state']}")
+    print(f" Main PID: {info['pid']}")
+    print(f" Active since: {info['since']}")
+    print(f" Memory: {_fmt_bytes(info['memory']) if info.get('memory') is not None else '—'}")
+    print(f" CPU: {background_cpu(info)}")
+    local = jobs.status(unit)
+    command = (["tail", "-n", "8", str(jobs.log_path(unit))] if local else
+               ["journalctl", "--user", "-u", unit, "-n", "8", "--no-pager"])
+    result = subprocess.run(command, capture_output=True, text=True, timeout=4)
+    if result.stdout:
+        print("\nRecent logs")
+        print(result.stdout.rstrip())
+    print(box_footer())
+    return 0
+
+
+def background_cpu(info):
+    if "cpu_display" in info:
+        return info["cpu_display"]
+    return f"{info['cpu']:.2f}s" if info.get("cpu") is not None else "—"
+
+
+def builtin_bg(extra_args: Optional[List[str]] = None, config_path: Optional[Path] = None):
+    import corex_bg
+
+    args = extra_args or []
+    action = args[0] if args else ""
+    action = {"ls": "list", "log": "logs", "-f": "logs", "info": "status",
+              "reboot": "restart", "kill": "stop", "down": "stop"}.get(action, action)
+    if action in ("help", "-h", "--help"):
+        print("Usage: cx bg [list|logs <unit> [--no-follow]|status <unit>|restart <unit>|stop <unit>]")
+        return 0
+
+    jobs = corex_bg.LocalJobs(STATE_FILE.parent)
+    use_systemd = corex_bg.systemd_available()
+    if not action or action == "list":
+        names = background_names(jobs, use_systemd)
+        if not names:
+            print("No active CoreX background jobs.")
+            return 0
+        if action == "list" or not sys.stdin.isatty():
+            print("UNIT\tSTATE\tPID\tMEMORY\tCPU\tACTIVE SINCE")
+            for unit in names:
+                info = background_info(unit, jobs, use_systemd)
+                if info:
+                    memory = _fmt_bytes(info["memory"]) if info.get("memory") is not None else "—"
+                    print(f"{unit}\t{info['state']}\t{info['pid']}\t{memory}\t{background_cpu(info)}\t{info['since']}")
+            return 0
+
+        preview = f"{self_command(config_path)} __preview_bg {{1}}"
+        selection = run_fzf(
+            names, prompt="Background jobs > ", preview_cmd=preview,
+            header="Enter: Logs | Ctrl+S: Status | Ctrl+R: Restart | Ctrl+X: Stop",
+            extra_args=["--expect=ctrl-s,ctrl-r,ctrl-x"],
+        )
+        if not selection:
+            return 0
+        key, selected = selection[:2]
+        return builtin_bg([{"": "logs", "ctrl-s": "status", "ctrl-r": "restart",
+                            "ctrl-x": "stop"}[key], selected], config_path)
+
+    if action not in ("logs", "status", "restart", "stop") or len(args) < 2:
+        log_error("Usage: cx bg [list|logs <unit>|status <unit>|restart <unit>|stop <unit>]")
+        return 2
+    try:
+        unit = corex_bg.unit_name(args[1])
+    except ValueError as exc:
+        log_error(str(exc))
+        return 2
+    if action == "status":
+        if jobs.status(unit):
+            return render_bg_preview(unit)
+        if use_systemd:
+            return subprocess.call([*corex_bg.SYSTEMCTL, "status", "--no-pager", "--", unit])
+    elif action == "logs":
+        follow = "--no-follow" not in args[2:]
+        path = jobs.log_path(unit)
+        if jobs.status(unit) or path.is_file():
+            cmd = ["tail", "-n", "30", *(["-F"] if follow else []), str(path)]
+            return subprocess.call(cmd)
+        if use_systemd:
+            cmd = ["journalctl", "--user", "-u", unit, "-n", "30", "--no-pager"]
+            if follow:
+                cmd.append("-f")
+            return subprocess.call(cmd)
+    elif jobs.control(unit, action):
+        log_success(f"{'Restarted' if action == 'restart' else 'Stopped'} {unit}")
+        return 0
+    elif use_systemd:
+        return subprocess.call([*corex_bg.SYSTEMCTL, action, "--", unit])
+    log_error(f"{unit} is not running.")
+    return 1
 
 
 def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_args: Optional[List[str]] = None):
@@ -9177,7 +9377,11 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
             log_error(str(exc))
             return 1
 
-    if name == "builder":
+    if name == "bg":
+        return builtin_bg(args, cfg.source_path)
+    elif name == "custom":
+        return builtin_custom(cfg, args)
+    elif name == "builder":
         builtin_builder(cfg, extra_args=args)
     elif name in ("ask", "ai", "ai-copilot", "copilot"):
         q = " ".join(args) if args else None
@@ -9278,11 +9482,11 @@ def dispatch_builtin(name: str, cfg: CoreXConfig, dry_run: bool = False, extra_a
         q = args[0] if args else ""
         builtin_find(cfg, query=q, extra_args=args[1:] if len(args) > 1 else [])
     elif name == "export":
-        target = args[0] if args else None
-        builtin_export(cfg, target_path=target)
+        targets = [arg for arg in args if arg != "--full"]
+        builtin_export(cfg, target_path=targets[0] if targets else None, full="--full" in args)
     elif name == "import":
         src = args[0] if args else None
-        builtin_import(cfg, source_path=src)
+        return builtin_import(cfg, source_path=src)
     elif name in ("install-desktop", "desktop"):
         builtin_install_desktop()
     elif name in ("integrations", "wm", "hyprland", "sway", "i3"):
@@ -9552,6 +9756,16 @@ def main():
             b_args = []
         sys.exit(dispatch_builtin(b_name, cfg, dry_run=parsed.dry_run, extra_args=b_args) or 0)
 
+    action_id = COMMAND_ALIASES.get(parsed.command, parsed.command)
+    disabled_id = parsed.command if parsed.command in cfg.disabled_actions else action_id
+    if disabled_id in cfg.disabled_actions:
+        log_error(f"Action '{disabled_id}' is disabled in your configuration.")
+        sys.exit(1)
+    if parsed.bg and action_id in cfg.commands:
+        execute_command(parsed.command, cfg, dry_run=parsed.dry_run, bg_run=True,
+                        extra_args=parsed.args + unknown + (["-y"] if parsed.yes else []))
+        return
+
     # Direct built-in shortcuts for now-playing / song / np
     if parsed.command in ("now-playing", "song", "np"):
         if parsed.dry_run:
@@ -9691,6 +9905,9 @@ def main():
             builtin_media_info(target_file=tgt, extra_args=ext)
         sys.exit(0)
 
+    if parsed.command == "__preview_bg":
+        sys.exit(render_bg_preview(parsed.args[0]) if parsed.args else 2)
+
     # Internal preview callback for Wi-Fi manager
     if parsed.command == "__preview_wifi":
         ssid = (parsed.args[0] if len(parsed.args) > 0 else "")
@@ -9797,14 +10014,11 @@ def main():
 
     # Profile Export & Import
     if parsed.command == "export":
-        target = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
-        builtin_export(cfg, target_path=target)
-        sys.exit(0)
+        sys.exit(dispatch_builtin("export", cfg, dry_run=parsed.dry_run, extra_args=parsed.args + unknown) or 0)
 
     if parsed.command == "import":
         src = (parsed.args[0] if parsed.args else "") or (unknown[0] if unknown else "")
-        builtin_import(cfg, source_path=src)
-        sys.exit(0)
+        sys.exit(dispatch_builtin("import", cfg, dry_run=parsed.dry_run, extra_args=[src] if src else []) or 0)
 
     # Desktop Entry & Window Manager Integrations
     if parsed.command in ("install-desktop", "desktop-install"):
@@ -9878,7 +10092,9 @@ USAGE:
   cx pin <command>                Pin an action to favorites (starred at top of TUI)
   cx unpin <command>              Remove an action from favorites
   cx pinned                       List all currently pinned favorite actions
-  cx export [file.json]           Export configuration, pinned favorites & notes to JSON
+  cx export [file.json] [--full]  Export personal overrides or a full catalog
+  cx custom [--list]              Inspect custom actions, overrides and disabled actions
+  cx bg [list|logs|status|restart|stop]  Manage background jobs
   cx import <file.json>           Import and restore configuration from profile JSON
   cx install-desktop              Install a desktop launcher for the current system
   cx integrations                 Show desktop and window manager integration
@@ -9949,6 +10165,6 @@ FLAGS:
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         log_error(str(exc))
         sys.exit(1)

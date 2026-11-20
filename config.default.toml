@@ -470,6 +470,15 @@ requires_sudo = false
 confirm = false
 deps = ["ps", "fzf"]
 
+[commands.bg]
+category = "System Architecture & BTRFS Snapshotting"
+description = "List, inspect, restart, and stop CoreX background jobs"
+command = "cx __builtin bg"
+preview_cmd = "cx bg list"
+requires_sudo = false
+confirm = false
+deps = []
+
 # ==============================================================================
 # 5. NETWORK, VPN & REMOTE INFRASTRUCTURE (@net, @vpn)
 # ==============================================================================
@@ -1532,6 +1541,15 @@ category = "Git, Dev & Code Utilities"
 description = "In-App Command Builder & Action Studio (Create, edit, or test custom actions)"
 command = "cx __builtin builder"
 preview_cmd = "echo 'Interactive studio to build, test, and register custom actions into CoreX'"
+requires_sudo = false
+confirm = false
+deps = []
+
+[commands.custom]
+category = "Git, Dev & Code Utilities"
+description = "List, inspect & manage user-defined custom actions and overrides"
+command = "cx __builtin custom"
+preview_cmd = "echo 'Displays user-defined custom actions and configuration overrides'"
 requires_sudo = false
 confirm = false
 deps = []

@@ -12,6 +12,7 @@ import tempfile
 import time
 import tomllib
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -202,21 +203,57 @@ class CLITests(unittest.TestCase):
         restored = self.home / "restored.toml"
         profile = self.home / "portable.json"
         original.write_text(
-            '[commands.custom]\ncommand = "echo portable"\n'
-            '[commands.custom.macos]\ncommand = "echo Mac"\n'
+            '[commands.personal-task]\ncommand = "echo portable"\n'
+            '[commands.personal-task.macos]\ncommand = "echo Mac"\n'
             '[commands.pw-devices.macos]\ncommand = "echo override"\n'
         )
         restored.write_text("[general]\n")
         self.run_cli("--config", str(original), "export", str(profile))
         exported = json.loads(profile.read_text())
-        self.assertEqual(exported["custom_commands"]["custom"]["command"], "echo portable")
+        self.assertEqual(exported["custom_commands"]["personal-task"]["command"], "echo portable")
         self.run_cli("--config", str(restored), "import", str(profile))
         with restored.open("rb") as stream:
             actions = tomllib.load(stream)["commands"]
-        self.assertEqual(actions["custom"]["macos"]["command"], "echo Mac")
+        self.assertEqual(actions["personal-task"]["macos"]["command"], "echo Mac")
         self.assertEqual(actions["pw-devices"]["macos"]["command"], "echo override")
-        result = self.run_cli("--config", str(restored), "custom")
+        result = self.run_cli("--config", str(restored), "personal-task")
         self.assertEqual(result.stdout.strip(), "Mac" if sys.platform == "darwin" else "portable")
+
+    def test_layered_config_honors_disabled_aliases_and_exports_personal_fields(self):
+        config = self.home / "personal.toml"
+        restored = self.home / "restored.toml"
+        export = self.home / "profile.json"
+        config.write_text((ROOT / "config.default.toml").read_text().replace(
+            '[commands.fetch]', '[commands.fetch]\ndisabled = true'
+        ) + '\n[commands.calc.macos]\ndisabled = true\n')
+        cli = ("--config", str(config))
+        result = self.run_cli(*cli, "corex-fetch", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("disabled", result.stderr)
+        self.assertNotIn("fetch\t", self.run_cli(*cli, "--list").stdout)
+        self.assertEqual(self.run_cli(*cli, "calc", "1+1", check=False).returncode != 0,
+                         sys.platform == "darwin")
+        rows = self.run_cli(*cli, "custom-commands", "-l").stdout.splitlines()
+        self.assertEqual([row.split("\t")[0] for row in rows], ["calc", "fetch"])
+        self.run_cli(*cli, "export", str(export))
+        exported = json.loads(export.read_text())
+        self.assertEqual(exported["disabled_commands"], ["fetch"])
+        self.assertEqual(exported["overrides"], {"calc": {"macos": {"disabled": True}}})
+        self.assertNotIn("commands", exported)
+        self.run_cli(*cli, "export", "--full", str(export))
+        full = json.loads(export.read_text())
+        self.assertEqual(full["type"], "full-catalog")
+        self.assertNotIn("fetch", full["commands"])
+        self.run_cli("--config", str(restored), "import", str(export))
+        with restored.open("rb") as handle:
+            self.assertEqual(tomllib.load(handle)["commands"],
+                             {"calc": {"macos": {"disabled": True}}, "fetch": {"disabled": True}})
+
+    def test_fresh_config_contains_only_user_tables(self):
+        result = self.run_cli("--list")
+        self.assertEqual(len(result.stdout.splitlines()), len(STOCK))
+        with (self.home / ".config/corex/config.toml").open("rb") as handle:
+            self.assertEqual(tomllib.load(handle)["commands"], {})
 
     def test_install_and_uninstall(self):
         config = self.home / ".config/corex/config.toml"
@@ -258,17 +295,54 @@ class CLITests(unittest.TestCase):
         result = self.run_cli("perf-stat", "/usr/bin/true")
         self.assertIn("maximum resident set size", result.stderr)
 
-    @unittest.skipUnless(sys.platform == "darwin", "requires the macOS detach path")
-    def test_mac_background_job_logs_output(self):
+    def test_background_lifecycle_and_duplicate_guard(self):
         config = self.home / "background.toml"
-        config.write_text('[commands.smoke]\ncommand = "echo detached"\n')
-        self.run_cli("--config", str(config), "--bg", "smoke")
-        logs = list((self.home / ".local/share/corex/logs").glob("corex-smoke-*.log"))
-        self.assertEqual(len(logs), 1)
-        deadline = time.monotonic() + 5
-        while logs[0].stat().st_size == 0 and time.monotonic() < deadline:
-            time.sleep(0.05)
-        self.assertEqual(logs[0].read_text().strip(), "detached")
+        suffix = uuid.uuid4().hex[:8]
+        action = f"qa-{suffix}"
+        failing = f"qa-fail-{suffix}"
+        unit = f"corex-{action}.service"
+        config.write_text(
+            f'[commands.{action}]\ncommand = "echo $PWD; exec sleep 40"\n'
+            f'[commands.{failing}]\ncommand = "exit 5"\n'
+        )
+        cli = ("--config", str(config))
+        try:
+            self.assertIn(unit, self.run_cli(*cli, "--bg", "--dry-run", action).stdout)
+            requests = [
+                subprocess.Popen(
+                    [str(ROOT / "cx"), *cli, "--bg", action], env=self.env, cwd=self.home,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                for _ in range(2)
+            ]
+            outcomes = [proc.communicate(timeout=15) for proc in requests]
+            self.assertEqual([proc.returncode for proc in requests], [0, 0], outcomes)
+            self.assertEqual(sum("ALREADY RUNNING" in out for out, _ in outcomes), 1)
+
+            def job_pid():
+                output = self.run_cli(*cli, "bg", "list").stdout
+                row = next(line for line in output.splitlines() if line.startswith(unit + "\t"))
+                return row.split("\t")[2]
+
+            pid = job_pid()
+            self.assertIn(pid, self.run_cli(*cli, "bg", "status", unit).stdout)
+            deadline = time.monotonic() + 5
+            while str(self.home.resolve()) not in self.run_cli(*cli, "bg", "logs", action, "--no-follow").stdout:
+                self.assertLess(time.monotonic(), deadline, "Unlogged background command")
+                time.sleep(0.05)
+            self.run_cli(*cli, "bg", "restart", unit)
+            self.assertNotEqual(pid, job_pid())
+            self.run_cli(*cli, "bg", "stop", unit)
+            self.assertNotIn(unit + "\t", self.run_cli(*cli, "bg", "list").stdout)
+            self.assertNotEqual(self.run_cli(*cli, "bg", "status", unit, check=False).returncode, 0)
+            self.run_cli(*cli, "--bg", failing)
+            deadline = time.monotonic() + 5
+            while f"corex-{failing}.service\t" in self.run_cli(*cli, "bg", "list").stdout:
+                self.assertLess(time.monotonic(), deadline, "Failed background job was still registered")
+                time.sleep(0.05)
+        finally:
+            self.run_cli(*cli, "bg", "stop", unit, check=False)
+            self.run_cli(*cli, "bg", "stop", failing, check=False)
 
 
 if __name__ == "__main__":
