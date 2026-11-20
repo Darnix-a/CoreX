@@ -61,20 +61,9 @@ cd CoreX
 ./install.sh
 ```
 
-CoreX needs Python 3.11 or newer and fzf 0.63 or newer on both platforms. Add `$HOME/.local/bin` to your PATH if the installer reports it missing. For the default macOS Zsh shell, put this in `~/.zshrc`:
+CoreX needs Python 3.11 or newer and fzf 0.63 or newer on both platforms.
 
-```zsh
-export PATH="$HOME/.local/bin:$PATH"
-fpath=("$HOME/.zsh/completions" $fpath)
-autoload -Uz compinit
-compinit
-```
-
-If your shell config already runs `compinit`, place the `fpath` line before that call. Bash users can source `~/.local/share/bash-completion/completions/cx` from their shell config. Fish loads the installed completion automatically.
-
-Run `xcode-select --install` for Wi-Fi scanning, display controls, the Metal benchmark, and Core Audio latency reporting. On first Wi-Fi scan, grant Location Services access when macOS prompts. `cx install-desktop` installs `~/Applications/CoreX.app`. When opening it for the first time, macOS may ask for permission to control Terminal.
-
-Use `cx doctor --dry-run` to review optional Homebrew packages. Container actions also need a running Docker or Podman engine. For local AI, install Ollama separately and point `comfyui_path` at a ComfyUI checkout with a Metal-compatible PyTorch environment.
+Use `cx doctor` to review optional Homebrew packages.
 
 ### Arch Linux / CachyOS (PKGBUILD / Paru)
 
