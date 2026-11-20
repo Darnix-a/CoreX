@@ -99,7 +99,8 @@ The installer:
 5. Verifies the launcher and action catalog. Run `cx doctor --dry-run` to audit action dependencies and syntax.
 
 ---
-
+<details>
+<summary><strong>macOS Action Behavior & Platform Differences</strong> (click to expand)</summary>
 ## macOS action behavior
 
 Both systems expose the same stock action IDs. On macOS, `config.macos.toml` adapts the Linux-oriented IDs to the following tools and workflows.
@@ -118,6 +119,7 @@ Both systems expose the same stock action IDs. On macOS, `config.macos.toml` ada
 macOS reports nine stock actions as unavailable: `cuda-purge`, `gpu-clock`, `cpu-turboboost`, `journal-vacuum`, `shader-cache-purge`, `hugepages-toggle`, `fstrim-all`, `swap-compact`, and `gamescope-run`. The launcher, `cx --list`, and `cx doctor` show the status, and direct invocation explains the platform limitation.
 
 Custom actions can set macOS-specific fields under `[commands.<id>.macos]`. Custom action scripts run in Bash, so they can also check the host with `uname`. Configuration, profiles, notes, and favorites use the same paths and formats across Linux and macOS.
+<details>
 
 ## How to Use
 
