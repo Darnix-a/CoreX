@@ -15,9 +15,12 @@
   <p align="center">
     <img src="https://img.shields.io/badge/version-3.2.0-blue.svg?style=flat-square" alt="Version 3.2.0" />
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License MIT" />
-    <img src="https://img.shields.io/badge/AUR-corex--git--SOON-blueviolet.svg?style=flat-square" alt="AUR corex-git-(soon)" />
+    <img src="https://img.shields.io/badge/AUR-corex--git-blueviolet.svg?style=flat-square" alt="AUR corex-git-(soon)" />
   </p>
 </p>
+  <p align="center">
+    <b>AUR Coming soon.</b>
+  </p>
 
 A fast, zero-bloat CLI multitool and interactive terminal launcher designed so you never have to memorize hundreds of flags, aliases, and one-liner bash scripts again.
 
