@@ -6,14 +6,15 @@
   / ____/____   _____ ___     | |/ /
  / /    / __ \ / ___// _ \    |   / 
 / /___ / /_/ // /   /  __/   /   |  
-\____/ \____//_/    \___/   /_/|_|  v3.2
+\____/ \____//_/    \___/   /_/|_|  v3.3
 ──────────────────────────────────────────
   </pre>
   <p align="center">
-    <b>The Modular CLI Multitool, Terminal Launcher & Workstation Engine for Modern Linux</b>
+    <b>A Linux terminal launcher and CLI multitool with embedded Kiro scripting</b>
   </p>
   <p align="center">
-    <img src="https://img.shields.io/badge/version-3.2.0-blue.svg?style=flat-square" alt="Version 3.2.0" />
+    <a href="https://github.com/Darnix-a/CoreX/releases/latest"><img src="https://img.shields.io/badge/version-3.3.0-blue.svg?style=flat-square" alt="Latest release, CoreX 3.3.0" /></a>
+    <a href="#kiro-scripting"><img src="https://img.shields.io/badge/scripting-Kiro-7c3aed.svg?style=flat-square" alt="Kiro scripting setup" /></a>
     <img src="https://img.shields.io/badge/license-MIT-green.svg?style=flat-square" alt="License MIT" />
     <img src="https://img.shields.io/badge/AUR-corex--git-blueviolet.svg?style=flat-square" alt="AUR corex-git-(soon)" />
   </p>
@@ -26,6 +27,25 @@ A fast, zero-bloat CLI multitool and interactive terminal launcher designed so y
 
 Type `cx` and instantly launch an interactive `fzf` menu featuring live preview panes for GPU overclocking & thermals, PipeWire routing, Docker & Kubernetes management, Linux kernel diagnostics, local AI copilot workflows (ComfyUI & Ollama), and everyday developer utilities.
 
+## Automate CoreX with Kiro
+
+Run [Kiro](https://github.com/Darnix-a/kiro) scripts directly inside CoreX.
+Use `.kr` files for one-off commands, register them as custom actions in the
+launcher, or run them in the background with `cx bg run`. Scripts can use
+`import cx` to read the CoreX version, action catalog, and arguments.
+
+Save this as `status.kr` once you've [installed the shared Kiro interpreter](#kiro-scripting).
+
+```python
+import cx
+
+print("CoreX {cx.version} · {len(cx.commands)} actions")
+```
+
+```sh
+cx kiro ./status.kr
+```
+
 ---
 
 ## Key Features
@@ -34,7 +54,6 @@ Type `cx` and instantly launch an interactive `fzf` menu featuring live preview 
 -  **185+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
 -  **Interactive Background Unit Manager (`cx bg`)**: Live cockpit for managing transient systemd user daemons (`systemd-run --user`) with real-time log tailing, status inspection, restarts, and stop controls.
 -  **Deterministic & Auto-Cleaning Background Tasks (`--bg`)**: Run any action in the background with deterministic unit naming (`corex-<slug>.service`), active duplicate guards, and automatic self-cleaning on completion (`CollectMode=inactive-or-failed`).
--  **Built-in Kiro scripting** — Run `.kr` scripts in-process as commands, custom actions, or background jobs. [Set up Kiro](#kiro-scripting).
 -  **Layered Configuration & Custom Actions (`cx custom`)**: Keep lightweight personal configs in `~/.config/corex/config.toml` that cleanly override defaults without copying 180+ commands. Disable built-ins with `disabled = true` and manage custom routines with `cx custom`.
 -  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via `nmcli` and `fzf`.
 -  **Deep Process Forensics (`cx proc`)**: Process inspector with physical RSS/Virtual/Swap breakdown, active sockets/ports, open file descriptors, and interactive signal manager (`SIGKILL`, `SIGTERM`, `SIGSTOP`, `SIGCONT`, renice).

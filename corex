@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-VERSION = "3.2.0"
+VERSION = "3.3.0"
 CONFIG_FILE = Path.home() / ".config" / "corex" / "config.toml"
 DEFAULT_CONFIG_TEMPLATE = Path(__file__).resolve().parent / "config.default.toml"
 CONFIG_CACHE_FILE = Path.home() / ".cache" / "corex" / "config_cache.pickle"
@@ -5273,7 +5273,7 @@ def builtin_bonsai(extra_args: Optional[List[str]] = None):
             f"   {c1}  / ____/____   _____ ___     | |/ /{rst}\033[K\n",
             f"   {c2} / /    / __ \\ / ___// _ \\    |   / {rst}\033[K\n",
             f"   {c2}/ /___ / /_/ // /   /  __/   /   |  {rst}\033[K\n",
-            f"   {c3}\\____/ \\____//_/    \\___/   /_/|_|  {accent_col}v3.2 • {v_info['title']}{rst}\033[K\n",
+            f"   {c3}\\____/ \\____//_/    \\___/   /_/|_|  {accent_col}v{VERSION} • {v_info['title']}{rst}\033[K\n",
             f"   {dim}{'─' * max(width, 70)}{rst}\033[K\n",
         ]
         h_count = 6

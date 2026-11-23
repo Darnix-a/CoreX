@@ -1,6 +1,6 @@
 # Maintainer: Darnix <Darnix-a@users.noreply.github.com>
 pkgname=corex-git
-pkgver=3.2.0.r0
+pkgver=3.3.0.r0
 pkgrel=1
 pkgdesc="Fast modular CLI multitool, terminal launcher and workstation engine"
 arch=('any')
@@ -24,7 +24,7 @@ sha256sums=('SKIP')
 
 pkgver() {
     cd "${srcdir}/CoreX"
-    printf "3.2.0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+    printf "3.3.0.r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
 }
 
 package() {
