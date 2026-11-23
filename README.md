@@ -46,29 +46,22 @@ print("CoreX {cx.version} · {len(cx.commands)} actions")
 cx kiro ./status.kr
 ```
 
----
-
 ## Key Features
 
--  **Sub-30ms Startup**: Pure Python standard library with binary configuration caching (`~/.cache/corex/config_cache.pickle`) and lazy runtime imports.
--  **185+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
--  **Interactive Background Unit Manager (`cx bg`)**: Live cockpit for managing transient systemd user daemons (`systemd-run --user`) with real-time log tailing, status inspection, restarts, and stop controls.
--  **Deterministic & Auto-Cleaning Background Tasks (`--bg`)**: Run any action in the background with deterministic unit naming (`corex-<slug>.service`), active duplicate guards, and automatic self-cleaning on completion (`CollectMode=inactive-or-failed`).
--  **Layered Configuration & Custom Actions (`cx custom`)**: Keep lightweight personal configs in `~/.config/corex/config.toml` that cleanly override defaults without copying 180+ commands. Disable built-ins with `disabled = true` and manage custom routines with `cx custom`.
--  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via `nmcli` and `fzf`.
--  **Deep Process Forensics (`cx proc`)**: Process inspector with physical RSS/Virtual/Swap breakdown, active sockets/ports, open file descriptors, and interactive signal manager (`SIGKILL`, `SIGTERM`, `SIGSTOP`, `SIGCONT`, renice).
--  **Media & Codec Forensics (`cx media-info`)**: Deep video, audio, and image codec inspection, frame rates, color spaces, and tag extraction via `ffprobe`.
--  **Theme Studio**: 6 built-in color palettes (`catppuccin-mocha`, `tokyonight`, `nord`, `gruvbox`, `dracula`, `rose-pine`) with live ANSI swatches.
--  **Telemetry & Analytics (`cx stats`)**: Track execution frequency, catalog coverage, category distribution, and recent command history.
--  **Instant Cheatsheet Mode (`cx find <query>`)**: Search across all actions, descriptions, categories, and shell commands instantly.
--  **Profile Sync (`cx export` / `cx import`)**: Export and restore your personal overrides, custom actions, themes, and favorites across workstations (`--full` for full catalog).
--  **Desktop & WM Integrations (`cx integrations`)**: Native `corex.desktop` application entry plus ready-to-paste floating window rules for **Hyprland**, **Sway**, and **i3**.
--  **Automated Updater (`cx upgrade`)**: One-command git remote synchronization, shell completion regeneration, cache invalidation, and system doctor audit.
--  **Intelligent Fuzzy Suggestions**: Automatic "Did you mean...?" suggestions with aliases and descriptions when a command is misspelled.
--  **Workstation Toys**: Real-time growing sakura bonsai (`cx bonsai`), typing speed test (`cx type-test`), terminal snake (`cx snake`), digital clock (`cx clock`), cyberpunk matrix (`cx matrix`), system fetch (`cx fetch`), disk visualizer (`cx disks`), hardware sensors (`cx sensors`), stereo DAC audio test (`cx audio-test`), and ephemeral file sharing (`cx share`).
--  **System Doctor (`cx doctor`)**: Automated dependency scanning and shell syntax validator (`bash -n`) with one-click package installation.
+- **Sub-30ms Startup**: Pure Python stdlib with binary config caching and lazy runtime imports.
+- **185+ Actions & Instant Search**: Curated workflows across 15 categories with `cx find` cheatsheets and fuzzy suggestions.
+- **Systemd Background Cockpit (`cx bg`)**: Run any task as a deterministic, self-cleaning user unit (`--bg`) with live log tailing.
+- **Layered Customization**: Non-destructive TOML overrides (`cx custom`), profile sync (`cx export`), 6 themes, and WM rules.
 
----
+<details>
+<summary><b>View full built-in toolkit (Forensics, Doctor, Updater & Toys)</b></summary>
+<br>
+
+- **Forensics & Network**: Deep RSS/socket/FD process inspector (`cx proc`), `ffprobe` codec analyzer (`cx media-info`), and `fzf` Wi-Fi manager (`cx wifi`).
+- **Maintenance & Telemetry**: Automated dependency/syntax auditor (`cx doctor`), git self-updater (`cx upgrade`), and usage analytics (`cx stats`).
+- **Workstation Toys**: `cx bonsai`, `cx type-test`, `cx snake`, `cx clock`, `cx matrix`, `cx fetch`, `cx disks`, `cx sensors`, `cx audio-test`, and `cx share`.
+
+</details>
 
 ## Installation
 
