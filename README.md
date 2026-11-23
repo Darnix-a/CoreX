@@ -34,6 +34,7 @@ Type `cx` and instantly launch an interactive `fzf` menu featuring live preview 
 -  **185+ Built-in Actions**: Pre-configured, syntax-checked shell routines organized across 15 clean `@category` tags.
 -  **Interactive Background Unit Manager (`cx bg`)**: Live cockpit for managing transient systemd user daemons (`systemd-run --user`) with real-time log tailing, status inspection, restarts, and stop controls.
 -  **Deterministic & Auto-Cleaning Background Tasks (`--bg`)**: Run any action in the background with deterministic unit naming (`corex-<slug>.service`), active duplicate guards, and automatic self-cleaning on completion (`CollectMode=inactive-or-failed`).
+-  **Built-in Kiro scripting** — Run `.kr` scripts in-process as commands, custom actions, or background jobs. [Set up Kiro](#kiro-scripting).
 -  **Layered Configuration & Custom Actions (`cx custom`)**: Keep lightweight personal configs in `~/.config/corex/config.toml` that cleanly override defaults without copying 180+ commands. Disable built-ins with `disabled = true` and manage custom routines with `cx custom`.
 -  **Interactive Wi-Fi Manager (`cx wifi`)**: Fast wireless network scanner, signal meter, and connection manager via `nmcli` and `fzf`.
 -  **Deep Process Forensics (`cx proc`)**: Process inspector with physical RSS/Virtual/Swap breakdown, active sockets/ports, open file descriptors, and interactive signal manager (`SIGKILL`, `SIGTERM`, `SIGSTOP`, `SIGCONT`, renice).
@@ -188,6 +189,42 @@ cx upgrade                # Pull from git, rebuild completions, refresh cache & 
 cx upgrade --dry-run      # Preview update steps without modifying local files
 ```
 
+
+## Kiro scripting
+
+CoreX has built-in [Kiro](https://github.com/Darnix-a/kiro) support. Install
+the shared interpreter once, and CoreX will load it when a `.kr` script runs.
+
+```sh
+git clone https://github.com/Darnix-a/kiro.git
+cd kiro
+./install.sh --embed --no-path
+```
+
+Run a script in the foreground or launch it through the background service
+manager.
+
+```sh
+cx kiro ./check.kr "a value"
+cx bg run ./monitor.kr
+cx bg logs monitor
+```
+
+For a custom action or macro, add a command with the `cx kiro` prefix to
+your CoreX TOML config. It receives CoreX's usual action confirmation and
+can also run with `cx --bg`.
+
+```toml
+[commands.kiro-monitor]
+description = "Run a Kiro monitor"
+command = "cx kiro '/absolute/path/to/monitor.kr'"
+```
+
+Inside a script, `import cx` exposes `cx.command`, `cx.args`,
+`cx.version`, `cx.commands`, and `cx.has_command(name)`.
+The usual Kiro prelude is available. CoreX prints a top-level return value
+as JSON and propagates `exit(code)`. Set `CX_KIRO_LIBRARY` to the
+shared library's full path if you used a custom installation prefix.
 
 ## Configuration & Command Builder
 

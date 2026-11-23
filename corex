@@ -620,6 +620,7 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
                 and cache_meta.get("tmpl_size") == (tmpl_stat.st_size if tmpl_stat else None)
             ):
                 cached_cfg = cache_meta["cfg"]
+                cached_cfg.config_path = user_config_path.resolve()
                 if cached_cfg.color:
                     apply_theme(cached_cfg.theme)
                 return cached_cfg
@@ -627,6 +628,7 @@ def load_config(custom_path: Optional[Path] = None, ignore_cache: bool = False) 
             pass
 
     cfg = CoreXConfig()
+    cfg.config_path = user_config_path.resolve()
     try:
         import tomllib
 
@@ -8608,6 +8610,7 @@ def builtin_bg(extra_args: Optional[List[str]] = None):
         print(f"""
  {Style.BOLD}USAGE:{Style.RESET}
    cx bg                           Launch interactive background unit cockpit
+   cx bg run <file.kr> [args...]   Run an embedded Kiro script in the background
    cx bg list, ls                  List active background services in clean table
    cx bg logs, log <unit>          Tail live journalctl logs for background unit
    cx bg status, info <unit>       Inspect detailed systemd status & resource usage
@@ -9154,6 +9157,79 @@ def run_interactive_cockpit(cfg: CoreXConfig, dry_run: bool = False):
     execute_command(chosen_cmd_id, cfg, dry_run=dry_run)
 
 
+def _kiro_library() -> Path:
+    override = os.environ.get("CX_KIRO_LIBRARY")
+    if override:
+        path = Path(override).expanduser().resolve()
+    else:
+        filename = "libkiro.dylib" if sys.platform == "darwin" else "libkiro.so"
+        path = Path.home() / ".local" / "lib" / "kiro" / filename
+    if not path.is_file():
+        raise OSError(f"Kiro shared library missing at {path}; run Kiro's install.sh --embed")
+    return path
+
+
+def run_kiro_script(arguments: List[str], cfg: CoreXConfig, *,
+                    command: Optional[str] = None, background: bool = False,
+                    dry_run: bool = False) -> int:
+    """Run a Kiro script through the shared interpreter, with optional background dispatch."""
+    import shlex
+
+    if not arguments or arguments[0] in ("-h", "--help"):
+        print("Usage: cx kiro <file.kr> [args...]")
+        print("       cx bg run <file.kr> [args...]")
+        return 0 if arguments else 2
+
+    script = Path(arguments[0]).expanduser().resolve()
+    args = arguments[1:]
+    command = command or script.stem
+    if dry_run:
+        mode = "[DRY-RUN BG]" if background else "[DRY-RUN]"
+        print(f"{mode} {shlex.join(['cx', 'kiro', str(script), *args])}")
+        return 0
+
+    try:
+        if not script.is_file():
+            raise OSError(f"script does not exist: {script}")
+        library_path = _kiro_library()
+        if background:
+            argv = ["env", f"CX_KIRO_LIBRARY={library_path}", sys.executable,
+                    str(Path(__file__).resolve()), "--config", str(cfg.config_path),
+                    "__kiro_run", command, str(script), *args]
+            shell = f"cd {shlex.quote(os.getcwd())} && exec {shlex.join(argv)}"
+            detach_background(command, shell)
+            return 0
+
+        # Load only when a Kiro action runs, so ordinary CoreX startup stays unchanged.
+        import ctypes
+        library = ctypes.CDLL(str(library_path))
+        library.kiro_embed_api_version.argtypes = []
+        library.kiro_embed_api_version.restype = ctypes.c_uint32
+        if library.kiro_embed_api_version() != 1:
+            raise OSError(f"unsupported Kiro embedding API in {library_path}")
+        library.kiro_run_corex_file.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+        library.kiro_run_corex_file.restype = ctypes.c_void_p
+        library.kiro_free_string.argtypes = [ctypes.c_void_p]
+        library.kiro_free_string.restype = None
+        context = json.dumps({"args": args, "command": command, "commands": sorted(cfg.commands),
+                              "version": VERSION}).encode("utf-8")
+        response = library.kiro_run_corex_file(str(script).encode("utf-8"), context)
+        if not response:
+            raise OSError("Kiro returned an empty embedding response")
+        try:
+            result = json.loads(ctypes.string_at(response))
+        finally:
+            library.kiro_free_string(response)
+        if "error" in result:
+            print(result["error"], file=sys.stderr)
+        elif result.get("value") is not None:
+            print(json.dumps(result["value"], ensure_ascii=False))
+        return result["code"]
+    except (OSError, AttributeError, ValueError) as error:
+        print(f"cx kiro: {error}", file=sys.stderr)
+        return 1
+
+
 # ---------------------------------------------------------------------------
 # COMMAND DISPATCHER & SUBSHELL EXECUTION
 # ---------------------------------------------------------------------------
@@ -9209,6 +9285,21 @@ def execute_command(
         except (KeyboardInterrupt, EOFError):
             print()
             return
+
+    # Configured Kiro actions reuse confirmation, aliases and background management.
+    if spec.command.split(None, 2)[:2] == ["cx", "kiro"]:
+        import shlex
+        try:
+            args = shlex.split(spec.command)[2:] + (extra_args or [])
+        except ValueError as error:
+            print(f"cx {actual_id}: {error}", file=sys.stderr)
+            sys.exit(2)
+        if spec.requires_sudo and os.geteuid() != 0:
+            print(f"cx {actual_id}: launch CoreX with the intended user for a Kiro action",
+                  file=sys.stderr)
+            sys.exit(1)
+        sys.exit(run_kiro_script(args, cfg, command=actual_id,
+                                 background=bg_run, dry_run=dry_run))
 
     # Check built-in dispatch
     if spec.command.startswith("cx __builtin "):
@@ -9625,6 +9716,14 @@ def parse_cli_args(argv: List[str]) -> Tuple[ParsedArgs, List[str]]:
     i = 0
     while i < len(argv):
         arg = argv[i]
+        if parsed.command in ("kiro", "__kiro_run") or (
+            parsed.command == "bg" and parsed.args and parsed.args[0] == "run"
+        ):
+            parsed.args.extend(argv[i:])
+            break
+        if arg == "--" and parsed.command is not None:
+            parsed.args.extend(argv[i + 1:])
+            break
         if arg in ("-h", "--help"):
             if parsed.command is not None:
                 parsed.args.append(arg)
@@ -9689,6 +9788,13 @@ def main():
             tag = CATEGORY_TAGS.get(spec.category, "@misc")
             print(f"{cid}\t{tag}\t{spec.category}\t{spec.description}")
         sys.exit(0)
+
+    if parsed.command == "kiro":
+        sys.exit(run_kiro_script(parsed.args, cfg, background=parsed.bg, dry_run=parsed.dry_run))
+    if parsed.command == "__kiro_run" and parsed.args:
+        sys.exit(run_kiro_script(parsed.args[1:], cfg, command=parsed.args[0]))
+    if parsed.command == "bg" and parsed.args[:1] == ["run"]:
+        sys.exit(run_kiro_script(parsed.args[1:], cfg, background=True, dry_run=parsed.dry_run))
 
     # Internal helper: return formatted lines for FZF reload
     if parsed.command == "__fzf_items":
@@ -10046,6 +10152,7 @@ def main():
 USAGE:
   cx                              Launch interactive CoreX menu
   cx <command> [args...]          Execute command directly with zero latency
+  cx kiro <file.kr> [args...]      Run a script using the embedded Kiro interpreter
   cx find <query>                 Fast CLI cheatsheet search across all actions
   cx stats                        View execution telemetry & usage analytics dashboard
   cx bg [list|logs|stop...]       Inspect & manage background systemd services and daemons
